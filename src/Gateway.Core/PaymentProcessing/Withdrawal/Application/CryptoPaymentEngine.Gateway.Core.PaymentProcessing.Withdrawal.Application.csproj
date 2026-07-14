@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="../Domain/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Domain.csproj" />
+    <ProjectReference Include="../Contracts/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Contracts.csproj" />
+    <ProjectReference Include="../../../../SharedKernel/CryptoPaymentEngine.SharedKernel/CryptoPaymentEngine.SharedKernel.csproj" />
+    <!-- Consumes other modules' Contracts only (§4.5). -->
+    <ProjectReference Include="../../../Financial/Ledger/Contracts/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Contracts.csproj" />
+    <ProjectReference Include="../../../Blockchain/Contracts/CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.csproj" />
+    <ProjectReference Include="../../../KeyManagement/Contracts/CryptoPaymentEngine.Gateway.Core.KeyManagement.Contracts.csproj" />
+    <ProjectReference Include="../../../Merchant/Contracts/CryptoPaymentEngine.Gateway.Core.Merchant.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentValidation" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+  </ItemGroup>
+
+</Project>

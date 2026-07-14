@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="../Domain/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Domain.csproj" />
+    <ProjectReference Include="../Contracts/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Contracts.csproj" />
+    <ProjectReference Include="../../../../SharedKernel/CryptoPaymentEngine.SharedKernel/CryptoPaymentEngine.SharedKernel.csproj" />
+    <!-- Consumes Deposit's + Withdrawal's public event contracts only (§4.5): a module may reference another's Events. -->
+    <ProjectReference Include="../../../PaymentProcessing/Deposit/Events/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Events.csproj" />
+    <ProjectReference Include="../../../PaymentProcessing/Withdrawal/Events/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Events.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="FluentValidation" />
+    <PackageReference Include="Riok.Mapperly" PrivateAssets="all" />
+    <PackageReference Include="Mediator.Abstractions" />
+    <PackageReference Include="Mediator.SourceGenerator" PrivateAssets="all" />
+  </ItemGroup>
+
+</Project>

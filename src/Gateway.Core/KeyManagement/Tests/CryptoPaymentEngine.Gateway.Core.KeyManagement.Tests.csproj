@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Domain/CryptoPaymentEngine.Gateway.Core.KeyManagement.Domain.csproj" />
+    <ProjectReference Include="../Application/CryptoPaymentEngine.Gateway.Core.KeyManagement.Application.csproj" />
+    <ProjectReference Include="../Infrastructure/CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.csproj" />
+    <ProjectReference Include="../Api/CryptoPaymentEngine.Gateway.Core.KeyManagement.Api.csproj" />
+    <!-- The test acts as a composition root: it wires Blockchain's concrete address encoders,
+         which production code must NOT reference across the module boundary (§4.5). -->
+    <ProjectReference Include="../../Blockchain/Infrastructure/CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="NSubstitute" />
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="NBitcoin" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+    <PackageReference Include="Microsoft.Extensions.Configuration" />
+  </ItemGroup>
+
+</Project>

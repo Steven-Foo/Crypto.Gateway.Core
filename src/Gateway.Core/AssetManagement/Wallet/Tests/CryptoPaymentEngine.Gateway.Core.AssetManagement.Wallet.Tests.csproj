@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Domain/CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Domain.csproj" />
+    <ProjectReference Include="../Application/CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Application.csproj" />
+    <ProjectReference Include="../Infrastructure/CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Infrastructure.csproj" />
+    <ProjectReference Include="../Api/CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Api.csproj" />
+    <!-- Real cross-module wiring for the end-to-end provisioning test. The test is a composition root,
+         so it may reference Blockchain's concrete encoders that production modules must not (§4.5). -->
+    <ProjectReference Include="../../../KeyManagement/Infrastructure/CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.csproj" />
+    <ProjectReference Include="../../../Merchant/Infrastructure/CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.csproj" />
+    <ProjectReference Include="../../../Blockchain/Infrastructure/CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="NSubstitute" />
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="NBitcoin" />
+  </ItemGroup>
+
+</Project>

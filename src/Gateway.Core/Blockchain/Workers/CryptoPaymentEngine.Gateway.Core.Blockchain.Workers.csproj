@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="../Application/CryptoPaymentEngine.Gateway.Core.Blockchain.Application.csproj" />
+    <ProjectReference Include="../Infrastructure/CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.csproj" />
+    <ProjectReference Include="../../../SharedKernel/CryptoPaymentEngine.SharedKernel/CryptoPaymentEngine.SharedKernel.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+  </ItemGroup>
+
+</Project>

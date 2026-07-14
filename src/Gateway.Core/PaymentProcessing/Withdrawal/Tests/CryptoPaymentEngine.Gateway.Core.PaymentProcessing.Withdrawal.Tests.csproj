@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Domain/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Domain.csproj" />
+    <ProjectReference Include="../Application/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application.csproj" />
+    <ProjectReference Include="../Infrastructure/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure.csproj" />
+    <ProjectReference Include="../Api/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Api.csproj" />
+    <!-- e2e money-out to the Ledger, driven by the in-memory chain engine + signer fakes. -->
+    <ProjectReference Include="../../../Financial/Ledger/Application/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application.csproj" />
+    <ProjectReference Include="../../../Financial/Ledger/Infrastructure/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Infrastructure.csproj" />
+    <ProjectReference Include="../../../Blockchain/Infrastructure/CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.csproj" />
+    <ProjectReference Include="../../../KeyManagement/Infrastructure/CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="NSubstitute" />
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection" />
+  </ItemGroup>
+
+</Project>
