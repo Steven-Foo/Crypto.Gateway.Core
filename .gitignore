@@ -6,6 +6,10 @@
 # dotenv files
 .env
 
+# Per-developer local config overrides (may hold real xpubs / connection strings). Never committed.
+appsettings.Local.json
+**/appsettings.Local.json
+
 # User-specific files
 *.rsuser
 *.suo
