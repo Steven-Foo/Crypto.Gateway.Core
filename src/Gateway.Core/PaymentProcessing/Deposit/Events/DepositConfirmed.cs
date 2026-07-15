@@ -14,6 +14,7 @@ public sealed record DepositConfirmed(
     Guid EventId,
     DateTimeOffset OccurredOnUtc,
     Guid DepositId,
+    Guid WalletId,
     Guid MerchantId,
     Guid AssetId,
     string AmountBaseUnits,

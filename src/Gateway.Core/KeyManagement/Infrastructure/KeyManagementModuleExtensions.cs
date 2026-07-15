@@ -6,6 +6,7 @@ using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Persistence;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Secrets;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Signing;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 
@@ -54,6 +55,36 @@ public static class KeyManagementModuleExtensions
     public static IServiceCollection AddInMemorySigner(this IServiceCollection services)
     {
         services.TryAddSingleton<ISigner, InMemorySigner>();
+        return services;
+    }
+
+    /// <summary>
+    /// DEVELOPMENT / LOCAL ONLY. Wires the in-memory secret provider and an idempotent HD-wallet seeder from
+    /// configuration (section <c>KeyManagement</c>: <c>DevWallets</c> + <c>DevSecrets</c>), so a signed
+    /// <c>/deposit</c> can provision a deposit address on a fresh clone with no manual seeding. A developer
+    /// overrides <c>DevSecrets</c> with any xpub — including a real production branch xpub — via a git-ignored
+    /// <c>appsettings.Local.json</c> to reproduce production addresses locally.
+    ///
+    /// NEVER call this outside the Development branch: the provider reports
+    /// <see cref="Domain.SecretProviderKind.InMemoryDevelopment"/>, so it can never back a production wallet
+    /// row, and the seeded wallets carry the same kind (§10). <c>DevSecrets</c> is public xpub material only —
+    /// never a seed or mnemonic.
+    /// </summary>
+    public static IServiceCollection AddDevelopmentKeyCustody(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        var section = configuration.GetSection(DevelopmentKeyCustodyOptions.SectionName);
+        services.Configure<DevelopmentKeyCustodyOptions>(section);
+
+        var secrets = section.GetSection(nameof(DevelopmentKeyCustodyOptions.DevSecrets))
+            .Get<Dictionary<string, string>>() ?? new Dictionary<string, string>();
+
+        // A singleton snapshot: config (including appsettings.Local.json) is fully composed by the time the
+        // host calls this, so the provider serves whatever xpub the developer configured.
+        services.AddSingleton<ISecretProvider>(InMemorySecretProvider.FromStrings(secrets));
+        services.AddHostedService<DevHdWalletSeeder>();
+
         return services;
     }
 }

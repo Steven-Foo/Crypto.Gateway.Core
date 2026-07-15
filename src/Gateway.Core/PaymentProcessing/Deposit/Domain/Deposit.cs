@@ -133,7 +133,7 @@ public sealed class Deposit : Entity<Guid>
             Status = DepositStatus.Confirmed;
             ConfirmedAt = now;
             Raise(new DepositConfirmed(
-                Guid.CreateVersion7(), now, Id, MerchantId, AssetId, AmountString, Chain, TransactionHash, OutputIndex, now));
+                Guid.CreateVersion7(), now, Id, WalletId, MerchantId, AssetId, AmountString, Chain, TransactionHash, OutputIndex, now));
         }
 
         return Result.Success();

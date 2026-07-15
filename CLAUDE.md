@@ -117,11 +117,44 @@ money-out paths live end to end (integration-tested). Delivery is at-least-once 
 Redis lock single-flights dispatch; `InProcessEventBus` surfaces handler failures (AggregateException) so a
 failed handler leaves the message for retry; Redis uses `AbortOnConnectFail=false` so the host boots even
 when Redis is down. Dev registers `AddInMemoryChainSource` + `AddInMemoryTransactionEngine` +
-`AddInMemorySigner`; config in `appsettings*.json` (`Db`/`Redis`/`Mongo`/`Chains:Tron`/`Deposit:Policies`/
-`Withdrawal:Policies`/`Withdrawal:HotWallets`). **Not yet wired:** `ISecretProvider` (KMS, for address
-provisioning), the real per-chain tx-build/sign/broadcast + KMS signer (withdrawal processing is inert in
-prod until these land — never a fake signer, §10), and the merchant-facing HTTP endpoints (the
-frontend/use-case flow merges here later).
+`AddInMemorySigner` + `AddDevelopmentKeyCustody` (dev-only in-memory `ISecretProvider` + idempotent HD-wallet
+seeder — public xpub only, so a signed `/deposit` provisions an address on a fresh clone; config-substitutable
+via a git-ignored `appsettings.Local.json`, e.g. paste a real branch xpub to derive prod addresses locally) +
+`AddDevelopmentMerchantSeed` (dev-only idempotent seeder for one **active** test merchant with fixed, documented
+credentials — the auth half of the round-trip); config in `appsettings*.json` (`Db`/`Redis`/`Mongo`/`Chains:Tron`/
+`Deposit:Policies`/`Withdrawal:Policies`/`Withdrawal:HotWallets`/`KeyManagement:DevWallets`+`DevSecrets`/
+`Merchant:DevSeed`). A **full signed `/api/v1/deposit` → provisioned address → `/pay/{ref}/info` round-trip runs
+in dev** on a fresh clone (guide: `docs/dev-round-trip.md`; signing helper: `tools/dev/Invoke-MerchantRequest.ps1`).
+**Not yet wired (prod):** a real KMS-backed
+`ISecretProvider` + prod HD-wallet rows (address provisioning is dev-only until these land — never an in-memory
+seed in prod, §10), and the real per-chain tx-build/sign/broadcast + KMS signer (withdrawal processing is inert
+in prod until these land — never a fake signer, §10).
+
+**Money-spine integration (teammate's shipping USDT-on-TRON app → our spine) — DONE, 319 tests green.**
+The partner's *frozen* merchant contracts now run on our architecture. `Api/MerchantGateway` exposes
+`POST /api/v1/{deposit,withdraw,balance}` + `GET /pay/{ref}/info` behind `MerchantSignatureMiddleware`
+(X-Api-Key + HMAC over `"{ts}\n{body}"`, 5-min window, verified by Merchant's `IMerchantRequestVerifier` —
+the signing secret never leaves the module); money crosses base-unit↔display only at the edge
+(`AmountConversion`, which refuses over-precision, never truncates). New **`PaymentProcessing/PaymentIntent`**
+module (schema `paymentintent`): the deposit *invoice* + pooled/reused deposit address (concentration for
+low sweep gas), reservation arbitrated by a filtered `WHERE [Status]='Waiting'` UNIQUE index (no distributed
+lock), FIFO-matched to `DepositConfirmed` (which gained `WalletId`), idempotent per-deposit (closes the
+address-reuse redelivery hole); raises `PaymentIntentMatched`. New **`Platform/Notification`** module:
+consumes `PaymentIntentMatched` → builds the frozen callback payload → signs via `IMerchantCallbackSigner`
+→ POSTs behind an `IWebhookSender` port, durable on the PaymentIntent outbox. Merchant credential gained an
+**encrypted-at-rest signing secret** (`AesGcmSecretCipher` — real AES-256-GCM, KMS-swappable key); Ledger
+gained `ILedgerQuery` (derives `/balance` from `MerchantLiability`); Wallet provisioning promoted to
+`IDepositAddressProvisioner` (Contracts); Blockchain gained `ConfigurationAssetCatalog` (one canonical
+USDT-TRON `AssetId`). End-to-end composition proven (`MoneyInCompositionTests`: one `DepositConfirmed` →
+{ledger credit + invoice match} → signed callback). **Dev `ISecretProvider` + seeded HD wallet — DONE**
+(`AddDevelopmentKeyCustody`, above): a signed `/deposit` now provisions a real address in dev (host-boot
+verified) **and dev merchant seeding — DONE** (`AddDevelopmentMerchantSeed`): a full signed
+`/api/v1/deposit` round-trip is proven over HTTP in dev (returns the published TRON vector address), with
+`docs/dev-round-trip.md` + `tools/dev/Invoke-MerchantRequest.ps1` for the next engineer.
+**Follow-ups (none block the spine):** `/transactions/query`, withdrawal callbacks (needs a per-tx callback URL
+on Withdrawal), a dedicated callback delivery worker (backoff/abandon vs. the current outbox-retry), and
+Development auto-migration (the host doesn't migrate on boot — dev DB is migrated manually per `docs/dev-round-trip.md`).
+
 Every other module in the map is a placeholder in this doc, not yet on disk — scaffold a module
 only when real feature work on it starts, following the same 8-layer layout.
 

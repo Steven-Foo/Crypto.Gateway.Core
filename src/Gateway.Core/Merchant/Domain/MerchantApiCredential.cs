@@ -19,12 +19,14 @@ public sealed class MerchantApiCredential : Entity<Guid>
         string apiKey,
         string secretHash,
         int hashVersion,
+        string signingSecretCipher,
         DateTimeOffset createdAt) : base(id)
     {
         MerchantId = merchantId;
         ApiKey = apiKey;
         SecretHash = secretHash;
         HashVersion = hashVersion;
+        SigningSecretCipher = signingSecretCipher;
         Status = CredentialStatus.Active;
         CreatedAt = createdAt;
     }
@@ -37,6 +39,15 @@ public sealed class MerchantApiCredential : Entity<Guid>
     public string ApiKey { get; private set; } = null!;
     public string SecretHash { get; private set; } = null!;
     public int HashVersion { get; private set; }
+
+    /// <summary>
+    /// The request-signing secret, encrypted at rest (see <c>ISecretCipher</c>). Unlike
+    /// <see cref="SecretHash"/> — a one-way bearer hash — this is recoverable, because the partner's HMAC
+    /// scheme requires the server to hold the key to recompute a request/callback signature (§10). Opaque
+    /// to the domain: the aggregate stores the cipher blob and never sees the plaintext.
+    /// </summary>
+    public string SigningSecretCipher { get; private set; } = null!;
+
     public CredentialStatus Status { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset? RevokedAt { get; private set; }
@@ -48,8 +59,9 @@ public sealed class MerchantApiCredential : Entity<Guid>
         string apiKey,
         string secretHash,
         int hashVersion,
+        string signingSecretCipher,
         DateTimeOffset createdAt) =>
-        new(Guid.CreateVersion7(), merchantId, apiKey, secretHash, hashVersion, createdAt);
+        new(Guid.CreateVersion7(), merchantId, apiKey, secretHash, hashVersion, signingSecretCipher, createdAt);
 
     internal Result Revoke(DateTimeOffset revokedAt)
     {

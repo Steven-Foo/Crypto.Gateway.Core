@@ -1,0 +1,9 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="../../../../SharedKernel/CryptoPaymentEngine.SharedKernel/CryptoPaymentEngine.SharedKernel.csproj" />
+    <!-- Same-module: the aggregate raises this integration event; the outbox interceptor persists it. -->
+    <ProjectReference Include="../Events/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Events.csproj" />
+  </ItemGroup>
+
+</Project>

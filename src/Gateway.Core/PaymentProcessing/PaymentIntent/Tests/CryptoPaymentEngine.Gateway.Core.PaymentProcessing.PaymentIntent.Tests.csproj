@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="../Domain/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Domain.csproj" />
+    <ProjectReference Include="../Application/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Application.csproj" />
+    <ProjectReference Include="../Infrastructure/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infrastructure.csproj" />
+    <ProjectReference Include="../Contracts/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Contracts.csproj" />
+    <!-- e2e: match a real DepositConfirmed; substitute Wallet's provisioning Contract. -->
+    <ProjectReference Include="../../Deposit/Events/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Events.csproj" />
+    <ProjectReference Include="../../../AssetManagement/Wallet/Contracts/CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts.csproj" />
+    <!-- Composition capstone: DepositConfirmed → {Ledger credit + PaymentIntent match} → callback. -->
+    <ProjectReference Include="../Events/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Events.csproj" />
+    <ProjectReference Include="../../../Financial/Ledger/Infrastructure/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Infrastructure.csproj" />
+    <ProjectReference Include="../../../Platform/Notification/Application/CryptoPaymentEngine.Gateway.Core.Platform.Notification.Application.csproj" />
+    <ProjectReference Include="../../../Merchant/Contracts/CryptoPaymentEngine.Gateway.Core.Merchant.Contracts.csproj" />
+    <ProjectReference Include="../../../Blockchain/Contracts/CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.csproj" />
+    <ProjectReference Include="../../../../Infrastructure/CryptoPaymentEngine.Infrastructure/CryptoPaymentEngine.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="xunit.v3" />
+    <PackageReference Include="xunit.runner.visualstudio" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" />
+    <PackageReference Include="coverlet.collector" />
+    <PackageReference Include="NSubstitute" />
+    <PackageReference Include="Shouldly" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
+  </ItemGroup>
+
+</Project>

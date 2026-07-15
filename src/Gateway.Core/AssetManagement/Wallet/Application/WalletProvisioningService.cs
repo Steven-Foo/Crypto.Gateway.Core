@@ -1,4 +1,5 @@
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Application.Abstractions;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Domain;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
@@ -7,16 +8,6 @@ using CryptoPaymentEngine.SharedKernel;
 namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Application;
 
 using WalletEntity = Domain.Wallet;
-
-public sealed record ProvisionedDepositAddress(Guid WalletId, Chain Chain, string Address);
-
-public interface IWalletProvisioningService
-{
-    Task<Result<ProvisionedDepositAddress>> ProvisionDepositAddressAsync(
-        Guid merchantId,
-        Chain chain,
-        CancellationToken cancellationToken = default);
-}
 
 /// <summary>
 /// Provisions a dedicated deposit address for a merchant.
@@ -30,7 +21,7 @@ public sealed class WalletProvisioningService(
     IWalletRepository repository,
     IWalletDerivation walletDerivation,
     IMerchantDirectory merchantDirectory,
-    TimeProvider timeProvider) : IWalletProvisioningService
+    TimeProvider timeProvider) : IDepositAddressProvisioner
 {
     public async Task<Result<ProvisionedDepositAddress>> ProvisionDepositAddressAsync(
         Guid merchantId,

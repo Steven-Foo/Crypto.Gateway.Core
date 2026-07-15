@@ -13,6 +13,9 @@ public interface IMerchantRepository
     /// <summary>Resolves a caller's API key to its credential for authentication. Active only.</summary>
     Task<MerchantApiCredential?> FindActiveCredentialAsync(string apiKey, CancellationToken cancellationToken = default);
 
+    /// <summary>The merchant's current (most recently issued) active credential — used to sign outbound callbacks.</summary>
+    Task<MerchantApiCredential?> FindActiveCredentialByMerchantAsync(Guid merchantId, CancellationToken cancellationToken = default);
+
     void Add(Domain.Merchant merchant);
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);

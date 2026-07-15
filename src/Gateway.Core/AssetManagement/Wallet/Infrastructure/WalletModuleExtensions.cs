@@ -24,7 +24,7 @@ public static class WalletModuleExtensions
 
         services.AddScoped<IWalletRepository, WalletRepository>();
         services.AddScoped<IWalletDirectory, WalletDirectory>();
-        services.AddScoped<IWalletProvisioningService, WalletProvisioningService>();
+        services.AddScoped<IDepositAddressProvisioner, WalletProvisioningService>();
 
         return services;
     }

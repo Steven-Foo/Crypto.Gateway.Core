@@ -85,7 +85,7 @@ public sealed class MerchantDomainTests
 
         merchant.Activate(Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
         merchant.UpdateCallbackUrl("https://x.test/h", Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
-        merchant.IssueCredential("k", "h", 1, Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
+        merchant.IssueCredential("k", "h", 1, "cipher", Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
         merchant.UpdateConfiguration(true, 3, true, Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
         merchant.SetAssetPolicy(Guid.CreateVersion7(), 1, 1, 2, 0, Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
     }
@@ -95,8 +95,8 @@ public sealed class MerchantDomainTests
     {
         var merchant = NewMerchant();
 
-        merchant.IssueCredential("key-1", "hash-1", 1, Now);
-        merchant.IssueCredential("key-2", "hash-2", 1, Now);
+        merchant.IssueCredential("key-1", "hash-1", 1, "cipher", Now);
+        merchant.IssueCredential("key-2", "hash-2", 1, "cipher", Now);
 
         merchant.Credentials.Count(c => c.IsActive).ShouldBe(2);
     }
@@ -105,7 +105,7 @@ public sealed class MerchantDomainTests
     public void Revoking_a_credential_twice_is_rejected()
     {
         var merchant = NewMerchant();
-        var credential = merchant.IssueCredential("key-1", "hash-1", 1, Now).Value;
+        var credential = merchant.IssueCredential("key-1", "hash-1", 1, "cipher", Now).Value;
 
         merchant.RevokeCredential(credential.Id, Now).IsSuccess.ShouldBeTrue();
         credential.IsActive.ShouldBeFalse();

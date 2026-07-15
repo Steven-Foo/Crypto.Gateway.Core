@@ -1,4 +1,5 @@
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Application;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Domain;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Infrastructure.Persistence;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Addresses;

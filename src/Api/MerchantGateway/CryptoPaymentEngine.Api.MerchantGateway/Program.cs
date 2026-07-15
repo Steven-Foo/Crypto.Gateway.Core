@@ -9,6 +9,12 @@ using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Workers;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure.Persistence;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Workers;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infrastructure;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infrastructure.Persistence;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Workers;
+using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Infrastructure;
+using CryptoPaymentEngine.Api.MerchantGateway.Endpoints;
+using CryptoPaymentEngine.Api.MerchantGateway.Security;
 using CryptoPaymentEngine.Infrastructure.Events;
 using CryptoPaymentEngine.Infrastructure.Locking;
 using CryptoPaymentEngine.Infrastructure.Outbox;
@@ -16,6 +22,11 @@ using CryptoPaymentEngine.SharedKernel;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
+
+// Per-developer overrides (git-ignored). Highest precedence in a local run — a developer drops any value
+// here (e.g. a real branch xpub under KeyManagement:DevSecrets) without touching committed config. Absent
+// in production, where the file does not exist.
+builder.Configuration.AddJsonFile("appsettings.Local.json", optional: true, reloadOnChange: true);
 
 builder.Host.UseSerilog((context, services, configuration) => configuration
     .ReadFrom.Services(services)
@@ -40,6 +51,9 @@ builder.Services.AddWalletModule(dbConnection);
 builder.Services.AddLedgerModule(dbConnection);         // consumes Deposit + Withdrawal events (credit/settle/release)
 builder.Services.AddDepositModule(config, dbConnection);
 builder.Services.AddWithdrawalModule(config, dbConnection);
+builder.Services.AddConfigurationAssetCatalog();        // canonical AssetId shared by edge, scanner, ledger
+builder.Services.AddPaymentIntentModule(config, dbConnection); // deposit invoices + address pool; matches DepositConfirmed
+builder.Services.AddNotificationModule();               // consumes PaymentIntentMatched → signed merchant callback
 
 // ── Chain source + signing: swap dev↔prod by DI, not code (§8, §10) ───────────
 if (builder.Environment.IsDevelopment())
@@ -48,6 +62,15 @@ if (builder.Environment.IsDevelopment())
     builder.Services.AddInMemoryChainSource();
     builder.Services.AddInMemoryTransactionEngine();
     builder.Services.AddInMemorySigner(); // NEVER touches a key; a real KMS signer replaces it in prod (§10)
+
+    // In-memory secret provider (PUBLIC xpub only) + idempotent HD-wallet seeder, so a signed /deposit can
+    // provision an address on a fresh clone. Overridable per-developer via appsettings.Local.json. The
+    // provider is InMemoryDevelopment-kind, so it can never back a production wallet row (§10).
+    builder.Services.AddDevelopmentKeyCustody(config);
+
+    // A fixed, documented test merchant (active) so a signed /api/v1 request works out of the box — the last
+    // piece for a full deposit round-trip in dev. Config in Merchant:DevSeed; never runs in production (§10).
+    builder.Services.AddDevelopmentMerchantSeed(config);
 }
 else
 {
@@ -71,17 +94,26 @@ builder.Services.AddWithdrawalWorkers(new WithdrawalWorkerOptions
     ConfirmationInterval = TimeSpan.FromSeconds(10),
 });
 
+// Frees lapsed deposit-invoice addresses back to the pool (§9).
+builder.Services.AddPaymentIntentWorkers();
+
 // Relays each module's outbox → IEventBus → the Ledger handlers: Deposit credit, Withdrawal
 // settle/release. This is what makes the money-in and money-out paths live end to end.
 builder.Services.AddOutboxDispatcher<DepositDbContext>();
 builder.Services.AddOutboxDispatcher<WithdrawalDbContext>();
+builder.Services.AddOutboxDispatcher<PaymentIntentDbContext>(); // relays PaymentIntentMatched → the callback handler
 
-// NOTE: ISecretProvider (KMS/HSM) is intentionally NOT registered here yet — HD-wallet derivation
-// (address provisioning) needs it, and it must be a real KMS in prod, never an in-memory dev seed.
-// The money-in flow being wired above does not require it.
+// NOTE: In Development, ISecretProvider is the in-memory provider wired by AddDevelopmentKeyCustody above
+// (public xpub only). In production it is NOT registered yet — a real KMS-backed ISecretProvider + prod
+// HD-wallet rows must be supplied before /deposit can provision an address there (never an in-memory seed, §10).
 
 var app = builder.Build();
 
+// The frozen merchant API is authenticated by request signature; the pay-page data + health pass through.
+app.UseMiddleware<MerchantSignatureMiddleware>();
+
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
+app.MapMerchantApi();   // POST /api/v1/{deposit,withdraw,balance}
+app.MapPayApi();        // GET  /pay/{ref}/info
 
 app.Run();

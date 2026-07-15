@@ -32,6 +32,9 @@ public static class LedgerModuleExtensions
         services.AddScoped<ILedgerAccountStore, LedgerAccountStore>();
         services.AddScoped<ILedgerPostingStore, LedgerPostingStore>();
 
+        // Public read model: the derived merchant balance (§4.5) — how a host answers "/balance".
+        services.AddScoped<ILedgerQuery, LedgerQuery>();
+
         // LedgerPoster is both the internal poster and the Withdrawal module's synchronous reserve contract.
         services.AddScoped<LedgerPoster>();
         services.AddScoped<ILedgerPoster>(sp => sp.GetRequiredService<LedgerPoster>());

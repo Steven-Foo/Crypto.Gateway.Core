@@ -16,9 +16,13 @@ public sealed class MerchantApiCredentialMap : IEntityTypeConfiguration<Merchant
         // ApiKey is a public identifier (ASCII), safe to store and index in clear.
         builder.Property(c => c.ApiKey).IsUnicode(false).HasMaxLength(64).IsRequired();
 
-        // HMAC-SHA256, base64. The secret itself is never stored — there is no column for it.
+        // HMAC-SHA256, base64. The bearer secret itself is never stored — there is no column for it.
         builder.Property(c => c.SecretHash).IsUnicode(false).HasMaxLength(256).IsRequired();
         builder.Property(c => c.HashVersion).IsRequired();
+
+        // The signing secret, AES-256-GCM encrypted (versioned base64 blob). Recoverable-but-encrypted,
+        // never plaintext (§10). ASCII base64, generous headroom for future key/blob growth.
+        builder.Property(c => c.SigningSecretCipher).IsUnicode(false).HasMaxLength(512).IsRequired();
 
         builder.Property(c => c.Status).HasConversion<string>().HasMaxLength(16).IsRequired();
 

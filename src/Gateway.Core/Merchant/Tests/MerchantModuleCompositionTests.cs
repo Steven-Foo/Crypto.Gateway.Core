@@ -36,7 +36,9 @@ public sealed class MerchantModuleCompositionTests
         using var provider = BuildProvider(
             ("Merchant:ApiCredentials:CurrentHashVersion", "2"),
             ("Merchant:ApiCredentials:Peppers:1", "old-pepper"),
-            ("Merchant:ApiCredentials:Peppers:2", "current-pepper"));
+            ("Merchant:ApiCredentials:Peppers:2", "current-pepper"),
+            ("Merchant:SigningSecrets:CurrentKeyVersion", "1"),
+            ("Merchant:SigningSecrets:Keys:1", Convert.ToBase64String(new byte[32])));
 
         using var scope = provider.CreateScope();
 
@@ -55,6 +57,9 @@ public sealed class MerchantModuleCompositionTests
         scope.ServiceProvider.GetRequiredService<IMerchantDirectory>().ShouldNotBeNull();
         scope.ServiceProvider.GetRequiredService<IMerchantRegistrar>().ShouldNotBeNull();
         scope.ServiceProvider.GetRequiredService<IMerchantAuthenticator>().ShouldNotBeNull();
+        scope.ServiceProvider.GetRequiredService<ISecretCipher>().ShouldNotBeNull();
+        scope.ServiceProvider.GetRequiredService<IMerchantRequestVerifier>().ShouldNotBeNull();
+        scope.ServiceProvider.GetRequiredService<IMerchantCallbackSigner>().ShouldNotBeNull();
     }
 
     [Fact]

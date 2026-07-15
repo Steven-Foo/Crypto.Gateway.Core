@@ -111,12 +111,13 @@ public sealed partial class Merchant : Entity<Guid>
         string apiKey,
         string secretHash,
         int hashVersion,
+        string signingSecretCipher,
         DateTimeOffset now)
     {
         if (Status == MerchantStatus.Closed)
             return Result.Failure<MerchantApiCredential>(MerchantErrors.Closed);
 
-        var credential = MerchantApiCredential.Issue(Id, apiKey, secretHash, hashVersion, now);
+        var credential = MerchantApiCredential.Issue(Id, apiKey, secretHash, hashVersion, signingSecretCipher, now);
         _credentials.Add(credential);
         UpdatedAt = now;
         return Result.Success(credential);

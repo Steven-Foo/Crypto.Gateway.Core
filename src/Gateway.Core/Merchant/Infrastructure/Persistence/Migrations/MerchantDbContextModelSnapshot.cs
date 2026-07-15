@@ -97,6 +97,12 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
                         .IsUnicode(false)
                         .HasColumnType("varchar(256)");
 
+                    b.Property<string>("SigningSecretCipher")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(512)");
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(16)

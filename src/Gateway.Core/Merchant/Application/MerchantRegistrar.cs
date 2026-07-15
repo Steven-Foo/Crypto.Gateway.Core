@@ -5,10 +5,13 @@ using CryptoPaymentEngine.SharedKernel;
 namespace CryptoPaymentEngine.Gateway.Core.Merchant.Application;
 
 /// <summary>
-/// The one and only time <see cref="ApiSecret"/> is ever readable. It is not stored, and callers
-/// must not log it. If the merchant loses it they rotate; there is no recovery — that is the point.
+/// The one and only time the secrets are ever readable. <see cref="ApiSecret"/> is the bearer secret;
+/// <see cref="SigningSecret"/> is the request/callback HMAC key the merchant signs with. Neither is stored
+/// recoverably except the signing secret's encrypted-at-rest form; callers must not log either. If the
+/// merchant loses them they rotate — the bearer secret has no recovery, that is the point.
 /// </summary>
-public sealed record MerchantRegistrationResult(Guid MerchantId, string MerchantCode, string ApiKey, string ApiSecret);
+public sealed record MerchantRegistrationResult(
+    Guid MerchantId, string MerchantCode, string ApiKey, string ApiSecret, string SigningSecret);
 
 public interface IMerchantRegistrar
 {
@@ -23,6 +26,7 @@ public sealed class MerchantRegistrar(
     IMerchantRepository repository,
     IApiCredentialGenerator generator,
     IApiSecretHasher hasher,
+    ISecretCipher secretCipher,
     TimeProvider timeProvider) : IMerchantRegistrar
 {
     public async Task<Result<MerchantRegistrationResult>> RegisterAsync(
@@ -44,9 +48,10 @@ public sealed class MerchantRegistrar(
 
         var credential = generator.Generate();
         var secretHash = hasher.Hash(credential.Secret);
+        var signingSecretCipher = secretCipher.Protect(credential.SigningSecret);
 
         var issueResult = merchant.IssueCredential(
-            credential.ApiKey, secretHash, hasher.CurrentVersion, timeProvider.GetUtcNow());
+            credential.ApiKey, secretHash, hasher.CurrentVersion, signingSecretCipher, timeProvider.GetUtcNow());
 
         if (issueResult.IsFailure)
             return Result.Failure<MerchantRegistrationResult>(issueResult.Error!);
@@ -55,6 +60,6 @@ public sealed class MerchantRegistrar(
         await repository.SaveChangesAsync(cancellationToken);
 
         return Result.Success(new MerchantRegistrationResult(
-            merchant.Id, merchant.MerchantCode, credential.ApiKey, credential.Secret));
+            merchant.Id, merchant.MerchantCode, credential.ApiKey, credential.Secret, credential.SigningSecret));
     }
 }

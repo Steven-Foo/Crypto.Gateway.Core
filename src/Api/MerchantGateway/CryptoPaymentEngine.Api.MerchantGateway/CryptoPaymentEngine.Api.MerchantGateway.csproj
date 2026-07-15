@@ -30,6 +30,13 @@
     <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/Deposit/Contracts/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Contracts.csproj" />
     <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/Deposit/Events/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Events.csproj" />
     <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/Deposit/Workers/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Workers.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/PaymentIntent/Application/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Application.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/PaymentIntent/Contracts/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Contracts.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/PaymentIntent/Infrastructure/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infrastructure.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/PaymentIntent/Events/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Events.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/PaymentIntent/Workers/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Workers.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/Platform/Notification/Application/CryptoPaymentEngine.Gateway.Core.Platform.Notification.Application.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/Platform/Notification/Infrastructure/CryptoPaymentEngine.Gateway.Core.Platform.Notification.Infrastructure.csproj" />
     <ProjectReference Include="../../../Gateway.Core/Financial/Ledger/Api/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Api.csproj" />
     <ProjectReference Include="../../../Gateway.Core/Financial/Ledger/Application/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application.csproj" />
     <ProjectReference Include="../../../Gateway.Core/Financial/Ledger/Contracts/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Contracts.csproj" />

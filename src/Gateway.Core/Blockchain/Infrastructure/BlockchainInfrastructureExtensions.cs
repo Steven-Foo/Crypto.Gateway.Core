@@ -1,6 +1,7 @@
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Addresses;
+using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Configuration;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers.Tron;
 using Microsoft.Extensions.Configuration;
@@ -11,6 +12,17 @@ namespace CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure;
 
 public static class BlockchainInfrastructureExtensions
 {
+    /// <summary>
+    /// Registers the config-backed asset catalog (§8). It fixes each asset's canonical <c>AssetId</c> so the
+    /// API edge, deposit scanner, and ledger all resolve the same identity. A DB-backed catalog replaces this
+    /// line later behind the same Contract.
+    /// </summary>
+    public static IServiceCollection AddConfigurationAssetCatalog(this IServiceCollection services)
+    {
+        services.TryAddSingleton<IAssetCatalog, ConfigurationAssetCatalog>();
+        return services;
+    }
+
     /// <summary>
     /// Registers the address-encoding capability the Blockchain module owns (§8): a public key → chain
     /// address. Other modules (e.g. KeyManagement) consume <see cref="IAddressEncoderFactory"/> through

@@ -37,8 +37,15 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
             Peppers = new Dictionary<int, string> { [1] = "test-pepper-value" },
         }));
 
+    private static AesGcmSecretCipher NewCipher() =>
+        new(Options.Create(new SigningSecretOptions
+        {
+            CurrentKeyVersion = 1,
+            Keys = new Dictionary<int, string> { [1] = Convert.ToBase64String(new byte[32]) },
+        }));
+
     private static MerchantRegistrar NewRegistrar(MerchantDbContext context) =>
-        new(new MerchantRepository(context), new ApiCredentialGenerator(), NewHasher(), TimeProvider.System);
+        new(new MerchantRepository(context), new ApiCredentialGenerator(), NewHasher(), NewCipher(), TimeProvider.System);
 
     public async ValueTask InitializeAsync()
     {
@@ -180,7 +187,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         await using (var context = NewContext())
         {
             var merchant = await context.Merchants.Include(m => m.Credentials).SingleAsync(m => m.Id == merchantId, Ct);
-            merchant.IssueCredential(apiKey, "another-hash", 1, DateTimeOffset.UtcNow);
+            merchant.IssueCredential(apiKey, "another-hash", 1, "cipher", DateTimeOffset.UtcNow);
 
             await Should.ThrowAsync<DbUpdateException>(() => context.SaveChangesAsync(Ct));
         }

@@ -36,6 +36,15 @@ public sealed class MerchantRepository(MerchantDbContext context) : IMerchantRep
             .AsNoTracking()
             .SingleOrDefaultAsync(c => c.ApiKey == apiKey && c.Status == CredentialStatus.Active, cancellationToken);
 
+    public Task<MerchantApiCredential?> FindActiveCredentialByMerchantAsync(
+        Guid merchantId,
+        CancellationToken cancellationToken = default) =>
+        context.Credentials
+            .AsNoTracking()
+            .Where(c => c.MerchantId == merchantId && c.Status == CredentialStatus.Active)
+            .OrderByDescending(c => c.CreatedAt)
+            .FirstOrDefaultAsync(cancellationToken);
+
     public void Add(Domain.Merchant merchant) => context.Merchants.Add(merchant);
 
     public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) =>
