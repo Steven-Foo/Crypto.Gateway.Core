@@ -1,4 +1,8 @@
-﻿IF OBJECT_ID(N'[wallet].[__EFMigrationsHistory]') IS NULL
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+GO
+
+IF OBJECT_ID(N'[wallet].[__EFMigrationsHistory]') IS NULL
 BEGIN
     IF SCHEMA_ID(N'wallet') IS NULL EXEC(N'CREATE SCHEMA [wallet];');
     CREATE TABLE [wallet].[__EFMigrationsHistory] (

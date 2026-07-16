@@ -27,6 +27,7 @@ public static class WalletModuleExtensions
 
         services.AddScoped<IWalletRepository, WalletRepository>();
         services.AddScoped<IWalletDirectory, WalletDirectory>();
+        services.AddScoped<IPlatformWalletDirectory, PlatformWalletDirectory>();
         services.AddScoped<IDepositAddressProvisioner, WalletProvisioningService>();
 
         // Bumps DepositsReceivedCount on the wallet a confirmed deposit landed on — only fires wherever the

@@ -55,6 +55,18 @@ public static class BlockchainInfrastructureExtensions
     }
 
     /// <summary>
+    /// Registers the in-memory <see cref="IAccountResourceReader"/> (Development/tests) — the DI seam the real
+    /// TRON <c>getaccountresource</c> adapter replaces. Read-only resource observation for the Energy monitor;
+    /// it never freezes, delegates, or signs (§10). The real adapter is deferred to staging (needs a node/key).
+    /// </summary>
+    public static IServiceCollection AddInMemoryAccountResourceReader(this IServiceCollection services)
+    {
+        services.TryAddSingleton(TimeProvider.System);
+        services.TryAddSingleton<IAccountResourceReader, InMemoryAccountResourceReader>();
+        return services;
+    }
+
+    /// <summary>
     /// Routes the capability ports to the registered per-chain adapters (the real-provider counterpart
     /// to <see cref="AddInMemoryChainSource"/>). Call this plus one <c>Add…ChainAdapter</c> per chain.
     /// </summary>

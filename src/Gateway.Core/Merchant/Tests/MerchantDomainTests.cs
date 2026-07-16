@@ -87,6 +87,7 @@ public sealed class MerchantDomainTests
         merchant.UpdateCallbackUrl("https://x.test/h", Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
         merchant.IssueCredential("k", "h", 1, "cipher", Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
         merchant.UpdateConfiguration(true, 3, true, Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
+        merchant.SetAssetPolicy(Guid.CreateVersion7(), 1, 1, 2, FeeSchedule.None, Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
         merchant.SetAssetPolicy(Guid.CreateVersion7(), 1, 1, 2, 0, Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
         merchant.UpdateAllowedIps(["1.2.3.4"], Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
     }
@@ -187,8 +188,8 @@ public sealed class MerchantDomainTests
         var merchant = NewMerchant();
         var assetId = Guid.CreateVersion7();
 
-        merchant.SetAssetPolicy(assetId, 100, 10, 1000, 1, Now).IsSuccess.ShouldBeTrue();
-        merchant.SetAssetPolicy(assetId, 200, 20, 2000, 2, Now).IsSuccess.ShouldBeTrue();
+        merchant.SetAssetPolicy(assetId, 100, 10, 1000, FeeSchedule.Create(0, 0, 1, 0).Value, Now).IsSuccess.ShouldBeTrue();
+        merchant.SetAssetPolicy(assetId, 200, 20, 2000, FeeSchedule.Create(0, 0, 2, 0).Value, Now).IsSuccess.ShouldBeTrue();
 
         merchant.AssetPolicies.Count.ShouldBe(1);
         merchant.AssetPolicies[0].SweepThreshold.ShouldBe(new BigInteger(200));
@@ -199,18 +200,18 @@ public sealed class MerchantDomainTests
     public void Set_asset_policy_allows_a_null_maximum_meaning_unlimited()
     {
         var merchant = NewMerchant();
-        merchant.SetAssetPolicy(Guid.CreateVersion7(), 100, 10, null, 1, Now).IsSuccess.ShouldBeTrue();
+        merchant.SetAssetPolicy(Guid.CreateVersion7(), 100, 10, null, FeeSchedule.Create(0, 0, 1, 0).Value, Now).IsSuccess.ShouldBeTrue();
         merchant.AssetPolicies[0].MaximumWithdrawal.ShouldBeNull();
     }
 
     [Fact]
     public void Set_asset_policy_rejects_minimum_above_maximum() =>
-        NewMerchant().SetAssetPolicy(Guid.CreateVersion7(), 0, 100, 10, 0, Now)
+        NewMerchant().SetAssetPolicy(Guid.CreateVersion7(), 0, 100, 10, FeeSchedule.None, Now)
             .Error!.Code.ShouldBe(MerchantErrors.WithdrawalRangeInvalid.Code);
 
     [Fact]
     public void Set_asset_policy_rejects_negative_amounts() =>
-        NewMerchant().SetAssetPolicy(Guid.CreateVersion7(), BigInteger.MinusOne, 0, null, 0, Now)
+        NewMerchant().SetAssetPolicy(Guid.CreateVersion7(), BigInteger.MinusOne, 0, null, FeeSchedule.None, Now)
             .Error!.Code.ShouldBe(MerchantErrors.AmountNegative.Code);
 
     [Fact]
@@ -218,13 +219,13 @@ public sealed class MerchantDomainTests
     {
         var tooLarge = MoneyLimits.MaxValue + BigInteger.One;
 
-        NewMerchant().SetAssetPolicy(Guid.CreateVersion7(), tooLarge, 0, null, 0, Now)
+        NewMerchant().SetAssetPolicy(Guid.CreateVersion7(), tooLarge, 0, null, FeeSchedule.None, Now)
             .Error!.Code.ShouldBe(MerchantErrors.AmountTooLarge.Code);
     }
 
     [Fact]
     public void Set_asset_policy_accepts_the_maximum_storable_amount() =>
-        NewMerchant().SetAssetPolicy(Guid.CreateVersion7(), MoneyLimits.MaxValue, 0, null, 0, Now)
+        NewMerchant().SetAssetPolicy(Guid.CreateVersion7(), MoneyLimits.MaxValue, 0, null, FeeSchedule.None, Now)
             .IsSuccess.ShouldBeTrue();
 
     [Theory]

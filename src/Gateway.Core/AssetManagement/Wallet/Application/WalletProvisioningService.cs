@@ -37,9 +37,9 @@ public sealed class WalletProvisioningService(
         if (!merchant.CanTransact)
             return Result.Failure<ProvisionedDepositAddress>(WalletErrors.MerchantCannotTransact);
 
-        // Custody allocates an index and derives the address atomically; we receive only an opaque
-        // handle plus the public address.
-        var derivation = await walletDerivation.AllocateNextAsync(chain, DerivationPurpose.Deposit, cancellationToken);
+        // Custody allocates an index from the MERCHANT'S OWN HD wallet (created on first use, its own seed)
+        // and derives the address atomically; we receive only an opaque handle plus the public address.
+        var derivation = await walletDerivation.AllocateNextForMerchantAsync(merchantId, chain, DerivationPurpose.Deposit, cancellationToken);
         if (derivation.IsFailure)
             return Result.Failure<ProvisionedDepositAddress>(derivation.Error!);
 

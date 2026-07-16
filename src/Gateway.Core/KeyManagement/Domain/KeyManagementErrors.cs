@@ -22,6 +22,9 @@ public static class KeyManagementErrors
     public static readonly Error NameRequired =
         Error.Validation("keymgmt.name_required", "HD wallet name is required.");
 
+    public static readonly Error MerchantRequired =
+        Error.Validation("keymgmt.merchant_required", "A merchant id is required for a merchant-owned HD wallet.");
+
     public static readonly Error SecretReferenceRequired =
         Error.Validation("keymgmt.secret_reference_required", "A secret reference is required. The seed itself is never stored.");
 

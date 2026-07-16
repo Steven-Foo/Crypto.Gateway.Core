@@ -1,4 +1,6 @@
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Infrastructure;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Infrastructure;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Workers;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure;
@@ -59,6 +61,7 @@ builder.Services.AddMerchantModule(config, dbConnection);
 builder.Services.AddKeyManagementModule(dbConnection);
 builder.Services.AddBlockchainAddressEncoding();
 builder.Services.AddWalletModule(dbConnection);
+builder.Services.AddEnergyModule(config, dbConnection);  // TRON resource monitoring (Phase 5a): SQL policy + Mongo snapshots
 builder.Services.AddLedgerModule(dbConnection);         // consumes Deposit + Withdrawal events (credit/settle/release)
 builder.Services.AddDepositModule(config, dbConnection);
 builder.Services.AddWithdrawalModule(config, dbConnection);
@@ -85,6 +88,7 @@ if (builder.Environment.IsDevelopment())
 
     builder.Services.AddInMemoryTransactionEngine();
     builder.Services.AddInMemorySigner(); // NEVER touches a key; a real KMS signer replaces it in prod (§10)
+    builder.Services.AddInMemoryAccountResourceReader(); // read-only resource observation for the Energy monitor
 
     // In-memory secret provider (PUBLIC xpub only) + idempotent HD-wallet seeder, so a signed /deposit can
     // provision an address on a fresh clone. Overridable per-developer via appsettings.Local.json. The
@@ -101,6 +105,8 @@ else
     builder.Services.AddTronChainAdapter(config);
     // NOT built yet: real per-chain ITransactionBuilder/ITransactionBroadcaster and the KMS-backed ISigner.
     // Withdrawal processing stays inert in prod until these land — by design, never a fake signer.
+    // Also NOT built: the real TRON getaccountresource adapter (IAccountResourceReader) — the Energy monitor
+    // stays inert in prod until it lands (deferred to staging like the other JSON-RPC adapters, §8).
 }
 
 // ── Background processing ─────────────────────────────────────────────────────
@@ -119,6 +125,14 @@ builder.Services.AddWithdrawalWorkers(new WithdrawalWorkerOptions
 
 // Frees lapsed deposit-invoice addresses back to the pool (§9).
 builder.Services.AddPaymentIntentWorkers();
+
+// TRON resource monitor (Phase 5a): samples every platform wallet's energy, snapshots to Mongo, alerts on
+// Low/Critical. Read-only — no money, no keys. Inert until an IAccountResourceReader is registered (dev: in-memory).
+builder.Services.AddEnergyWorkers(new EnergyWorkerOptions
+{
+    Chains = [Chain.Tron],
+    MonitorInterval = TimeSpan.FromSeconds(30),
+});
 
 // Relays each module's outbox → IEventBus → the Ledger handlers: Deposit credit, Withdrawal
 // settle/release. This is what makes the money-in and money-out paths live end to end.

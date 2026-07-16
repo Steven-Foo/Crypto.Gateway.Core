@@ -13,6 +13,9 @@ public sealed class HdWalletMap : IEntityTypeConfiguration<HdWallet>
         builder.HasKey(w => w.Id);
         builder.Property(w => w.Id).ValueGeneratedNever();
 
+        // Null for platform wallets; set for merchant-owned deposit wallets. Opaque cross-module id, no FK (§4.5).
+        builder.Property(w => w.MerchantId);
+
         builder.Property(w => w.Name).HasMaxLength(128).IsRequired();
         builder.Property(w => w.Chain).HasConversion<string>().HasMaxLength(16).IsRequired();
         builder.Property(w => w.Purpose).HasConversion<string>().HasMaxLength(16).IsRequired();
@@ -41,9 +44,11 @@ public sealed class HdWalletMap : IEntityTypeConfiguration<HdWallet>
         builder.Ignore(w => w.IsExhausted);
         builder.Ignore(w => w.DomainEvents);
 
-        // Exactly one active HD wallet per (chain, purpose): otherwise "allocate the next deposit
-        // address for TRON" is nondeterministic and addresses scatter across pools.
-        builder.HasIndex(w => new { w.Chain, w.Purpose })
+        // Exactly one active HD wallet per (merchant, chain, purpose). SQL Server treats a single NULL as a
+        // value, so platform wallets (MerchantId NULL) still get one-per-(chain, purpose), while each merchant
+        // owns exactly one active deposit wallet per chain. This is also the arbiter for the create-on-first-use
+        // race: two concurrent first deposits for a merchant resolve to one wallet, never two.
+        builder.HasIndex(w => new { w.MerchantId, w.Chain, w.Purpose })
             .IsUnique()
             .HasFilter("[Status] = 'Active'");
 

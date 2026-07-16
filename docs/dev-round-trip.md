@@ -61,15 +61,20 @@ That signs and POSTs `/api/v1/deposit` with the dev merchant and a sample USDT-T
   "isSuccess": true,
   "data": {
     "referenceNo": "…",
-    "address": "TUEZSdKsoDHQMeZwihtdoBiN46zxhGWYdH",
+    "address": "T…",
     "chainType": "TRC",
     "payUrl": "…/pay/…"
   }
 }
 ```
 
-`TUEZSdKsoDHQMeZwihtdoBiN46zxhGWYdH` is index 0 of the committed test-vector xpub — deterministic across
-restarts. Then check the pay page: `GET /pay/{referenceNo}/info`.
+The `address` is now **per-merchant**: each merchant has its own HD wallet (separate seed), created on its
+first deposit, so the dev merchant gets *its own* deterministic TRON address (derived from a fixed dev salt +
+the merchant id — reproducible across restarts, but no longer the shared `TUEZSdK…` test vector, which
+belonged to the old single-pool design). Capture the address from the response rather than asserting a fixed
+value. The `payUrl`'s expected amount is the requested amount **grossed up by the deposit fee** (payer pays on
+top) when the merchant has a fee schedule; with no schedule it equals the requested amount. Then check the pay
+page: `GET /pay/{referenceNo}/info`.
 
 Other endpoints:
 

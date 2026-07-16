@@ -129,6 +129,16 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("datetimeoffset");
 
+                    b.Property<int>("DepositFeeBps")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
+
+                    b.Property<BigInteger>("DepositFeeFixed")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("decimal(38,0)")
+                        .HasDefaultValueSql("0");
+
                     b.Property<BigInteger?>("MaximumWithdrawal")
                         .HasColumnType("decimal(38,0)");
 
@@ -152,6 +162,11 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
                     b.Property<BigInteger>("WithdrawalFee")
                         .HasColumnType("decimal(38,0)");
 
+                    b.Property<int>("WithdrawalFeeBps")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
+
                     b.HasKey("Id");
 
                     b.HasIndex("MerchantId", "AssetId")
@@ -159,7 +174,9 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
 
                     b.ToTable("MerchantAssetPolicy", "merchant", t =>
                         {
-                            t.HasCheckConstraint("CK_MerchantAssetPolicy_NonNegative", "[SweepThreshold] >= 0 AND [MinimumWithdrawal] >= 0 AND [WithdrawalFee] >= 0 AND ([MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= 0)");
+                            t.HasCheckConstraint("CK_MerchantAssetPolicy_FeeBps", "[DepositFeeBps] >= 0 AND [DepositFeeBps] < 10000 AND [WithdrawalFeeBps] >= 0 AND [WithdrawalFeeBps] <= 10000");
+
+                            t.HasCheckConstraint("CK_MerchantAssetPolicy_NonNegative", "[SweepThreshold] >= 0 AND [MinimumWithdrawal] >= 0 AND [WithdrawalFee] >= 0 AND [DepositFeeFixed] >= 0 AND ([MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= 0)");
 
                             t.HasCheckConstraint("CK_MerchantAssetPolicy_WithdrawalRange", "[MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= [MinimumWithdrawal]");
                         });

@@ -7,6 +7,8 @@
     <!-- Consumes Deposit's + Withdrawal's public event contracts only (§4.5): a module may reference another's Events. -->
     <ProjectReference Include="../../../PaymentProcessing/Deposit/Events/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Events.csproj" />
     <ProjectReference Include="../../../PaymentProcessing/Withdrawal/Events/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Events.csproj" />
+    <!-- Consumes Merchant's pricing read model only (§4.5) to split the deposit fee off a confirmed credit. -->
+    <ProjectReference Include="../../../Merchant/Contracts/CryptoPaymentEngine.Gateway.Core.Merchant.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -28,6 +28,7 @@ public sealed class WithdrawalRequestService(
     IWithdrawalRepository repository,
     IWithdrawalPolicyProvider policies,
     IMerchantDirectory merchants,
+    IMerchantFeeSchedule feeSchedule,
     IWithdrawalLedger ledger,
     TimeProvider timeProvider) : IWithdrawalRequestService
 {
@@ -48,9 +49,13 @@ public sealed class WithdrawalRequestService(
             if (policy.ExceedsMaximum(command.Amount))
                 return Result.Failure<WithdrawalResult>(WithdrawalErrors.AboveMaximum);
 
+            // Pricing is per-merchant (fixed + %), resolved from the Merchant module — the source of truth,
+            // superseding the config policy's flat fee. The merchant bears this fee; the platform bears gas.
+            var fee = await feeSchedule.QuoteWithdrawalFeeAsync(command.MerchantId, command.AssetId, command.Amount, cancellationToken);
+
             var created = WithdrawalEntity.Request(
                 command.MerchantId, command.AssetId, command.Chain, command.DestinationAddress,
-                command.Amount, policy.Fee, command.IdempotencyKey, timeProvider.GetUtcNow());
+                command.Amount, fee, command.IdempotencyKey, timeProvider.GetUtcNow());
             if (created.IsFailure)
                 return Result.Failure<WithdrawalResult>(created.Error!);
 

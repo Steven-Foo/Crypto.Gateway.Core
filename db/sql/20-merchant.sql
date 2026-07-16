@@ -1,4 +1,8 @@
-﻿IF OBJECT_ID(N'[merchant].[__EFMigrationsHistory]') IS NULL
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+GO
+
+IF OBJECT_ID(N'[merchant].[__EFMigrationsHistory]') IS NULL
 BEGIN
     IF SCHEMA_ID(N'merchant') IS NULL EXEC(N'CREATE SCHEMA [merchant];');
     CREATE TABLE [merchant].[__EFMigrationsHistory] (
@@ -226,6 +230,88 @@ IF NOT EXISTS (
 BEGIN
     INSERT INTO [merchant].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
     VALUES (N'20260710100512_InitialMerchant', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260714073928_AddCredentialSigningSecret'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantApiCredential] ADD [SigningSecretCipher] varchar(512) NOT NULL DEFAULT '';
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260714073928_AddCredentialSigningSecret'
+)
+BEGIN
+    INSERT INTO [merchant].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260714073928_AddCredentialSigningSecret', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260716032641_MerchantFeeSchedule'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantAssetPolicy] DROP CONSTRAINT [CK_MerchantAssetPolicy_NonNegative];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260716032641_MerchantFeeSchedule'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantAssetPolicy] ADD [DepositFeeBps] int NOT NULL DEFAULT 0;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260716032641_MerchantFeeSchedule'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantAssetPolicy] ADD [DepositFeeFixed] decimal(38,0) NOT NULL DEFAULT (0);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260716032641_MerchantFeeSchedule'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantAssetPolicy] ADD [WithdrawalFeeBps] int NOT NULL DEFAULT 0;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260716032641_MerchantFeeSchedule'
+)
+BEGIN
+    EXEC(N'ALTER TABLE [merchant].[MerchantAssetPolicy] ADD CONSTRAINT [CK_MerchantAssetPolicy_FeeBps] CHECK ([DepositFeeBps] >= 0 AND [DepositFeeBps] < 10000 AND [WithdrawalFeeBps] >= 0 AND [WithdrawalFeeBps] <= 10000)');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260716032641_MerchantFeeSchedule'
+)
+BEGIN
+    EXEC(N'ALTER TABLE [merchant].[MerchantAssetPolicy] ADD CONSTRAINT [CK_MerchantAssetPolicy_NonNegative] CHECK ([SweepThreshold] >= 0 AND [MinimumWithdrawal] >= 0 AND [WithdrawalFee] >= 0 AND [DepositFeeFixed] >= 0 AND ([MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= 0))');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260716032641_MerchantFeeSchedule'
+)
+BEGIN
+    INSERT INTO [merchant].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260716032641_MerchantFeeSchedule', N'10.0.9');
 END;
 
 COMMIT;

@@ -39,6 +39,7 @@ public static class MerchantModuleExtensions
         services.AddSingleton<IApiCredentialGenerator, ApiCredentialGenerator>();
         services.AddScoped<IMerchantRepository, MerchantRepository>();
         services.AddScoped<IMerchantDirectory, MerchantDirectory>();
+        services.AddScoped<IMerchantFeeSchedule, MerchantFeeSchedule>();
         services.AddScoped<IMerchantRegistrar, MerchantRegistrar>();
         services.AddScoped<IMerchantAuthenticator, MerchantAuthenticator>();
 

@@ -152,7 +152,7 @@ public sealed partial class Merchant : Entity<Guid>
         BigInteger sweepThreshold,
         BigInteger minimumWithdrawal,
         BigInteger? maximumWithdrawal,
-        BigInteger withdrawalFee,
+        FeeSchedule fees,
         DateTimeOffset now)
     {
         if (Status == MerchantStatus.Closed)
@@ -161,7 +161,7 @@ public sealed partial class Merchant : Entity<Guid>
         var existing = _assetPolicies.SingleOrDefault(p => p.AssetId == assetId);
         if (existing is not null)
         {
-            var updateResult = existing.Update(sweepThreshold, minimumWithdrawal, maximumWithdrawal, withdrawalFee, now);
+            var updateResult = existing.Update(sweepThreshold, minimumWithdrawal, maximumWithdrawal, fees, now);
             if (updateResult.IsSuccess)
                 UpdatedAt = now;
 
@@ -169,7 +169,7 @@ public sealed partial class Merchant : Entity<Guid>
         }
 
         var createResult = MerchantAssetPolicy.Create(
-            Id, assetId, sweepThreshold, minimumWithdrawal, maximumWithdrawal, withdrawalFee, now);
+            Id, assetId, sweepThreshold, minimumWithdrawal, maximumWithdrawal, fees, now);
 
         if (createResult.IsFailure)
             return Result.Failure(createResult.Error!);

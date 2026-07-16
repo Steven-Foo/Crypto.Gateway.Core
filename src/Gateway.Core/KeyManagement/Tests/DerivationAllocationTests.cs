@@ -55,7 +55,8 @@ public sealed class DerivationAllocationTests : IAsyncLifetime
             new KeyDeriverFactory([new Bip32Secp256k1KeyDeriver()]),
             new AddressEncoderFactory([new TronAddressEncoder(), new EthereumAddressEncoder()]),
             new SecretProviderFactory([secretProvider]),
-            TimeProvider.System);
+            TimeProvider.System,
+            []);
     }
 
     private static HdWallet NewTronDepositWallet() =>
@@ -271,7 +272,8 @@ public sealed class DerivationAllocationTests : IAsyncLifetime
                 new KeyDeriverFactory([new Bip32Secp256k1KeyDeriver()]),
                 new AddressEncoderFactory([new SolanaAddressEncoder()]),
                 new SecretProviderFactory([InMemorySecretProvider.FromStrings(new Dictionary<string, string>())]),
-                TimeProvider.System);
+                TimeProvider.System,
+                []);
 
             var result = await service.AllocateNextAsync(Chain.Solana, DerivationPurpose.Deposit, Ct);
 

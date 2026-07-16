@@ -1,4 +1,8 @@
-﻿IF OBJECT_ID(N'[keymgmt].[__EFMigrationsHistory]') IS NULL
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+GO
+
+IF OBJECT_ID(N'[keymgmt].[__EFMigrationsHistory]') IS NULL
 BEGIN
     IF SCHEMA_ID(N'keymgmt') IS NULL EXEC(N'CREATE SCHEMA [keymgmt];');
     CREATE TABLE [keymgmt].[__EFMigrationsHistory] (
@@ -139,6 +143,43 @@ IF NOT EXISTS (
 BEGIN
     INSERT INTO [keymgmt].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
     VALUES (N'20260710112633_InitialKeyManagement', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [keymgmt].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260716052313_HdWalletPerMerchant'
+)
+BEGIN
+    DROP INDEX [IX_HdWallet_Chain_Purpose] ON [keymgmt].[HdWallet];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [keymgmt].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260716052313_HdWalletPerMerchant'
+)
+BEGIN
+    ALTER TABLE [keymgmt].[HdWallet] ADD [MerchantId] uniqueidentifier NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [keymgmt].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260716052313_HdWalletPerMerchant'
+)
+BEGIN
+    EXEC(N'CREATE UNIQUE INDEX [IX_HdWallet_MerchantId_Chain_Purpose] ON [keymgmt].[HdWallet] ([MerchantId], [Chain], [Purpose]) WHERE [Status] = ''Active''');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [keymgmt].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260716052313_HdWalletPerMerchant'
+)
+BEGIN
+    INSERT INTO [keymgmt].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260716052313_HdWalletPerMerchant', N'10.0.9');
 END;
 
 COMMIT;

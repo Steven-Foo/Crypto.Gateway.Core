@@ -1,4 +1,8 @@
-﻿IF OBJECT_ID(N'[withdrawal].[__EFMigrationsHistory]') IS NULL
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+GO
+
+IF OBJECT_ID(N'[withdrawal].[__EFMigrationsHistory]') IS NULL
 BEGIN
     IF SCHEMA_ID(N'withdrawal') IS NULL EXEC(N'CREATE SCHEMA [withdrawal];');
     CREATE TABLE [withdrawal].[__EFMigrationsHistory] (

@@ -1,4 +1,8 @@
-﻿IF OBJECT_ID(N'[blockchain].[__EFMigrationsHistory]') IS NULL
+SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+GO
+
+IF OBJECT_ID(N'[blockchain].[__EFMigrationsHistory]') IS NULL
 BEGIN
     IF SCHEMA_ID(N'blockchain') IS NULL EXEC(N'CREATE SCHEMA [blockchain];');
     CREATE TABLE [blockchain].[__EFMigrationsHistory] (
