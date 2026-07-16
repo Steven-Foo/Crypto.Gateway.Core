@@ -21,6 +21,16 @@ public sealed class DevelopmentKeyCustodyOptions
 
     /// <summary>Secret-store reference → xpub string, served by the in-memory <c>ISecretProvider</c>.</summary>
     public Dictionary<string, string> DevSecrets { get; init; } = new();
+
+    /// <summary>
+    /// OPTIONAL. A real TRON account xpub at <c>m/44'/195'/0'/0</c> (the change level, same convention as
+    /// <see cref="DevSecrets"/>). When set, the dev provisioner derives merchant deposit addresses from THIS
+    /// (public) key instead of the throwaway per-merchant dev seed — so addresses live in the developer's own
+    /// wallet tree and any test funds are recoverable there. REQUIRED before sending real mainnet funds: the
+    /// fallback seed's salt is public in this repo. Public xpub only — never a seed/mnemonic (§10).
+    /// Single-test-merchant only: two merchants sharing one xpub would derive colliding addresses.
+    /// </summary>
+    public string? DevMerchantXpub { get; init; }
 }
 
 /// <summary>One HD wallet the dev seeder will materialise. Mirrors the arguments of <c>HdWallet.Create</c>.</summary>

@@ -3,6 +3,7 @@ using System.Text;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Domain;
 using CryptoPaymentEngine.SharedKernel;
+using Microsoft.Extensions.Options;
 using NBitcoin;
 using NBitcoin.DataEncoders;
 
@@ -18,11 +19,12 @@ namespace CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Secrets;
 /// property the separate-seed custody model exists to give). This is DEV entropy only — production mints a
 /// true-random seed inside a KMS/HSM behind the same <see cref="IHdWalletProvisioner"/> port (deferred).
 /// </summary>
-public sealed class DevHdWalletProvisioner(MutableInMemorySecretStore secrets, TimeProvider timeProvider)
+public sealed class DevHdWalletProvisioner(
+    MutableInMemorySecretStore secrets, TimeProvider timeProvider, IOptions<DevelopmentKeyCustodyOptions> options)
     : IHdWalletProvisioner
 {
     // Not a production key or a real seed — a dev-only KDF salt that turns a merchant id into throwaway
-    // deterministic entropy. Changing it re-derives all dev addresses.
+    // deterministic entropy. Changing it re-derives all dev addresses. PUBLIC in this repo, so never for real funds.
     private const string DevMasterSalt = "cpe-dev-hdwallet-master-v1-not-for-production";
 
     public Task<Result<HdWallet>> ProvisionMerchantDepositWalletAsync(
@@ -38,10 +40,13 @@ public sealed class DevHdWalletProvisioner(MutableInMemorySecretStore secrets, T
         var coin = DerivationPath.CoinTypeFor(chain);
         var accountPath = $"m/44'/{coin}'/0'/0"; // change-level xpub → CKDpub derives address children
 
-        var seed = DeriveSeed(merchantId);
-        var master = new ExtKey(Encoders.Hex.EncodeData(seed));
-        var account = master.Derive(KeyPath.Parse($"44'/{coin}'/0'/0"));
-        var accountXpub = account.Neuter().ToString(Network.Main);
+        // Prefer a configured real xpub (recoverable, private — the developer's own wallet tree) over the
+        // throwaway public-salt seed. REQUIRED before sending real mainnet funds (the salt is public here).
+        var configuredXpub = options.Value.DevMerchantXpub;
+        var accountXpub = !string.IsNullOrWhiteSpace(configuredXpub)
+            ? configuredXpub.Trim()
+            : new ExtKey(Encoders.Hex.EncodeData(DeriveSeed(merchantId)))
+                .Derive(KeyPath.Parse($"44'/{coin}'/0'/0")).Neuter().ToString(Network.Main);
 
         // Deterministic references: on a create-on-first-use race, both callers write the same public key to
         // the same reference (idempotent) and only one wallet row wins the unique index — no orphaned secret.

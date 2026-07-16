@@ -203,6 +203,26 @@ per-merchant minting is inert (never an in-memory seed in prod) until a KMS-back
 same port. The dev round-trip address is now per-merchant deterministic (not the old shared `TUEZSdK…` vector;
 `docs/dev-round-trip.md` updated).
 
+**Human-testable mainnet deposit harness (migrating the PoC's proven deposit flow onto our spine) — DONE, 369
+tests green, host-boot verified.** Reuses the legacy PoC's `pay.html` **unmodified** (served at `/pay/{ref}` via
+`UseStaticFiles`; our `/pay/{ref}/info` already returns its exact `{address,amount,expiresAt,status}` contract,
+status already mapped to `pending/confirmed/expired`). Adds dev-only **Swagger** (`/swagger`, Swashbuckle 10.2.3
+— docs only: the merchant API is HMAC-signed so "Try it out" can't sign; use `tools/dev/Invoke-MerchantRequest.ps1`).
+`docker-compose.yml` brings up **SQL Server :1433 (DBeaver-reviewable) + Redis :6379 (callbacks need it) + Mongo
+:27017**; `tools/dev/Setup-LocalEnv.ps1` creates the DB + applies all 9 module migrations; per-developer secrets
+live in the git-ignored `appsettings.Local.json`. The dev host now takes the **real TRON adapter when
+`Chains:Tron:Live=true`** (+ a fresh TronGrid key — NEVER the leaked one), else the in-memory source; signer/keys
+stay in-memory (deposit detection never signs, §10). New dev-only host endpoints (`Endpoints/DevEndpoints.cs`,
+mapped only in Development): **`/dev/callbacks`** (in-host sink so a human sees the signed merchant callback the
+`HttpWebhookSender` fires on detection) and **`/dev/scan-cursor`** (seeds the deposit scan cursor near the chain
+tip — the scanner otherwise cold-starts at block 1 and never reaches a live mainnet deposit; a config-driven
+cold-start block on the Deposit module is the proper follow-up). For recoverable/private mainnet addresses the
+dev provisioner takes an optional real account xpub (`KeyManagement:DevMerchantXpub` at `m/44'/195'/0'/0`), else
+the throwaway public-salt seed (test-only). Full runbook: `docs/dev-mainnet-deposit.md`. **Deferred/known:** the
+live TRON adapter's first mainnet exercise may need rate-limit/start-block/confirmation tuning (was deferred to
+staging); withdrawal stays inert in dev (no real signer). We did NOT port the legacy MVC controllers — they drag
+in the old `Core`/`UsdtService` projects; the flow is reproduced in our minimal-API edge (§15).
+
 Every other module in the map is a placeholder in this doc, not yet on disk — scaffold a module
 only when real feature work on it starts, following the same 8-layer layout.
 

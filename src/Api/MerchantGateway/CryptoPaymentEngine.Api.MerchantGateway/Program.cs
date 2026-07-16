@@ -69,14 +69,26 @@ builder.Services.AddConfigurationAssetCatalog();        // canonical AssetId sha
 builder.Services.AddPaymentIntentModule(config, dbConnection); // deposit invoices + address pool; matches DepositConfirmed
 builder.Services.AddNotificationModule();               // consumes PaymentIntentMatched → signed merchant callback
 
+// ── Developer API docs (dev-only Swagger UI). §11 preferred tooling; carried over from the PoC. ──
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(c => c.SwaggerDoc("v1", new OpenApiInfo
+{
+    Title = "CryptoPaymentEngine — Merchant Gateway",
+    Version = "v1",
+    Description =
+        "Merchant-facing API. Requests to /api/v1/* are HMAC-signed: X-Api-Key + X-Timestamp + " +
+        "X-Signature = HMAC-SHA256(hexDecode(signingSecret), \"{timestamp}\\n{body}\"). Swagger's 'Try it out' " +
+        "cannot compute the signature — use tools/dev/Invoke-MerchantRequest.ps1 to make signed calls. The pay " +
+        "page and /dev/* endpoints are unauthenticated.",
+}));
+
 // ── Chain source + signing: swap dev↔prod by DI, not code (§8, §10) ───────────
 if (builder.Environment.IsDevelopment())
 {
-    // Chain source: the deterministic in-memory fake by default (node-free, safe on a fresh clone), or the
-    // REAL adapter when a developer explicitly opts in (Chains:UseLiveNode=true in appsettings.Local.json)
-    // to run a live round-trip against a real testnet. Custody/signing stay fake either way (§10) — this
-    // flag only ever affects which chain the scanner watches, never what's allowed to hold or move a key.
-    if (config.GetValue<bool>("Chains:UseLiveNode"))
+    // Deposits: real mainnet detection when opted in (Chains:Tron:Live + a fresh TronGrid key in
+    // appsettings.Local.json), else the deterministic node-free in-memory source. Signing/keys stay
+    // in-memory regardless — deposit detection never signs, so a real chain source is safe in dev (§10).
+    if (config.GetValue<bool>("Chains:Tron:Live"))
     {
         builder.Services.AddJsonRpcChainSources();
         builder.Services.AddTronChainAdapter(config);
@@ -146,17 +158,29 @@ builder.Services.AddOutboxDispatcher<PaymentIntentDbContext>(); // relays Paymen
 
 var app = builder.Build();
 
+// Dev-only Swagger UI at /swagger (developer testing). Absent in production.
 if (app.Environment.IsDevelopment())
 {
     app.UseSwagger();
-    app.UseSwaggerUI(o => o.SwaggerEndpoint("/swagger/v1/swagger.json", "Merchant API v1"));
+    app.UseSwaggerUI(c =>
+    {
+        c.SwaggerEndpoint("/swagger/v1/swagger.json", "Merchant Gateway v1");
+        c.RoutePrefix = "swagger";
+    });
 }
+
+// Serves the hosted pay page (wwwroot/pay.html) and any static assets. Unauthenticated by design.
+app.UseStaticFiles();
 
 // The frozen merchant API is authenticated by request signature; the pay-page data + health pass through.
 app.UseMiddleware<MerchantSignatureMiddleware>();
 
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 app.MapMerchantApi();   // POST /api/v1/{deposit,withdraw,balance}
-app.MapPayApi();        // GET  /pay/{ref}/info
+app.MapPayApi();        // GET  /pay/{ref}  (page) + /pay/{ref}/info (data)
+
+// Dev-only: the in-host callback sink so a human can watch the merchant callback fire on deposit detection.
+if (app.Environment.IsDevelopment())
+    app.MapDevEndpoints();
 
 app.Run();

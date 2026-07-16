@@ -7,6 +7,7 @@ using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Persistence;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Secrets;
 using CryptoPaymentEngine.SharedKernel;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using Shouldly;
 using Xunit;
 
@@ -36,13 +37,16 @@ public sealed class PerMerchantDerivationTests : IAsyncLifetime
 
     private readonly MutableInMemorySecretStore _store = new();
 
+    // No configured xpub → the provisioner uses the deterministic dev-salt seed (the behaviour under test).
+    private static readonly IOptions<DevelopmentKeyCustodyOptions> DevOpts = Options.Create(new DevelopmentKeyCustodyOptions());
+
     private WalletDerivationService NewService(KeyManagementDbContext context) =>
         new(new HdWalletRepository(context),
             new KeyDeriverFactory([new Bip32Secp256k1KeyDeriver()]),
             new AddressEncoderFactory([new TronAddressEncoder(), new EthereumAddressEncoder()]),
             new SecretProviderFactory([_store]),
             TimeProvider.System,
-            [new DevHdWalletProvisioner(_store, TimeProvider.System)]);
+            [new DevHdWalletProvisioner(_store, TimeProvider.System, DevOpts)]);
 
     public async ValueTask InitializeAsync()
     {
@@ -108,15 +112,15 @@ public sealed class PerMerchantDerivationTests : IAsyncLifetime
     {
         // Two independent provisioners (fresh stores) must mint the same account xpub for the same merchant,
         // so a developer's addresses are reproducible run to run.
-        var one = (await new DevHdWalletProvisioner(new MutableInMemorySecretStore(), TimeProvider.System)
+        var one = (await new DevHdWalletProvisioner(new MutableInMemorySecretStore(), TimeProvider.System, DevOpts)
             .ProvisionMerchantDepositWalletAsync(MerchantA, Chain.Tron, Ct)).Value;
-        var two = (await new DevHdWalletProvisioner(new MutableInMemorySecretStore(), TimeProvider.System)
+        var two = (await new DevHdWalletProvisioner(new MutableInMemorySecretStore(), TimeProvider.System, DevOpts)
             .ProvisionMerchantDepositWalletAsync(MerchantA, Chain.Tron, Ct)).Value;
 
         var storeOne = new MutableInMemorySecretStore();
-        var provisioner = new DevHdWalletProvisioner(storeOne, TimeProvider.System);
+        var provisioner = new DevHdWalletProvisioner(storeOne, TimeProvider.System, DevOpts);
         var walletA = (await provisioner.ProvisionMerchantDepositWalletAsync(MerchantA, Chain.Tron, Ct)).Value;
-        var walletB = (await new DevHdWalletProvisioner(new MutableInMemorySecretStore(), TimeProvider.System)
+        var walletB = (await new DevHdWalletProvisioner(new MutableInMemorySecretStore(), TimeProvider.System, DevOpts)
             .ProvisionMerchantDepositWalletAsync(MerchantA, Chain.Tron, Ct)).Value;
 
         // Same merchant → identical xpub reference (deterministic references) and the stored xpub matches.

@@ -16,8 +16,16 @@ public static class PayEndpoints
 {
     public static void MapPayApi(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/pay/{reference:guid}", GetPageAsync);
-        app.MapGet("/pay/{reference:guid}/info", GetInfoAsync);
+        // The hosted pay page (reused as-is from the proven PoC): reads the reference from its own URL,
+        // polls /info, renders amount + QR + countdown, flips to "confirmed" on detection. The same static
+        // file backs every reference. Unauthenticated — the reference is the unguessable public id.
+        app.MapGet("/pay/{reference:guid}", (Guid reference, IWebHostEnvironment env) =>
+            Results.File(Path.Combine(env.ContentRootPath, "wwwroot", "pay.html"), "text/html"))
+            .ExcludeFromDescription(); // it's a page, not an API operation — keep it out of Swagger
+
+        app.MapGet("/pay/{reference:guid}/info", GetInfoAsync)
+            .WithName("GetPayInfo")
+            .WithTags("Pay");
     }
 
     private static IResult GetPageAsync(Guid reference, HttpContext http, IWebHostEnvironment env)

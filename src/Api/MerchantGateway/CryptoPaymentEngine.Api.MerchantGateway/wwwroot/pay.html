@@ -141,7 +141,7 @@
 
   <div class="amount-label">Amount to Send</div>
   <div class="amount" id="pay-amount">—</div>
-  <div class="network-badge"><span class="dot"></span> <span id="network-label">—</span></div>
+  <div class="network-badge"><span class="dot"></span> USDT · TRC-20</div>
 
   <div class="qr-wrap">
     <div id="qrcode"></div>
@@ -162,7 +162,7 @@
 
   <div class="note">
     Send exactly the amount shown above to the address above on the
-    <strong id="note-network">correct</strong> network only.
+    <strong>TRON (TRC-20)</strong> network only.
     Do not send other tokens or use other networks.
     Payment is detected automatically — do not close this page.
   </div>
@@ -245,9 +245,6 @@
     } catch (_) {}
   }
 
-  // Chain enum values (Blockchain.Domain.Chain) → the network label shown to the payer.
-  const NETWORK_LABELS = { Tron: 'TRC-20', Ethereum: 'ERC-20', Solana: 'SPL' };
-
   async function init() {
     const parts       = window.location.pathname.replace(/\/$/, '').split('/');
     const referenceNo = parts[parts.length - 1];
@@ -267,13 +264,8 @@
 
     if (Date.now() >= expiresAt) { show('expired-card'); return; }
 
-    const networkLabel = NETWORK_LABELS[info.chain] || info.chain || '';
-    const badgeText     = [info.symbol, networkLabel].filter(Boolean).join(' · ');
-
-    document.getElementById('pay-amount').textContent   = `${parseFloat(info.amount)} ${info.symbol}`;
-    document.getElementById('pay-address').textContent  = info.address;
-    document.getElementById('network-label').textContent = badgeText;
-    document.getElementById('note-network').textContent  = `${info.symbol} (${networkLabel})`;
+    document.getElementById('pay-amount').textContent  = `${parseFloat(info.amount).toFixed(2)} USDT`;
+    document.getElementById('pay-address').textContent = info.address;
 
     new QRCode(document.getElementById('qrcode'), {
       text:         info.address,
