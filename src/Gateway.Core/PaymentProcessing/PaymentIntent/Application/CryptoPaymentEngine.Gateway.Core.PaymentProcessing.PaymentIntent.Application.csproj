@@ -8,6 +8,8 @@
          and Wallet's provisioning capability to mint a new dedicated address when the pool has none free. -->
     <ProjectReference Include="../../Deposit/Events/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Events.csproj" />
     <ProjectReference Include="../../../AssetManagement/Wallet/Contracts/CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts.csproj" />
+    <!-- Merchant pricing read model (§4.5): gross up the invoice so the payer bears the deposit fee. -->
+    <ProjectReference Include="../../../Merchant/Contracts/CryptoPaymentEngine.Gateway.Core.Merchant.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>

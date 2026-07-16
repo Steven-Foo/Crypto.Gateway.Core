@@ -66,11 +66,12 @@ public sealed class MoneyInCompositionTests : IAsyncLifetime
 
         services.AddScoped<IEventBus, InProcessEventBus>();
 
-        // Ledger: credit handler for DepositConfirmed.
+        // Ledger: credit handler for DepositConfirmed. Unpriced merchant → no deposit fee (full credit).
         services.AddScoped<ILedgerAccountStore, LedgerAccountStore>();
         services.AddScoped<ILedgerPostingStore, LedgerPostingStore>();
         services.AddScoped<LedgerPoster>();
         services.AddScoped<ILedgerPoster>(sp => sp.GetRequiredService<LedgerPoster>());
+        services.AddSingleton<IMerchantFeeSchedule>(new NoFeeSchedule());
         services.AddScoped<IIntegrationEventHandler<DepositConfirmed>, DepositConfirmedHandler>();
 
         // PaymentIntent: the SECOND handler for the same DepositConfirmed — the fan-out.
@@ -199,6 +200,19 @@ public sealed class MoneyInCompositionTests : IAsyncLifetime
 
         public Task<IReadOnlyList<AssetDto>> GetActiveAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<AssetDto>>([]);
+    }
+
+    /// <summary>An unpriced merchant: no deposit fee, no gross-up. Keeps this capstone focused on the fan-out.</summary>
+    private sealed class NoFeeSchedule : IMerchantFeeSchedule
+    {
+        public Task<BigInteger> QuoteDepositFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(BigInteger.Zero);
+
+        public Task<BigInteger> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(BigInteger.Zero);
+
+        public Task<Result<BigInteger>> GrossUpDepositAsync(Guid merchantId, Guid assetId, BigInteger netTarget, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Result.Success(netTarget));
     }
 
     private sealed class NoOpLock : IDistributedLockFactory

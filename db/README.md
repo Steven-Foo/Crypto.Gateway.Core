@@ -24,7 +24,7 @@ sqlcmd -S <server> -U sa -P '<password>' -i db/sql/00-bootstrap.sql
 
 This creates:
 - database `CryptoPaymentEngine`, with `READ_COMMITTED_SNAPSHOT ON` (readers don't block the ledger's writers);
-- one schema per module — `blockchain`, `merchant`, `wallet`, `keymgmt`, `deposit`, `ledger`, `withdrawal`, `sweep`, `platform`, `settlement`, `reconciliation`;
+- one schema per module — `blockchain`, `merchant`, `wallet`, `keymgmt`, `deposit`, `ledger`, `withdrawal`, `paymentintent`, `energy`, `sweep`, `platform`, `settlement`, `reconciliation`;
 - two principals, deliberately separated:
   - **`cpe_migrator`** — DDL rights. Used only by `dotnet ef database update` / deploys.
   - **`cpe_app`** — DML only, no DDL. Used by the running application.
@@ -47,7 +47,24 @@ dotnet ef database update \
 ```
 
 Each module has its own `DbContext`, its own migrations, and its own `__EFMigrationsHistory`
-table inside its own schema — so modules migrate independently.
+table inside its own schema — so modules migrate independently. Every `-p` path is relative to
+the repo root; `-s` is always the host above.
+
+| Script | `--context` | `-p` (module Infrastructure project) |
+|---|---|---|
+| `10-blockchain.sql` | `BlockchainDbContext` | `src/Gateway.Core/Blockchain/Infrastructure` |
+| `20-merchant.sql` | `MerchantDbContext` | `src/Gateway.Core/Merchant/Infrastructure` |
+| `30-keymanagement.sql` | `KeyManagementDbContext` | `src/Gateway.Core/KeyManagement/Infrastructure` |
+| `40-wallet.sql` | `WalletDbContext` | `src/Gateway.Core/AssetManagement/Wallet/Infrastructure` |
+| `50-ledger.sql` | `LedgerDbContext` | `src/Gateway.Core/Financial/Ledger/Infrastructure` |
+| `60-deposit.sql` | `DepositDbContext` | `src/Gateway.Core/PaymentProcessing/Deposit/Infrastructure` |
+| `70-withdrawal.sql` | `WithdrawalDbContext` | `src/Gateway.Core/PaymentProcessing/Withdrawal/Infrastructure` |
+| `80-paymentintent.sql` | `PaymentIntentDbContext` | `src/Gateway.Core/PaymentProcessing/PaymentIntent/Infrastructure` |
+| `90-energy.sql` | `EnergyDbContext` | `src/Gateway.Core/AssetManagement/Energy/Infrastructure` |
+
+Apply in that order (`10` → `90`) — later modules only ever reference earlier ones by opaque
+`Guid`, never a cross-schema FK (§4.5), but keeping the numeric order matches how the modules
+were built and is a reasonable default.
 
 **Can't run the EF tooling?** Use the generated idempotent script instead:
 
@@ -55,7 +72,8 @@ table inside its own schema — so modules migrate independently.
 sqlcmd -S <server> -d CryptoPaymentEngine -i db/sql/10-blockchain.sql
 ```
 
-Regenerate it after changing the model:
+Regenerate it after changing a module's model (substitute that module's `--context` and `-p`
+from the table above):
 
 ```bash
 dotnet ef migrations script --idempotent \
@@ -63,6 +81,11 @@ dotnet ef migrations script --idempotent \
   -s src/Api/MerchantGateway/CryptoPaymentEngine.Api.MerchantGateway \
   --context BlockchainDbContext -o db/sql/10-blockchain.sql
 ```
+
+**`50-ledger.sql` carries a hand-appended block** (the append-only `DENY UPDATE, DELETE` guard,
+§14/Step 3 below) that `dotnet ef migrations script` does not know about and will silently drop
+on regeneration. After regenerating that one file, re-append the block from git history (or from
+`00-bootstrap.sql`'s commented Step 4, which documents the same DENY statements).
 
 ### Step 3 — lock down the ledger (after the ledger migration exists)
 

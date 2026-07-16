@@ -4,6 +4,7 @@ using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application.Abstractions
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application.Handlers;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Domain;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Infrastructure.Persistence;
+using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Domain;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Events;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Infrastructure.Persistence;
@@ -59,6 +60,7 @@ public sealed class OutboxDispatcherTests : IAsyncLifetime
         services.AddScoped<ILedgerAccountStore, LedgerAccountStore>();
         services.AddScoped<ILedgerPostingStore, LedgerPostingStore>();
         services.AddScoped<ILedgerPoster, LedgerPoster>();
+        services.AddSingleton<IMerchantFeeSchedule>(new NoFeeSchedule());
         services.AddScoped<IIntegrationEventHandler<DepositConfirmed>, DepositConfirmedHandler>();
         services.AddScoped<IEventBus, InProcessEventBus>();
 
@@ -135,6 +137,19 @@ public sealed class OutboxDispatcherTests : IAsyncLifetime
             .Where(x => x.a.AccountType == AccountType.MerchantLiability && x.a.OwnerId == MerchantId && x.a.AssetId == AssetId)
             .Select(x => x.b.Balance)
             .SingleAsync(Ct);
+    }
+
+    /// <summary>Unpriced merchant: the deposit is credited in full (no fee split).</summary>
+    private sealed class NoFeeSchedule : IMerchantFeeSchedule
+    {
+        public Task<BigInteger> QuoteDepositFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(BigInteger.Zero);
+
+        public Task<BigInteger> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(BigInteger.Zero);
+
+        public Task<Result<BigInteger>> GrossUpDepositAsync(Guid merchantId, Guid assetId, BigInteger netTarget, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Result.Success(netTarget));
     }
 
     private sealed class NoOpLock : IDistributedLockFactory

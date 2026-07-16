@@ -210,7 +210,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         await using (var context = NewContext())
         {
             var merchant = await context.Merchants.Include(m => m.AssetPolicies).SingleAsync(m => m.Id == merchantId, Ct);
-            merchant.SetAssetPolicy(assetId, huge, BigInteger.Zero, null, new BigInteger(1_000_000), DateTimeOffset.UtcNow)
+            merchant.SetAssetPolicy(assetId, huge, BigInteger.Zero, null, FeeSchedule.Create(0, 0, new BigInteger(1_000_000), 0).Value, DateTimeOffset.UtcNow)
                 .IsSuccess.ShouldBeTrue();
             await context.SaveChangesAsync(Ct);
         }
@@ -240,7 +240,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         await using (var context = NewContext())
         {
             var merchant = await context.Merchants.Include(m => m.AssetPolicies).SingleAsync(m => m.Id == merchantId, Ct);
-            merchant.SetAssetPolicy(assetId, 1, 0, null, 0, DateTimeOffset.UtcNow);
+            merchant.SetAssetPolicy(assetId, 1, 0, null, FeeSchedule.None, DateTimeOffset.UtcNow);
             await context.SaveChangesAsync(Ct);
         }
 
@@ -274,7 +274,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         await using (var context = NewContext())
         {
             var merchant = await context.Merchants.Include(m => m.AssetPolicies).SingleAsync(m => m.Id == merchantId, Ct);
-            merchant.SetAssetPolicy(assetId, 0, 100, 1000, 0, DateTimeOffset.UtcNow);
+            merchant.SetAssetPolicy(assetId, 0, 100, 1000, FeeSchedule.None, DateTimeOffset.UtcNow);
             await context.SaveChangesAsync(Ct);
         }
 

@@ -155,6 +155,54 @@ verified) **and dev merchant seeding — DONE** (`AddDevelopmentMerchantSeed`): 
 on Withdrawal), a dedicated callback delivery worker (backoff/abandon vs. the current outbox-retry), and
 Development auto-migration (the host doesn't migrate on boot — dev DB is migrated manually per `docs/dev-round-trip.md`).
 
+**`AssetManagement/Energy` (Phase 5a — TRON resource monitoring) — DONE, 343 tests green.** Energy is
+**TRON-specific** (ETH/SOL have no energy — gas is just native-coin balance, a future Treasury top-up concern,
+NOT this module). 5a is **read-and-record only**: it moves no money, holds no keys, writes no ledger entry —
+by rule (Energy must never touch deposits/withdrawals/balances/ledger). `EnergyPolicy` (SQL, schema `energy`:
+per-`(Chain,WalletType)` energy thresholds + 5b stake/rent triggers) drives a `ResourceMonitorWorker` that,
+per platform wallet, reads on-chain resources via **`IAccountResourceReader`** (Blockchain.Contracts §8 port;
+dev `InMemoryAccountResourceReader`, real TRON `getaccountresource` adapter deferred to staging like the other
+JSON-RPC adapters), classifies energy Healthy/Low/Critical against the policy, and upserts a **MongoDB**
+snapshot + append-only history (`WalletResource`/`ResourceHistory` — **the codebase's first Mongo use**;
+derived/observability, never money truth §2), logging an alert on Low/Critical. Wallet gained
+`IPlatformWalletDirectory` (Contracts — lists non-merchant platform wallets to monitor). **Deferred:** ledger/
+accounting for energy cost (→5b, when staking/rental actually spends TRX: Energy raises cost events →
+Accounting posts a *platform* journal, keeping "no off-ledger money" without Energy writing ledger rows),
+on-chain stake/delegate/rent (→5b, behind the §10 signing boundary), rental+forecasting+cost-optimization (→5c),
+deposit-address energy (→5b, with Sweep coordination), bandwidth thresholds, and an `EnergyLowAlert` integration
+event → Notification (5a alert is a structured log). A live dev demo also needs a seeded platform wallet +
+policy (not built). `EnergyDelegation`/`StakePosition` tables come in 5b when first written.
+
+**Hybrid fee model (per-merchant pricing) — DONE, 369 tests green.** Fees are per-merchant `fixed + %`
+pricing, homed on `MerchantAssetPolicy` as a `FeeSchedule` value object (the fee math lives in the domain,
+floored, unit-tested) and exposed via **`Merchant.Contracts/IMerchantFeeSchedule`** — the one seam Deposit,
+Withdrawal, and the Ledger split read (never the aggregate). Unpriced merchant ⇒ **zero fee** (a documented
+ops gap, never an overcharge). **Deposit = payer-on-top:** `PaymentIntent` grosses the invoice up
+(`GrossUpForDeposit`) so the merchant nets their requested amount, and the Ledger splits the confirmed deposit
+`Dr TreasuryAsset(gross) / Cr MerchantLiability(net) / Cr FeeRevenue(fee)` — the split is resolved from the
+*received* amount in the Ledger handlers, so it stays independent of any invoice (an intent-less deposit is
+still priced; fee=0 collapses to the original 2-line journal). **Withdrawal:** the merchant bears the
+`fixed + %` fee (moved off the config `WithdrawalPolicy.Fee` onto the per-merchant schedule; config keeps
+limits/approval/confirmations), and the platform bears **gas** — the TRX network-fee expense stays the 5b
+Energy/Accounting cost path (USDT `FeeRevenue` sizes to cover it; different assets ⇒ different journals).
+Reorg reversal re-derives the same fee from the same confirmed amount (a fee-schedule change mid-reorg is a
+documented, near-zero-probability follow-up → carry the fee on the event, Withdrawal-symmetric).
+
+**Per-merchant HD wallets (separate seed each) — DONE.** The shared deposit HD wallet is replaced by **one HD
+wallet per merchant, its own seed** (custody blast-radius: one merchant's key compromise can't expose
+another's, §10). `HdWallet` gained `MerchantId`; the unique index is now `(MerchantId, Chain, Purpose)` filtered
+Active — SQL Server's single-NULL rule keeps one platform wallet per `(chain, purpose)` while each merchant
+owns one. Wallets are **created on first deposit** (`IWalletDerivation.AllocateNextForMerchantAsync` →
+`IHdWalletProvisioner`), the unique index arbitrating the create race (lost race adopts the winner); each
+merchant's `NextDerivationIndex` is an independent atomic sequence. The address pool + one-payment-per-address
+lock (PaymentIntent) and sweep economics are **unchanged** — address count per merchant is the same. Dev:
+`DevHdWalletProvisioner` mints a **deterministic-per-merchant** seed (fixed dev salt + merchant id, via NBitcoin)
+and writes only the account **xpub** (public) to a new writable `MutableInMemorySecretStore` — watch-only from
+then on, no seed in the dev store (§10). **Prod deferred:** no `IHdWalletProvisioner` is registered, so
+per-merchant minting is inert (never an in-memory seed in prod) until a KMS-backed provisioner lands, behind the
+same port. The dev round-trip address is now per-merchant deterministic (not the old shared `TUEZSdK…` vector;
+`docs/dev-round-trip.md` updated).
+
 Every other module in the map is a placeholder in this doc, not yet on disk — scaffold a module
 only when real feature work on it starts, following the same 8-layer layout.
 

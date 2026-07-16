@@ -41,6 +41,9 @@ public static class MerchantErrors
     public static readonly Error AmountTooLarge =
         Error.Validation("merchant.amount_too_large", "Amount exceeds the 38-digit storage limit.");
 
+    public static readonly Error FeeBpsInvalid =
+        Error.Validation("merchant.fee_bps_invalid", "Fee basis points are out of range (deposit 0-9999, withdrawal 0-10000).");
+
     public static readonly Error WebhookRetryCountInvalid =
         Error.Validation("merchant.webhook_retry_count_invalid", "Webhook retry count must be between 0 and 20.");
 

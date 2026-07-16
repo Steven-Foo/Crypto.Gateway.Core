@@ -14,7 +14,16 @@ public sealed class HdWalletRepository(KeyManagementDbContext context) : IHdWall
         HdWalletPurpose purpose,
         CancellationToken cancellationToken = default) =>
         context.HdWallets.SingleOrDefaultAsync(
-            w => w.Chain == chain && w.Purpose == purpose && w.Status == HdWalletStatus.Active,
+            w => w.MerchantId == null && w.Chain == chain && w.Purpose == purpose && w.Status == HdWalletStatus.Active,
+            cancellationToken);
+
+    public Task<HdWallet?> FindActiveForMerchantAsync(
+        Guid merchantId,
+        Chain chain,
+        HdWalletPurpose purpose,
+        CancellationToken cancellationToken = default) =>
+        context.HdWallets.SingleOrDefaultAsync(
+            w => w.MerchantId == merchantId && w.Chain == chain && w.Purpose == purpose && w.Status == HdWalletStatus.Active,
             cancellationToken);
 
     public Task<HdWallet?> FindByIdAsync(Guid hdWalletId, CancellationToken cancellationToken = default) =>
@@ -24,6 +33,23 @@ public sealed class HdWalletRepository(KeyManagementDbContext context) : IHdWall
         context.DerivedKeys.AsNoTracking().SingleOrDefaultAsync(k => k.Id == derivedKeyId, cancellationToken);
 
     public void Add(HdWallet hdWallet) => context.HdWallets.Add(hdWallet);
+
+    public async Task<HdWalletAddOutcome> TryAddActiveAsync(HdWallet hdWallet, CancellationToken cancellationToken = default)
+    {
+        context.HdWallets.Add(hdWallet);
+        try
+        {
+            await context.SaveChangesAsync(cancellationToken);
+            return HdWalletAddOutcome.Added;
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is Microsoft.Data.SqlClient.SqlException { Number: 2601 or 2627 })
+        {
+            // The only unique index on HdWallet is (MerchantId, Chain, Purpose) filtered on Active — a
+            // concurrent first deposit for this merchant beat us to it. Detach so the context is reusable.
+            context.Entry(hdWallet).State = EntityState.Detached;
+            return HdWalletAddOutcome.DuplicateActive;
+        }
+    }
 
     public void AddDerivedKey(DerivedKey derivedKey) => context.DerivedKeys.Add(derivedKey);
 

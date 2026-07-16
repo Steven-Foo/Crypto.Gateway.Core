@@ -84,6 +84,7 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
         services.AddSingleton<IWithdrawalPolicyProvider>(new StubPolicy());
         services.AddSingleton<IHotWalletProvider>(new StubHotWallet());
         services.AddSingleton<IMerchantDirectory>(new FakeMerchants());
+        services.AddSingleton<IMerchantFeeSchedule>(new FakeFees(Fee));
         services.AddSingleton<InMemoryTransactionEngine>();
         services.AddSingleton<ITransactionBuilder>(sp => sp.GetRequiredService<InMemoryTransactionEngine>());
         services.AddSingleton<ITransactionBroadcaster>(sp => sp.GetRequiredService<InMemoryTransactionEngine>());
@@ -251,6 +252,19 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
 
         public Task<MerchantSummary?> FindByCodeAsync(string merchantCode, CancellationToken cancellationToken = default) =>
             Task.FromResult<MerchantSummary?>(null);
+    }
+
+    /// <summary>Per-merchant pricing: a flat withdrawal fee, matching this suite's expectations.</summary>
+    private sealed class FakeFees(BigInteger withdrawalFee) : IMerchantFeeSchedule
+    {
+        public Task<BigInteger> QuoteDepositFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(BigInteger.Zero);
+
+        public Task<BigInteger> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(withdrawalFee);
+
+        public Task<Result<BigInteger>> GrossUpDepositAsync(Guid merchantId, Guid assetId, BigInteger netTarget, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Result.Success(netTarget));
     }
 
     private sealed class StubChainStatus : IChainStatusReader

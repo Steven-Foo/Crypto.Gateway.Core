@@ -1,5 +1,6 @@
 using System.Numerics;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts;
+using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Events;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Application;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Application.Handlers;
@@ -52,8 +53,19 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
         return provisioner;
     }
 
+    /// <summary>An unpriced merchant: the invoice is not grossed up and no fee is taken (identity).</summary>
+    private static IMerchantFeeSchedule NoFees()
+    {
+        var fees = Substitute.For<IMerchantFeeSchedule>();
+        fees.GrossUpDepositAsync(Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<BigInteger>(), Arg.Any<CancellationToken>())
+            .Returns(ci => Result.Success((BigInteger)ci[2]));
+        fees.QuoteDepositFeeAsync(Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<BigInteger>(), Arg.Any<CancellationToken>())
+            .Returns(BigInteger.Zero);
+        return fees;
+    }
+
     private static PaymentIntentService Service(PaymentIntentDbContext context, IDepositAddressProvisioner provisioner) =>
-        new(new PaymentIntentRepository(context), provisioner,
+        new(new PaymentIntentRepository(context), provisioner, NoFees(),
             Options.Create(new PaymentIntentOptions { ExpiryMinutes = 30 }),
             TimeProvider.System, NullLogger<PaymentIntentService>.Instance);
 

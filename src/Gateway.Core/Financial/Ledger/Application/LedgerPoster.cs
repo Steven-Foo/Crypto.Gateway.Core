@@ -6,11 +6,19 @@ using CryptoPaymentEngine.SharedKernel;
 
 namespace CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application;
 
-/// <summary>Credit a confirmed deposit to a merchant. Amount is unsigned base units.</summary>
-public sealed record CreditDepositCommand(Guid DepositId, Guid MerchantId, Guid AssetId, BigInteger Amount, string? Description = null);
+/// <summary>
+/// Credit a confirmed deposit to a merchant. <paramref name="Amount"/> is the gross received (base units);
+/// <paramref name="Fee"/> is the platform's deposit fee, taken off the top so the merchant is credited
+/// <c>Amount − Fee</c> and the platform earns <c>Fee</c> (payer-on-top pricing). Fee defaults to zero.
+/// </summary>
+public sealed record CreditDepositCommand(Guid DepositId, Guid MerchantId, Guid AssetId, BigInteger Amount, BigInteger Fee = default, string? Description = null);
 
-/// <summary>Reverse a previously-credited deposit that was orphaned by a reorg. Posts a compensating journal — never edits.</summary>
-public sealed record ReverseDepositCommand(Guid DepositId, Guid MerchantId, Guid AssetId, BigInteger Amount, string? Description = null);
+/// <summary>
+/// Reverse a previously-credited deposit that was orphaned by a reorg. Posts a compensating journal — never
+/// edits. Must reverse the <em>same</em> split that was credited, so the caller passes the identical
+/// <paramref name="Fee"/> (derived deterministically from the same confirmed amount).
+/// </summary>
+public sealed record ReverseDepositCommand(Guid DepositId, Guid MerchantId, Guid AssetId, BigInteger Amount, BigInteger Fee = default, string? Description = null);
 
 /// <summary>Settle a confirmed withdrawal: funds leave custody, the platform fee becomes revenue.</summary>
 public sealed record SettleWithdrawalCommand(Guid WithdrawalId, Guid MerchantId, Guid AssetId, BigInteger Amount, BigInteger Fee);
@@ -155,8 +163,9 @@ public sealed class LedgerPoster(
             command.MerchantId,
             command.AssetId,
             command.Amount,
+            command.Fee,
             command.Description ?? "Deposit credit",
-            debitTreasury: true,
+            credit: true,
             cancellationToken);
 
     public Task<Result<PostingOutcome>> ReverseDepositAsync(ReverseDepositCommand command, CancellationToken cancellationToken = default) =>
@@ -166,38 +175,51 @@ public sealed class LedgerPoster(
             command.MerchantId,
             command.AssetId,
             command.Amount,
+            command.Fee,
             command.Description ?? "Deposit reversal (reorg/orphan)",
-            debitTreasury: false,
+            credit: false,
             cancellationToken);
 
+    /// <summary>
+    /// Deposit money-in, fee taken off the top: DEBIT TreasuryAsset by the gross received; CREDIT
+    /// MerchantLiability by the net (gross − fee); CREDIT FeeRevenue by the fee. A reversal is the exact
+    /// mirror. When <paramref name="fee"/> is zero the FeeRevenue line is omitted, collapsing to the
+    /// original two-line journal (backward compatible). A dust deposit smaller than the fixed fee is
+    /// entirely consumed (net 0, no liability line) rather than crediting a negative balance.
+    /// </summary>
     private async Task<Result<PostingOutcome>> PostDepositAsync(
         JournalReferenceType referenceType,
         Guid depositId,
         Guid merchantId,
         Guid assetId,
-        BigInteger amount,
+        BigInteger gross,
+        BigInteger fee,
         string description,
-        bool debitTreasury,
+        bool credit,
         CancellationToken cancellationToken)
     {
-        if (amount <= BigInteger.Zero || !MoneyLimits.IsStorable(amount))
+        if (gross <= BigInteger.Zero || !MoneyLimits.IsStorable(gross))
             return Result.Failure<PostingOutcome>(LedgerErrors.NonPositiveAmount);
+
+        // The fee can never exceed the deposit (that would credit a negative balance) nor be negative.
+        var effectiveFee = BigInteger.Max(BigInteger.Zero, BigInteger.Min(fee, gross));
+        var net = gross - effectiveFee;
 
         var treasury = await accounts.GetOrCreateAsync(AccountType.TreasuryAsset, OwnerType.Treasury, null, assetId, cancellationToken);
         var liability = await accounts.GetOrCreateAsync(AccountType.MerchantLiability, OwnerType.Merchant, merchantId, assetId, cancellationToken);
 
-        // Credit: debit treasury, credit merchant. Reversal: the mirror.
-        PostingLine[] lines = debitTreasury
-            ?
-            [
-                PostingLine.Debit(treasury.Id, amount),
-                PostingLine.Credit(liability.Id, amount),
-            ]
-            :
-            [
-                PostingLine.Debit(liability.Id, amount),
-                PostingLine.Credit(treasury.Id, amount),
-            ];
+        // Credit: DEBIT treasury (gross), CREDIT merchant (net) + fee revenue (fee). Reversal: the mirror.
+        var treasuryLine = credit ? PostingLine.Debit(treasury.Id, gross) : PostingLine.Credit(treasury.Id, gross);
+        var lines = new List<PostingLine> { treasuryLine };
+
+        if (net > BigInteger.Zero)
+            lines.Add(credit ? PostingLine.Credit(liability.Id, net) : PostingLine.Debit(liability.Id, net));
+
+        if (effectiveFee > BigInteger.Zero)
+        {
+            var feeRevenue = await accounts.GetOrCreateAsync(AccountType.FeeRevenue, OwnerType.System, null, assetId, cancellationToken);
+            lines.Add(credit ? PostingLine.Credit(feeRevenue.Id, effectiveFee) : PostingLine.Debit(feeRevenue.Id, effectiveFee));
+        }
 
         var journal = Journal.Post(
             referenceType, depositId, assetId, merchantId, description, lines, timeProvider.GetUtcNow());

@@ -7,6 +7,7 @@ using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application.Handlers;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Domain;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Infrastructure.Persistence;
+using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Application;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Domain;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Events;
@@ -76,9 +77,23 @@ public sealed class DepositToLedgerTests : IAsyncLifetime
 
         var confirmed = await DequeueEventAsync<DepositConfirmed>("DepositConfirmed");
         await using (var ledger = LedgerContext())
-            await new DepositConfirmedHandler(Poster(ledger)).HandleAsync(confirmed, Ct);
+            await new DepositConfirmedHandler(Poster(ledger), new NoFeeSchedule()).HandleAsync(confirmed, Ct);
 
         (await MerchantBalanceAsync()).ShouldBe(Amount); // the deposit landed on the merchant's ledger balance
+    }
+
+    [Fact]
+    public async Task A_confirmed_deposit_with_a_fee_credits_the_net_and_books_the_fee_as_revenue()
+    {
+        await DetectAndConfirmAsync();
+        var fee = BigInteger.Parse("6000");
+
+        var confirmed = await DequeueEventAsync<DepositConfirmed>("DepositConfirmed");
+        await using (var ledger = LedgerContext())
+            await new DepositConfirmedHandler(Poster(ledger), new FixedDepositFeeSchedule(fee)).HandleAsync(confirmed, Ct);
+
+        (await MerchantBalanceAsync()).ShouldBe(Amount - fee);          // merchant nets gross − fee
+        (await FeeRevenueBalanceAsync()).ShouldBe(fee);                 // platform keeps the fee as revenue
     }
 
     [Fact]
@@ -88,7 +103,7 @@ public sealed class DepositToLedgerTests : IAsyncLifetime
 
         var confirmed = await DequeueEventAsync<DepositConfirmed>("DepositConfirmed");
         await using (var ledger = LedgerContext())
-            await new DepositConfirmedHandler(Poster(ledger)).HandleAsync(confirmed, Ct);
+            await new DepositConfirmedHandler(Poster(ledger), new NoFeeSchedule()).HandleAsync(confirmed, Ct);
 
         // Reorg orphans the confirmed deposit → DepositOrphaned → Ledger reverses.
         var chain = _chain!;
@@ -98,7 +113,7 @@ public sealed class DepositToLedgerTests : IAsyncLifetime
 
         var orphaned = await DequeueEventAsync<DepositOrphaned>("DepositOrphaned");
         await using (var ledger = LedgerContext())
-            await new DepositOrphanedHandler(Poster(ledger)).HandleAsync(orphaned, Ct);
+            await new DepositOrphanedHandler(Poster(ledger), new NoFeeSchedule()).HandleAsync(orphaned, Ct);
 
         (await MerchantBalanceAsync()).ShouldBe(BigInteger.Zero);
     }
@@ -159,6 +174,29 @@ public sealed class DepositToLedgerTests : IAsyncLifetime
             .SingleAsync(Ct));
     }
 
+    private async Task<BigInteger> FeeRevenueBalanceAsync()
+    {
+        await using var ledger = LedgerContext();
+        return await ledger.AccountBalances
+            .Join(ledger.Accounts, b => b.Id, a => a.Id, (b, a) => new { b, a })
+            .Where(x => x.a.AccountType == AccountType.FeeRevenue && x.a.AssetId == AssetId)
+            .Select(x => x.b.Balance)
+            .SingleOrDefaultAsync(Ct);
+    }
+
+    /// <summary>A priced merchant: a flat deposit fee taken off the top.</summary>
+    private sealed class FixedDepositFeeSchedule(BigInteger depositFee) : IMerchantFeeSchedule
+    {
+        public Task<BigInteger> QuoteDepositFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(depositFee);
+
+        public Task<BigInteger> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(BigInteger.Zero);
+
+        public Task<Result<BigInteger>> GrossUpDepositAsync(Guid merchantId, Guid assetId, BigInteger netTarget, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Result.Success(netTarget));
+    }
+
     private sealed class StubWalletDirectory : IWalletDirectory
     {
         public Task<WalletOwnership?> FindByAddressAsync(Chain chain, string address, CancellationToken cancellationToken = default) =>
@@ -173,6 +211,19 @@ public sealed class DepositToLedgerTests : IAsyncLifetime
     private sealed class StubPolicy : Application.Abstractions.IDepositPolicyProvider
     {
         public DepositPolicy For(Chain chain) => Policy;
+    }
+
+    /// <summary>Unpriced merchant: the deposit is credited in full (no fee split).</summary>
+    private sealed class NoFeeSchedule : IMerchantFeeSchedule
+    {
+        public Task<BigInteger> QuoteDepositFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(BigInteger.Zero);
+
+        public Task<BigInteger> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(BigInteger.Zero);
+
+        public Task<Result<BigInteger>> GrossUpDepositAsync(Guid merchantId, Guid assetId, BigInteger netTarget, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Result.Success(netTarget));
     }
 
     private sealed class NoOpLock : IDistributedLockFactory

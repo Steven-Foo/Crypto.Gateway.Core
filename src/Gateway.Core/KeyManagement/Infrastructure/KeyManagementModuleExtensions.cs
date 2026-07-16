@@ -80,9 +80,19 @@ public static class KeyManagementModuleExtensions
         var secrets = section.GetSection(nameof(DevelopmentKeyCustodyOptions.DevSecrets))
             .Get<Dictionary<string, string>>() ?? new Dictionary<string, string>();
 
-        // A singleton snapshot: config (including appsettings.Local.json) is fully composed by the time the
-        // host calls this, so the provider serves whatever xpub the developer configured.
-        services.AddSingleton<ISecretProvider>(InMemorySecretProvider.FromStrings(secrets));
+        // A writable singleton store: pre-seeded from config (including appsettings.Local.json), and written to
+        // at runtime by the provisioner when it mints a per-merchant wallet's account xpub. Registered both as
+        // the concrete type (for the provisioner) and as the ISecretProvider the derivation path reads.
+        var store = new MutableInMemorySecretStore(secrets);
+        services.AddSingleton(store);
+        services.AddSingleton<ISecretProvider>(store);
+
+        // Per-merchant wallets are created on first deposit, each with its own seed. Production replaces this
+        // with a KMS-backed IHdWalletProvisioner behind the same port — never an in-memory seed in prod (§10).
+        services.AddSingleton<IHdWalletProvisioner, DevHdWalletProvisioner>();
+
+        // Retained for any platform-wallet dev seeding described in config; per-merchant deposit wallets no
+        // longer rely on it (they are provisioned lazily above).
         services.AddHostedService<DevHdWalletSeeder>();
 
         return services;

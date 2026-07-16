@@ -4,6 +4,7 @@ using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Domain;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Infrastructure.Persistence;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Addresses;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Application;
+using CryptoPaymentEngine.Gateway.Core.KeyManagement.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Domain;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Derivation;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Persistence;
@@ -70,7 +71,8 @@ public sealed class WalletProvisioningTests : IAsyncLifetime
             new AddressEncoderFactory([new TronAddressEncoder(), new EthereumAddressEncoder()]),
             new SecretProviderFactory([InMemorySecretProvider.FromStrings(
                 new Dictionary<string, string> { [PublicKeyReference] = TronBranchXpub })]),
-            TimeProvider.System);
+            TimeProvider.System,
+            [new VectorDepositProvisioner()]);
 
         return new WalletProvisioningService(
             new WalletRepository(walletContext),
@@ -118,6 +120,21 @@ public sealed class WalletProvisioningTests : IAsyncLifetime
             SecretProviderKind.InMemoryDevelopment, SecretReference, PublicKeyReference,
             "m/44'/195'/0'/0").Value);
         await context.SaveChangesAsync(Ct);
+    }
+
+    /// <summary>
+    /// Test provisioner: mints the merchant's own TRON deposit wallet from the published vector xpub, so the
+    /// per-merchant derivation path still yields the vector address. Non-TRON chains have no test wallet.
+    /// </summary>
+    private sealed class VectorDepositProvisioner : IHdWalletProvisioner
+    {
+        public Task<Result<HdWallet>> ProvisionMerchantDepositWalletAsync(
+            Guid merchantId, Chain chain, CancellationToken cancellationToken = default) =>
+            Task.FromResult(chain == Chain.Tron
+                ? HdWallet.CreateMerchantDeposit(
+                    merchantId, $"merchant-{merchantId:N}", Chain.Tron,
+                    SecretProviderKind.InMemoryDevelopment, SecretReference, PublicKeyReference, "m/44'/195'/0'/0")
+                : Result.Failure<HdWallet>(KeyManagementErrors.NotFound));
     }
 
     [Fact]

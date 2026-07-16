@@ -17,6 +17,7 @@ public sealed class HdWallet : Entity<Guid>
 
     private HdWallet(
         Guid id,
+        Guid? merchantId,
         string name,
         Chain chain,
         HdWalletPurpose purpose,
@@ -28,6 +29,7 @@ public sealed class HdWallet : Entity<Guid>
         string? description,
         DateTimeOffset createdAt) : base(id)
     {
+        MerchantId = merchantId;
         Name = name;
         Chain = chain;
         Purpose = purpose;
@@ -47,6 +49,13 @@ public sealed class HdWallet : Entity<Guid>
     private HdWallet() : base(Guid.Empty)
     {
     }
+
+    /// <summary>
+    /// The merchant this wallet belongs to, or <c>null</c> for a platform wallet (treasury, hot, energy).
+    /// Each merchant gets their own HD wallet — a distinct seed — so one merchant's key compromise cannot
+    /// expose another's addresses (§10). Deposit addresses derive only from the owning merchant's tree.
+    /// </summary>
+    public Guid? MerchantId { get; private set; }
 
     public string Name { get; private set; } = null!;
     public Chain Chain { get; private set; }
@@ -120,10 +129,57 @@ public sealed class HdWallet : Entity<Guid>
         var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
 
         return Result.Success(new HdWallet(
-            Guid.CreateVersion7(), name.Trim(), chain, purpose, path.Scheme,
+            Guid.CreateVersion7(), merchantId: null, name.Trim(), chain, purpose, path.Scheme,
             secretProvider, secretReference.Trim(),
             string.IsNullOrWhiteSpace(publicKeyReference) ? null : publicKeyReference.Trim(),
             path, description, now));
+    }
+
+    /// <summary>
+    /// A merchant-owned HD wallet: its own seed, so deposit addresses for this merchant derive from a tree
+    /// no other merchant shares. Always <see cref="HdWalletPurpose.Deposit"/> and watch-only (secp256k1) —
+    /// the account xpub is exported once at provisioning and every address derives from it with no seed
+    /// access (§8, §10). Created lazily on the merchant's first deposit.
+    /// </summary>
+    public static Result<HdWallet> CreateMerchantDeposit(
+        Guid merchantId,
+        string name,
+        Chain chain,
+        SecretProviderKind secretProvider,
+        string secretReference,
+        string publicKeyReference,
+        string derivationPath,
+        string? description = null,
+        TimeProvider? timeProvider = null)
+    {
+        if (merchantId == Guid.Empty)
+            return Result.Failure<HdWallet>(KeyManagementErrors.MerchantRequired);
+
+        if (string.IsNullOrWhiteSpace(name))
+            return Result.Failure<HdWallet>(KeyManagementErrors.NameRequired);
+
+        if (string.IsNullOrWhiteSpace(secretReference))
+            return Result.Failure<HdWallet>(KeyManagementErrors.SecretReferenceRequired);
+
+        var pathResult = Domain.DerivationPath.Create(derivationPath, chain);
+        if (pathResult.IsFailure)
+            return Result.Failure<HdWallet>(pathResult.Error!);
+
+        var path = pathResult.Value;
+
+        // Merchant deposit wallets are watch-only by construction: ed25519 (Solana) cannot derive addresses
+        // from an xpub, so per-merchant Solana deposit wallets are deliberately not built yet (§8).
+        if (path.Scheme != DerivationScheme.Bip32Secp256k1)
+            return Result.Failure<HdWallet>(KeyManagementErrors.SchemeNotSupported);
+
+        if (string.IsNullOrWhiteSpace(publicKeyReference))
+            return Result.Failure<HdWallet>(KeyManagementErrors.PublicKeyReferenceRequired);
+
+        var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
+
+        return Result.Success(new HdWallet(
+            Guid.CreateVersion7(), merchantId, name.Trim(), chain, HdWalletPurpose.Deposit, path.Scheme,
+            secretProvider, secretReference.Trim(), publicKeyReference.Trim(), path, description, now));
     }
 
     public void Archive(DateTimeOffset now)

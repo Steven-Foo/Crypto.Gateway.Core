@@ -105,6 +105,9 @@ namespace CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Persiste
                         .HasMaxLength(256)
                         .HasColumnType("nvarchar(256)");
 
+                    b.Property<Guid?>("MerchantId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<string>("Name")
                         .IsRequired()
                         .HasMaxLength(128)
@@ -154,7 +157,7 @@ namespace CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Persiste
 
                     b.HasKey("Id");
 
-                    b.HasIndex("Chain", "Purpose")
+                    b.HasIndex("MerchantId", "Chain", "Purpose")
                         .IsUnique()
                         .HasFilter("[Status] = 'Active'");
 
