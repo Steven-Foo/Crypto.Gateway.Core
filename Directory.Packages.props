@@ -3,7 +3,6 @@
     <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
     <CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>
   </PropertyGroup>
-
   <ItemGroup Label="Data (§11 — SQL Server system of record; first-party MS provider, in lockstep with EF Core)">
     <PackageVersion Include="Microsoft.EntityFrameworkCore" Version="10.0.9" />
     <PackageVersion Include="Microsoft.EntityFrameworkCore.Design" Version="10.0.9" />
@@ -13,7 +12,9 @@
     <PackageVersion Include="MongoDB.Driver" Version="3.9.0" />
     <PackageVersion Include="DistributedLock.Redis" Version="1.1.1" />
   </ItemGroup>
-
+  <ItemGroup Label="API tooling (dev-only — Swagger UI gated behind Development, never in prod)">
+    <PackageVersion Include="Swashbuckle.AspNetCore" Version="10.2.3" />
+  </ItemGroup>
   <ItemGroup Label="Cryptography — key derivation (KeyManagement) and address encoding (Blockchain)">
     <!-- BIP-32/BIP-39. Derivation is client-side maths: a node's JSON-RPC cannot do it, and the
          RPC methods that touch keys require sending the private key over the wire (§10). -->
@@ -21,7 +22,6 @@
     <!-- Keccak-256 for Ethereum/TRON address encoding. Nethereum is approved in §11. -->
     <PackageVersion Include="Nethereum.Util" Version="6.1.0" />
   </ItemGroup>
-
   <ItemGroup Label="Validation / Mapping / CQRS">
     <PackageVersion Include="FluentValidation" Version="12.1.1" />
     <PackageVersion Include="FluentValidation.DependencyInjectionExtensions" Version="12.1.1" />
@@ -29,7 +29,6 @@
     <PackageVersion Include="Mediator.Abstractions" Version="3.0.2" />
     <PackageVersion Include="Mediator.SourceGenerator" Version="3.0.2" />
   </ItemGroup>
-
   <ItemGroup Label="Resilience / Hosting / Logging">
     <PackageVersion Include="Microsoft.Extensions.Http" Version="10.0.9" />
     <PackageVersion Include="Microsoft.Extensions.Http.Resilience" Version="10.7.0" />
@@ -42,7 +41,6 @@
     <PackageVersion Include="Microsoft.Extensions.Options.ConfigurationExtensions" Version="10.0.9" />
     <PackageVersion Include="Serilog.AspNetCore" Version="10.0.0" />
   </ItemGroup>
-
   <ItemGroup Label="Testing">
     <PackageVersion Include="xunit.v3" Version="3.2.2" />
     <PackageVersion Include="xunit.runner.visualstudio" Version="3.1.5" />

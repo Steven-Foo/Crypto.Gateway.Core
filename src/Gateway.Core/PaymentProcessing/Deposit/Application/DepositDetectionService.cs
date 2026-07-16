@@ -32,6 +32,17 @@ public sealed class DepositDetectionService(
         var tip = await chainStatus.GetTipHeightAsync(chain, cancellationToken);
         var lastScanned = await cursors.GetLastScannedBlockAsync(chain, cancellationToken);
 
+        // Cold start: no cursor yet means this chain has never been scanned. Starting from block 1 would
+        // force scanning the ENTIRE chain history (tens of millions of blocks on a real chain) before ever
+        // reaching live activity, at MaxBlocksPerScan per pass — days to weeks, in practice never catching
+        // up. Start watching from the current tip instead; a deposit sent before the scanner first went
+        // live for this chain was never promised to be detected anyway.
+        if (lastScanned == 0)
+        {
+            await cursors.SetLastScannedBlockAsync(chain, tip, cancellationToken);
+            return 0;
+        }
+
         var fromBlock = lastScanned + 1;
         if (fromBlock > tip)
             return 0; // nothing new on-chain

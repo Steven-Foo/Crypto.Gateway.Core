@@ -14,7 +14,7 @@ public sealed class PaymentIntentDomainTests
     private static PaymentIntentEntity NewWaiting(BigInteger? expected = null) =>
         PaymentIntentEntity.Create(
             Guid.CreateVersion7(), "tx-1", Chain.Tron, Guid.CreateVersion7(), Guid.CreateVersion7(), "TAddr",
-            expected ?? BigInteger.Parse("1000000"), null, Now.AddMinutes(30), Now).Value;
+            expected ?? BigInteger.Parse("1000000"), null, Now.AddMinutes(30), Now.AddMinutes(40), Now).Value;
 
     [Fact]
     public void Create_starts_waiting_with_an_unguessable_reference_distinct_from_the_pk()
@@ -31,15 +31,34 @@ public sealed class PaymentIntentDomainTests
     public void Create_rejects_a_non_positive_amount(string amount) =>
         PaymentIntentEntity.Create(
             Guid.CreateVersion7(), "tx", Chain.Tron, Guid.CreateVersion7(), Guid.CreateVersion7(), "TAddr",
-            BigInteger.Parse(amount), null, Now.AddMinutes(30), Now)
+            BigInteger.Parse(amount), null, Now.AddMinutes(30), Now.AddMinutes(40), Now)
             .Error!.Code.ShouldBe(PaymentIntentErrors.AmountNotPositive.Code);
 
     [Fact]
     public void Create_rejects_expiry_in_the_past() =>
         PaymentIntentEntity.Create(
             Guid.CreateVersion7(), "tx", Chain.Tron, Guid.CreateVersion7(), Guid.CreateVersion7(), "TAddr",
-            BigInteger.One, null, Now.AddMinutes(-1), Now)
+            BigInteger.One, null, Now.AddMinutes(-1), Now.AddMinutes(9), Now)
             .Error!.Code.ShouldBe(PaymentIntentErrors.ExpiryInPast.Code);
+
+    [Fact]
+    public void Create_rejects_a_grace_expiry_before_the_display_expiry() =>
+        PaymentIntentEntity.Create(
+            Guid.CreateVersion7(), "tx", Chain.Tron, Guid.CreateVersion7(), Guid.CreateVersion7(), "TAddr",
+            BigInteger.One, null, Now.AddMinutes(30), Now.AddMinutes(20), Now)
+            .Error!.Code.ShouldBe(PaymentIntentErrors.GraceExpiryBeforeExpiry.Code);
+
+    [Fact]
+    public void A_deposit_confirming_within_the_grace_window_still_matches()
+    {
+        // The payer would already see "expired" (past ExpiresAt) but the wallet is still reserved and
+        // matchable — Status only flips to Expired once ExpireStaleAsync sweeps past GraceExpiresAt.
+        var intent = NewWaiting();
+        var duringGrace = Now.AddMinutes(35); // past ExpiresAt (30), before GraceExpiresAt (40)
+
+        intent.MatchTo(Guid.CreateVersion7(), "0xtx", BigInteger.Parse("1000000"), duringGrace).IsSuccess.ShouldBeTrue();
+        intent.Status.ShouldBe(PaymentIntentStatus.Matched);
+    }
 
     [Fact]
     public void Matching_an_exact_amount_flags_a_match()

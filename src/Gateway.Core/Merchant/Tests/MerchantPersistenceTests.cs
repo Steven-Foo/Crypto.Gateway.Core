@@ -89,6 +89,31 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         }
     }
 
+    [Fact]
+    public async Task Activating_a_registered_merchant_makes_it_transactable()
+    {
+        Guid merchantId;
+        await using (var context = NewContext())
+            merchantId = (await NewRegistrar(context).RegisterAsync("ACTIVATE-1", "Acme", null, Ct)).Value.MerchantId;
+
+        await using (var context = NewContext())
+            (await NewRegistrar(context).ActivateAsync(merchantId, Ct)).IsSuccess.ShouldBeTrue();
+
+        await using (var context = NewContext())
+        {
+            var merchant = await context.Merchants.SingleAsync(m => m.Id == merchantId, Ct);
+            merchant.Status.ShouldBe(MerchantStatus.Active);
+            merchant.CanTransact.ShouldBeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task Activating_an_unknown_merchant_fails()
+    {
+        await using var context = NewContext();
+        (await NewRegistrar(context).ActivateAsync(Guid.CreateVersion7(), Ct)).IsSuccess.ShouldBeFalse();
+    }
+
     /// <summary>The central security property: the plaintext secret must exist nowhere in the DB.</summary>
     [Fact]
     public async Task The_plaintext_api_secret_is_never_persisted()

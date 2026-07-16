@@ -14,8 +14,10 @@ public sealed class MerchantConfigurationMap : IEntityTypeConfiguration<Merchant
         builder.Property(c => c.Id).ValueGeneratedNever();
 
         builder.Property<byte[]>("RowVersion").IsRowVersion();
+        builder.Property(c => c.AllowedIpsCsv).IsUnicode(false).HasMaxLength(2048);
 
         builder.Ignore(c => c.DomainEvents);
+        builder.Ignore(c => c.AllowedIps);
 
         builder.HasIndex(c => c.MerchantId).IsUnique();
 

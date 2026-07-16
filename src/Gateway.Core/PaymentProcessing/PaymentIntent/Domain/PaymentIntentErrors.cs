@@ -23,6 +23,9 @@ public static class PaymentIntentErrors
     public static readonly Error ExpiryInPast =
         Error.Validation("payment_intent.expiry_in_past", "Expiry must be in the future.");
 
+    public static readonly Error GraceExpiryBeforeExpiry =
+        Error.Validation("payment_intent.grace_expiry_before_expiry", "Grace expiry cannot be before the display expiry.");
+
     public static readonly Error DuplicateReference =
         Error.Conflict("payment_intent.duplicate_reference", "A payment intent already exists for this transaction reference.");
 

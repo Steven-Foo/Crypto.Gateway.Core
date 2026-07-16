@@ -10,6 +10,14 @@ public interface IMerchantRepository
 
     Task<bool> CodeExistsAsync(string merchantCode, CancellationToken cancellationToken = default);
 
+    /// <summary>Ordered newest-first, matching APIGateway's BO merchant list. <paramref name="page"/> is 1-based.</summary>
+    Task<(IReadOnlyList<Domain.Merchant> Items, int TotalCount)> GetPagedAsync(
+        int page, int pageSize, CancellationToken cancellationToken = default);
+
+    /// <summary>Every IP any OTHER merchant already has allowlisted — lets the caller avoid pushing an
+    /// add/remove to Cloudflare for an IP that's still needed by a different merchant sharing it.</summary>
+    Task<IReadOnlyList<string>> GetAllAllowedIpsExceptAsync(Guid merchantId, CancellationToken cancellationToken = default);
+
     /// <summary>Resolves a caller's API key to its credential for authentication. Active only.</summary>
     Task<MerchantApiCredential?> FindActiveCredentialAsync(string apiKey, CancellationToken cancellationToken = default);
 

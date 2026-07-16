@@ -69,6 +69,10 @@ public abstract class DepositTestHost : IAsyncLifetime
 
         public Task<WalletOwnership?> FindByIdAsync(Guid walletId, CancellationToken cancellationToken = default) =>
             Task.FromResult<WalletOwnership?>(null);
+
+        public Task<IReadOnlyList<AvailableWallet>> ListAssignedWalletsAsync(
+            Guid merchantId, Chain chain, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<AvailableWallet>>([]);
     }
 
     protected sealed class StubPolicyProvider(DepositPolicy policy) : IDepositPolicyProvider

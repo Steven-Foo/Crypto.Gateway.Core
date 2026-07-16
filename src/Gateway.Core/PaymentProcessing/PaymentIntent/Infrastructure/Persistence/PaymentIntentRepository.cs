@@ -1,3 +1,4 @@
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Domain;
 using CryptoPaymentEngine.SharedKernel;
@@ -7,7 +8,7 @@ using PaymentIntentEntity = CryptoPaymentEngine.Gateway.Core.PaymentProcessing.P
 
 namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infrastructure.Persistence;
 
-public sealed class PaymentIntentRepository(PaymentIntentDbContext context) : IPaymentIntentRepository
+public sealed class PaymentIntentRepository(PaymentIntentDbContext context, IWalletDirectory walletDirectory) : IPaymentIntentRepository
 {
     public Task<PaymentIntentEntity?> FindByMerchantReferenceAsync(
         Guid merchantId, string merchantTransactionId, CancellationToken cancellationToken = default) =>
@@ -17,16 +18,24 @@ public sealed class PaymentIntentRepository(PaymentIntentDbContext context) : IP
     public async Task<ReusableAddress?> FindReusableAddressAsync(
         Guid merchantId, Chain chain, CancellationToken cancellationToken = default)
     {
-        // An address is free once no invoice is Waiting on it (the expiry sweep flips lapsed ones out).
-        var busy = context.PaymentIntents
-            .Where(i => i.Status == PaymentIntentStatus.Waiting)
-            .Select(i => i.WalletId);
+        // Candidates come from the Wallet module (Contracts-only, §4.5) rather than this module's own
+        // invoice history, so a freshly pre-provisioned pool (e.g. the 10 wallets minted at merchant
+        // onboarding) is visible here even before any of them has ever had an invoice created against it.
+        // Ordered by deposit activity descending — the non-money-duplicating proxy for "closest to a sweep
+        // threshold" (see Wallet.DepositsReceivedCount).
+        var candidates = await walletDirectory.ListAssignedWalletsAsync(merchantId, chain, cancellationToken);
+        if (candidates.Count == 0)
+            return null;
 
-        return await context.PaymentIntents.AsNoTracking()
-            .Where(i => i.MerchantId == merchantId && i.Chain == chain && !busy.Contains(i.WalletId))
-            .OrderBy(i => i.CreatedAt)
-            .Select(i => new ReusableAddress(i.WalletId, i.Address))
-            .FirstOrDefaultAsync(cancellationToken);
+        // An address is free once no invoice is Waiting on it (the expiry sweep flips lapsed ones out).
+        var busy = await context.PaymentIntents.AsNoTracking()
+            .Where(i => i.Status == PaymentIntentStatus.Waiting)
+            .Select(i => i.WalletId)
+            .ToListAsync(cancellationToken);
+        var busySet = busy.Count == 0 ? [] : busy.ToHashSet();
+
+        var free = candidates.FirstOrDefault(w => !busySet.Contains(w.WalletId));
+        return free is null ? null : new ReusableAddress(free.WalletId, free.Address);
     }
 
     public Task<PaymentIntentEntity?> FindWaitingByWalletAsync(Guid walletId, CancellationToken cancellationToken = default) =>
@@ -58,9 +67,12 @@ public sealed class PaymentIntentRepository(PaymentIntentDbContext context) : IP
 
     public async Task<int> ExpireStaleAsync(DateTimeOffset now, int batchSize, CancellationToken cancellationToken = default)
     {
+        // GraceExpiresAt, not ExpiresAt: the payer is already shown "expired" past ExpiresAt (see
+        // PaymentIntentDirectory), but the wallet stays reserved and matchable through the grace window —
+        // only once the hard cutoff passes does the address actually free up for reuse.
         var stale = await context.PaymentIntents
-            .Where(i => i.Status == PaymentIntentStatus.Waiting && i.ExpiresAt <= now)
-            .OrderBy(i => i.ExpiresAt)
+            .Where(i => i.Status == PaymentIntentStatus.Waiting && i.GraceExpiresAt <= now)
+            .OrderBy(i => i.GraceExpiresAt)
             .Take(batchSize)
             .ToListAsync(cancellationToken);
 

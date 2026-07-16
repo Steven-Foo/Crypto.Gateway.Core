@@ -20,6 +20,7 @@ public sealed class WalletMap : IEntityTypeConfiguration<WalletEntity>
         builder.Property(w => w.WalletType).HasConversion<string>().HasMaxLength(24).IsRequired();
         builder.Property(w => w.Status).HasConversion<string>().HasMaxLength(16).IsRequired();
         builder.Property(w => w.Description).HasMaxLength(256);
+        builder.Property(w => w.DepositsReceivedCount).HasDefaultValue(0);
         builder.Property<byte[]>("RowVersion").IsRowVersion();
 
         builder.Ignore(w => w.IsActive);

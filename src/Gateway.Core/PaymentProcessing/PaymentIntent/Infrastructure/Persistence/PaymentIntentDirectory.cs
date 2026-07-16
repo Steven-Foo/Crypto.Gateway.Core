@@ -28,6 +28,7 @@ public sealed class PaymentIntentDirectory(PaymentIntentDbContext context, TimeP
 
         return new PaymentIntentView(
             intent.PublicReference,
+            intent.AssetId,
             intent.Address,
             intent.ExpectedAmount.ToString(CultureInfo.InvariantCulture),
             status,

@@ -19,6 +19,7 @@ using CryptoPaymentEngine.Infrastructure.Events;
 using CryptoPaymentEngine.Infrastructure.Locking;
 using CryptoPaymentEngine.Infrastructure.Outbox;
 using CryptoPaymentEngine.SharedKernel;
+using Microsoft.OpenApi;
 using Serilog;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -43,6 +44,16 @@ var redisConnection = config["Redis:ConnectionString"]
 builder.Services.AddCryptoPaymentEngineEventBus();
 builder.Services.AddRedisInfrastructure(redisConnection);
 
+// Dev-only interactive API docs — UI is gated behind Development below (never in prod, matching the
+// Swagger-gating fix already applied to APIGateway's hosts). Documents the HMAC headers the merchant
+// signature middleware enforces, since Swashbuckle can't see them on its own (§7.1).
+builder.Services.AddEndpointsApiExplorer();
+builder.Services.AddSwaggerGen(o =>
+{
+    o.SwaggerDoc("v1", new OpenApiInfo { Title = "Crypto.Gateway.Core — Merchant API", Version = "v1" });
+    o.OperationFilter<CryptoPaymentEngine.Api.MerchantGateway.Security.HmacHeadersOperationFilter>();
+});
+
 // ── Business modules (each owns one capability; the host only composes — §4.7) ──
 builder.Services.AddMerchantModule(config, dbConnection);
 builder.Services.AddKeyManagementModule(dbConnection);
@@ -58,8 +69,20 @@ builder.Services.AddNotificationModule();               // consumes PaymentInten
 // ── Chain source + signing: swap dev↔prod by DI, not code (§8, §10) ───────────
 if (builder.Environment.IsDevelopment())
 {
-    // Deterministic, node-free — drive from a test/seed.
-    builder.Services.AddInMemoryChainSource();
+    // Chain source: the deterministic in-memory fake by default (node-free, safe on a fresh clone), or the
+    // REAL adapter when a developer explicitly opts in (Chains:UseLiveNode=true in appsettings.Local.json)
+    // to run a live round-trip against a real testnet. Custody/signing stay fake either way (§10) — this
+    // flag only ever affects which chain the scanner watches, never what's allowed to hold or move a key.
+    if (config.GetValue<bool>("Chains:UseLiveNode"))
+    {
+        builder.Services.AddJsonRpcChainSources();
+        builder.Services.AddTronChainAdapter(config);
+    }
+    else
+    {
+        builder.Services.AddInMemoryChainSource();
+    }
+
     builder.Services.AddInMemoryTransactionEngine();
     builder.Services.AddInMemorySigner(); // NEVER touches a key; a real KMS signer replaces it in prod (§10)
 
@@ -108,6 +131,12 @@ builder.Services.AddOutboxDispatcher<PaymentIntentDbContext>(); // relays Paymen
 // HD-wallet rows must be supplied before /deposit can provision an address there (never an in-memory seed, §10).
 
 var app = builder.Build();
+
+if (app.Environment.IsDevelopment())
+{
+    app.UseSwagger();
+    app.UseSwaggerUI(o => o.SwaggerEndpoint("/swagger/v1/swagger.json", "Merchant API v1"));
+}
 
 // The frozen merchant API is authenticated by request signature; the pay-page data + health pass through.
 app.UseMiddleware<MerchantSignatureMiddleware>();

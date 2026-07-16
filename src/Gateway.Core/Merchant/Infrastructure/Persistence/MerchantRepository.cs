@@ -29,6 +29,34 @@ public sealed class MerchantRepository(MerchantDbContext context) : IMerchantRep
         return context.Merchants.AnyAsync(m => m.MerchantCode == normalised, cancellationToken);
     }
 
+    public async Task<(IReadOnlyList<Domain.Merchant> Items, int TotalCount)> GetPagedAsync(
+        int page, int pageSize, CancellationToken cancellationToken = default)
+    {
+        var query = context.Merchants
+            .Include(m => m.Configuration)
+            .Include(m => m.Credentials)
+            .AsNoTracking()
+            .OrderByDescending(m => m.CreatedAt);
+
+        var total = await context.Merchants.CountAsync(cancellationToken);
+        var items = await query.Skip((page - 1) * pageSize).Take(pageSize).ToListAsync(cancellationToken);
+
+        return (items, total);
+    }
+
+    public async Task<IReadOnlyList<string>> GetAllAllowedIpsExceptAsync(Guid merchantId, CancellationToken cancellationToken = default)
+    {
+        var csvs = await context.Configurations
+            .AsNoTracking()
+            .Where(c => c.MerchantId != merchantId && c.AllowedIpsCsv != null)
+            .Select(c => c.AllowedIpsCsv!)
+            .ToListAsync(cancellationToken);
+
+        return [.. csvs
+            .SelectMany(csv => csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Distinct(StringComparer.OrdinalIgnoreCase)];
+    }
+
     public Task<MerchantApiCredential?> FindActiveCredentialAsync(
         string apiKey,
         CancellationToken cancellationToken = default) =>

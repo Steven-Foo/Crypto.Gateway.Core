@@ -102,6 +102,17 @@ public sealed partial class Merchant : Entity<Guid>
         return result;
     }
 
+    /// <summary>Replaces this merchant's IP allowlist; see <see cref="MerchantConfiguration.UpdateAllowedIps"/>.</summary>
+    public Result<AllowedIpsChange> UpdateAllowedIps(IReadOnlyCollection<string> validIps, DateTimeOffset now)
+    {
+        if (Status == MerchantStatus.Closed)
+            return Result.Failure<AllowedIpsChange>(MerchantErrors.Closed);
+
+        var change = Configuration.UpdateAllowedIps(validIps, now);
+        UpdatedAt = now;
+        return Result.Success(change);
+    }
+
     /// <summary>
     /// The caller supplies an already-hashed secret — the aggregate never sees the plaintext, so it
     /// cannot accidentally persist or log it. Multiple active credentials are intentional: that is

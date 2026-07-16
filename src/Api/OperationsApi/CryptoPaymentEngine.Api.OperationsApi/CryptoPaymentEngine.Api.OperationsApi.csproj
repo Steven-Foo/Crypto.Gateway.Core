@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <ProjectReference Include="../../../SharedKernel/CryptoPaymentEngine.SharedKernel/CryptoPaymentEngine.SharedKernel.csproj" />
+    <ProjectReference Include="../../../Infrastructure/CryptoPaymentEngine.Infrastructure/CryptoPaymentEngine.Infrastructure.csproj" />
+
+    <ProjectReference Include="../../../Gateway.Core/Blockchain/Application/CryptoPaymentEngine.Gateway.Core.Blockchain.Application.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/Blockchain/Contracts/CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/Blockchain/Events/CryptoPaymentEngine.Gateway.Core.Blockchain.Events.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/Blockchain/Infrastructure/CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.csproj" />
+
+    <ProjectReference Include="../../../Gateway.Core/AssetManagement/Wallet/Application/CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Application.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/AssetManagement/Wallet/Contracts/CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/AssetManagement/Wallet/Events/CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Events.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/AssetManagement/Wallet/Infrastructure/CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Infrastructure.csproj" />
+
+    <ProjectReference Include="../../../Gateway.Core/Merchant/Application/CryptoPaymentEngine.Gateway.Core.Merchant.Application.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/Merchant/Contracts/CryptoPaymentEngine.Gateway.Core.Merchant.Contracts.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/Merchant/Events/CryptoPaymentEngine.Gateway.Core.Merchant.Events.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/Merchant/Infrastructure/CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.csproj" />
+
+    <ProjectReference Include="../../../Gateway.Core/KeyManagement/Application/CryptoPaymentEngine.Gateway.Core.KeyManagement.Application.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/KeyManagement/Contracts/CryptoPaymentEngine.Gateway.Core.KeyManagement.Contracts.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/KeyManagement/Events/CryptoPaymentEngine.Gateway.Core.KeyManagement.Events.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/KeyManagement/Infrastructure/CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Serilog.AspNetCore" />
+    <PackageReference Include="Swashbuckle.AspNetCore" />
+  </ItemGroup>
+
+</Project>

@@ -108,10 +108,21 @@ public sealed class DepositToLedgerTests : IAsyncLifetime
     private async Task DetectAndConfirmAsync()
     {
         _chain = new InMemoryChainSource();
+        var wallets = new StubWalletDirectory();
+
+        // Prime the cursor past cold start (DepositDetectionService seeds a fresh cursor to the current tip
+        // rather than crawling from block 1) so this helper's real assertions are about ongoing detection.
+        _chain.AddBlock(Chain.Tron, 99, "h99");
+        await using (var ctx = DepositContext())
+        {
+            var priming = new DepositDetectionService(
+                _chain, _chain, wallets, new DepositRepository(ctx), new ScanCursorStore(ctx, TimeProvider.System),
+                new StubPolicy(), TimeProvider.System, NullLogger<DepositDetectionService>.Instance);
+            await priming.ScanOnceAsync(Chain.Tron, Ct);
+        }
+
         _chain.AddBlock(Chain.Tron, 100, "h100",
             new DetectedTransfer(Chain.Tron, Address, AssetId, Amount, "0xtx100", 0, 100, "h100"));
-
-        var wallets = new StubWalletDirectory();
 
         await using (var ctx = DepositContext())
         {
@@ -168,6 +179,10 @@ public sealed class DepositToLedgerTests : IAsyncLifetime
 
         public Task<WalletOwnership?> FindByIdAsync(Guid walletId, CancellationToken cancellationToken = default) =>
             Task.FromResult<WalletOwnership?>(null);
+
+        public Task<IReadOnlyList<AvailableWallet>> ListAssignedWalletsAsync(
+            Guid merchantId, Chain chain, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<AvailableWallet>>([]);
     }
 
     private sealed class StubPolicy : Application.Abstractions.IDepositPolicyProvider

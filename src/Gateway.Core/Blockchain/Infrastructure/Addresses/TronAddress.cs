@@ -40,6 +40,25 @@ public static class TronAddress
         return Convert.ToHexString(raw.AsSpan(1)).ToLowerInvariant();
     }
 
+    /// <summary>
+    /// The 21-byte, already <c>0x41</c>-prefixed hex TRON's *native* wallet API returns for addresses
+    /// (e.g. <c>to_address</c>/<c>owner_address</c> on a <c>TransferContract</c>) → TRON Base58Check.
+    /// Distinct from <see cref="FromEvmHex"/>, which takes the 20-byte unprefixed form the Ethereum-
+    /// compatible JSON-RPC uses — the native API already includes the version byte.
+    /// </summary>
+    public static string FromRawHex(ReadOnlySpan<char> hex)
+    {
+        hex = Strip0x(hex);
+        if (hex.Length != 42)
+            throw new FormatException($"Expected a 21-byte (42 hex char) raw TRON address, got {hex.Length} chars.");
+
+        var raw = Convert.FromHexString(hex);
+        if (raw[0] != MainnetPrefix)
+            throw new FormatException("Not a TRON mainnet address (expected 0x41 prefix).");
+
+        return Base58.EncodeCheck(raw);
+    }
+
     private static ReadOnlySpan<char> Strip0x(ReadOnlySpan<char> hex)
     {
         hex = hex.Trim();

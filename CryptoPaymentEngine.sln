@@ -317,6 +317,10 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Tests", "Tests", "{309FEF7A
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CryptoPaymentEngine.Gateway.Core.Platform.Notification.Tests", "src\Gateway.Core\Platform\Notification\Tests\CryptoPaymentEngine.Gateway.Core.Platform.Notification.Tests.csproj", "{031B90D3-A8E6-4AB0-A4D4-AC31613BDD20}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "OperationsApi", "OperationsApi", "{30E3AB19-4884-BEEF-4EC6-ED27A6E060C9}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CryptoPaymentEngine.Api.OperationsApi", "src\Api\OperationsApi\CryptoPaymentEngine.Api.OperationsApi\CryptoPaymentEngine.Api.OperationsApi.csproj", "{3A130244-F145-4CBB-9055-BF6D41C154ED}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -1179,6 +1183,18 @@ Global
 		{031B90D3-A8E6-4AB0-A4D4-AC31613BDD20}.Release|x64.Build.0 = Release|Any CPU
 		{031B90D3-A8E6-4AB0-A4D4-AC31613BDD20}.Release|x86.ActiveCfg = Release|Any CPU
 		{031B90D3-A8E6-4AB0-A4D4-AC31613BDD20}.Release|x86.Build.0 = Release|Any CPU
+		{3A130244-F145-4CBB-9055-BF6D41C154ED}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3A130244-F145-4CBB-9055-BF6D41C154ED}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3A130244-F145-4CBB-9055-BF6D41C154ED}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{3A130244-F145-4CBB-9055-BF6D41C154ED}.Debug|x64.Build.0 = Debug|Any CPU
+		{3A130244-F145-4CBB-9055-BF6D41C154ED}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{3A130244-F145-4CBB-9055-BF6D41C154ED}.Debug|x86.Build.0 = Debug|Any CPU
+		{3A130244-F145-4CBB-9055-BF6D41C154ED}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3A130244-F145-4CBB-9055-BF6D41C154ED}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3A130244-F145-4CBB-9055-BF6D41C154ED}.Release|x64.ActiveCfg = Release|Any CPU
+		{3A130244-F145-4CBB-9055-BF6D41C154ED}.Release|x64.Build.0 = Release|Any CPU
+		{3A130244-F145-4CBB-9055-BF6D41C154ED}.Release|x86.ActiveCfg = Release|Any CPU
+		{3A130244-F145-4CBB-9055-BF6D41C154ED}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -1340,5 +1356,7 @@ Global
 		{7D68DDFA-CD58-4D85-80BA-69A5693E272B} = {3C8A42E3-E4C5-B261-4EF7-DFAD13B40B3E}
 		{309FEF7A-886A-7CCB-9C23-FC8366F6BD1A} = {A934E2F3-6B19-34A1-E6BF-8EB298F15A64}
 		{031B90D3-A8E6-4AB0-A4D4-AC31613BDD20} = {309FEF7A-886A-7CCB-9C23-FC8366F6BD1A}
+		{30E3AB19-4884-BEEF-4EC6-ED27A6E060C9} = {81034408-37C8-1011-444E-4C15C2FADA8E}
+		{3A130244-F145-4CBB-9055-BF6D41C154ED} = {30E3AB19-4884-BEEF-4EC6-ED27A6E060C9}
 	EndGlobalSection
 EndGlobal

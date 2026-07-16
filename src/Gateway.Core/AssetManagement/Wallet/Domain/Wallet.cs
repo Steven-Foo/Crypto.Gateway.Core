@@ -54,6 +54,16 @@ public sealed class Wallet : Entity<Guid>
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
 
+    /// <summary>
+    /// A count of confirmed deposits this wallet has received — never a money amount (§14: balances live
+    /// only in the Ledger, never duplicated as a mutable column elsewhere). Used only to bias address reuse
+    /// toward wallets already accumulating activity, so fewer distinct addresses need sweeping over time —
+    /// the same operational goal a balance-sorted pick would serve, without a second, driftable source of
+    /// truth for money. Derived purely from <c>DepositConfirmed</c> events, exactly like the Ledger's own
+    /// <c>AccountBalance</c> cache.
+    /// </summary>
+    public int DepositsReceivedCount { get; private set; }
+
     public IReadOnlyList<WalletAssignment> Assignments => _assignments;
 
     public bool IsActive => Status == WalletStatus.Active;
@@ -138,5 +148,12 @@ public sealed class Wallet : Entity<Guid>
         MerchantId = null;
         UpdatedAt = now;
         return Result.Success();
+    }
+
+    /// <summary>Records that a confirmed deposit landed on this wallet. See <see cref="DepositsReceivedCount"/>.</summary>
+    public void RecordDepositReceived(DateTimeOffset now)
+    {
+        DepositsReceivedCount++;
+        UpdatedAt = now;
     }
 }

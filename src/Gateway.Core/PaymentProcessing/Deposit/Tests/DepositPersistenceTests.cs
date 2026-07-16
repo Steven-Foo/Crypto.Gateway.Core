@@ -33,6 +33,12 @@ public sealed class DepositPersistenceTests : DepositTestHost
     public async Task Detection_records_a_deposit_for_a_watched_address_and_advances_the_cursor()
     {
         var chain = new InMemoryChainSource();
+        // Prime the cursor past cold-start first (see the dedicated cold-start test below) so this test is
+        // purely about ongoing detection: a transfer arriving after the scanner is already caught up.
+        chain.AddBlock(Chain.Tron, 99, "h99");
+        await using (var ctx = Context())
+            await Detection(ctx, chain, WalletsWithWatchedAddress(), Policy).ScanOnceAsync(Chain.Tron, Ct);
+
         chain.AddBlock(Chain.Tron, 100, "h100", Transfer(OneUsdt, 100, "h100"));
 
         await using (var ctx = Context())
@@ -52,6 +58,21 @@ public sealed class DepositPersistenceTests : DepositTestHost
     }
 
     [Fact]
+    public async Task Cold_start_seeds_the_cursor_to_the_current_tip_instead_of_crawling_from_genesis()
+    {
+        // Simulate a chain far into its history (a real chain's tip is never near block 1) with a transfer
+        // already sitting at the tip before the scanner ever ran for this chain.
+        var chain = new InMemoryChainSource();
+        chain.AddBlock(Chain.Tron, 500_000, "h500000", Transfer(OneUsdt, 500_000, "h500000"));
+
+        (await Detection(Context(), chain, WalletsWithWatchedAddress(), Policy).ScanOnceAsync(Chain.Tron, Ct)).ShouldBe(0);
+
+        await using var verify = Context();
+        (await verify.Deposits.CountAsync(Ct)).ShouldBe(0); // not retroactively found — watching starts from here forward
+        (await verify.ScanCursors.SingleAsync(Ct)).LastScannedBlock.ShouldBe(500_000); // jumps straight to tip, no genesis crawl
+    }
+
+    [Fact]
     public async Task Detection_ignores_transfers_to_unknown_addresses()
     {
         var chain = new InMemoryChainSource();
@@ -68,6 +89,10 @@ public sealed class DepositPersistenceTests : DepositTestHost
     public async Task Detection_records_dust_below_the_minimum_as_ignored()
     {
         var chain = new InMemoryChainSource();
+        chain.AddBlock(Chain.Tron, 99, "h99"); // prime past cold start (see the dedicated cold-start test)
+        await using (var ctx = Context())
+            await Detection(ctx, chain, WalletsWithWatchedAddress(), Policy).ScanOnceAsync(Chain.Tron, Ct);
+
         chain.AddBlock(Chain.Tron, 100, "h100", Transfer(BigInteger.Parse("999"), 100, "h100"));
 
         await using (var ctx = Context())
@@ -99,6 +124,10 @@ public sealed class DepositPersistenceTests : DepositTestHost
     public async Task A_deposit_confirms_at_the_threshold_and_writes_a_DepositConfirmed_outbox_message()
     {
         var chain = new InMemoryChainSource();
+        chain.AddBlock(Chain.Tron, 99, "h99"); // prime past cold start (see the dedicated cold-start test)
+        await using (var ctx = Context())
+            await Detection(ctx, chain, WalletsWithWatchedAddress(), Policy).ScanOnceAsync(Chain.Tron, Ct);
+
         chain.AddBlock(Chain.Tron, 100, "h100", Transfer(OneUsdt, 100, "h100"));
 
         await using (var ctx = Context())
@@ -127,6 +156,10 @@ public sealed class DepositPersistenceTests : DepositTestHost
     public async Task A_reorg_orphans_a_confirmed_deposit_and_writes_a_DepositOrphaned_outbox_message()
     {
         var chain = new InMemoryChainSource();
+        chain.AddBlock(Chain.Tron, 99, "h99"); // prime past cold start (see the dedicated cold-start test)
+        await using (var ctx = Context())
+            await Detection(ctx, chain, WalletsWithWatchedAddress(), Policy).ScanOnceAsync(Chain.Tron, Ct);
+
         chain.AddBlock(Chain.Tron, 100, "h100", Transfer(OneUsdt, 100, "h100"));
         await using (var ctx = Context())
             await Detection(ctx, chain, WalletsWithWatchedAddress(), Policy).ScanOnceAsync(Chain.Tron, Ct);

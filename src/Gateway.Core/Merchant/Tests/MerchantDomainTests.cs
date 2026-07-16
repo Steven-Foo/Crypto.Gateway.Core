@@ -88,6 +88,68 @@ public sealed class MerchantDomainTests
         merchant.IssueCredential("k", "h", 1, "cipher", Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
         merchant.UpdateConfiguration(true, 3, true, Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
         merchant.SetAssetPolicy(Guid.CreateVersion7(), 1, 1, 2, 0, Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
+        merchant.UpdateAllowedIps(["1.2.3.4"], Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
+    }
+
+    // ── Allowed IPs ────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void A_fresh_merchant_has_no_allowed_ips()
+    {
+        NewMerchant().Configuration.AllowedIps.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Setting_allowed_ips_reports_everything_as_added()
+    {
+        var merchant = NewMerchant();
+
+        var change = merchant.UpdateAllowedIps(["1.1.1.1", "2.2.2.2"], Now).Value;
+
+        change.Added.ShouldBe(["1.1.1.1", "2.2.2.2"], ignoreOrder: true);
+        change.Removed.ShouldBeEmpty();
+        change.Current.ShouldBe(["1.1.1.1", "2.2.2.2"], ignoreOrder: true);
+        merchant.Configuration.AllowedIps.ShouldBe(["1.1.1.1", "2.2.2.2"], ignoreOrder: true);
+    }
+
+    [Fact]
+    public void Updating_allowed_ips_reports_only_the_delta()
+    {
+        var merchant = NewMerchant();
+        merchant.UpdateAllowedIps(["1.1.1.1", "2.2.2.2"], Now);
+
+        var change = merchant.UpdateAllowedIps(["2.2.2.2", "3.3.3.3"], Now).Value;
+
+        change.Added.ShouldBe(["3.3.3.3"]);
+        change.Removed.ShouldBe(["1.1.1.1"]);
+        change.Current.ShouldBe(["2.2.2.2", "3.3.3.3"], ignoreOrder: true);
+    }
+
+    [Fact]
+    public void Clearing_allowed_ips_removes_everything_and_stores_null()
+    {
+        var merchant = NewMerchant();
+        merchant.UpdateAllowedIps(["1.1.1.1"], Now);
+
+        var change = merchant.UpdateAllowedIps([], Now).Value;
+
+        change.Removed.ShouldBe(["1.1.1.1"]);
+        merchant.Configuration.AllowedIpsCsv.ShouldBeNull();
+        merchant.Configuration.AllowedIps.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public void Updating_allowed_ips_is_case_insensitive_for_the_diff()
+    {
+        // IPv4 text has no casing, but IPv6 does — the comparer must not treat 'AB::1' and 'ab::1' as a
+        // remove-then-add churn against Cloudflare.
+        var merchant = NewMerchant();
+        merchant.UpdateAllowedIps(["AB::1"], Now);
+
+        var change = merchant.UpdateAllowedIps(["ab::1"], Now).Value;
+
+        change.Added.ShouldBeEmpty();
+        change.Removed.ShouldBeEmpty();
     }
 
     [Fact]

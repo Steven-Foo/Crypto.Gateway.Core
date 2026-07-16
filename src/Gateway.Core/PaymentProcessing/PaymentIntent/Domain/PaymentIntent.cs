@@ -33,6 +33,7 @@ public sealed class PaymentIntent : Entity<Guid>
         BigInteger expectedAmount,
         string? callbackUrl,
         DateTimeOffset expiresAt,
+        DateTimeOffset graceExpiresAt,
         DateTimeOffset now) : base(id)
     {
         PublicReference = publicReference;
@@ -46,6 +47,7 @@ public sealed class PaymentIntent : Entity<Guid>
         CallbackUrl = callbackUrl;
         Status = PaymentIntentStatus.Waiting;
         ExpiresAt = expiresAt;
+        GraceExpiresAt = graceExpiresAt;
         CreatedAt = now;
         UpdatedAt = now;
     }
@@ -80,6 +82,12 @@ public sealed class PaymentIntent : Entity<Guid>
     public bool? AmountMatched { get; private set; }
 
     public DateTimeOffset ExpiresAt { get; private set; }
+
+    /// <summary>The hard cutoff (<c>ExpiresAt</c> + grace) after which the address actually frees up. Between
+    /// <see cref="ExpiresAt"/> and this, the payer is shown "expired" but the wallet stays reserved and a
+    /// late-confirming transfer still matches — see <c>PaymentIntentOptions.GraceMinutes</c>.</summary>
+    public DateTimeOffset GraceExpiresAt { get; private set; }
+
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
 
@@ -95,6 +103,7 @@ public sealed class PaymentIntent : Entity<Guid>
         BigInteger expectedAmount,
         string? callbackUrl,
         DateTimeOffset expiresAt,
+        DateTimeOffset graceExpiresAt,
         DateTimeOffset now)
     {
         if (merchantId == Guid.Empty)
@@ -115,9 +124,12 @@ public sealed class PaymentIntent : Entity<Guid>
         if (expiresAt <= now)
             return Result.Failure<PaymentIntent>(PaymentIntentErrors.ExpiryInPast);
 
+        if (graceExpiresAt < expiresAt)
+            return Result.Failure<PaymentIntent>(PaymentIntentErrors.GraceExpiryBeforeExpiry);
+
         return Result.Success(new PaymentIntent(
             Guid.CreateVersion7(), Guid.NewGuid(), merchantId, merchantTransactionId.Trim(), chain, assetId,
-            walletId, address.Trim(), expectedAmount, callbackUrl, expiresAt, now));
+            walletId, address.Trim(), expectedAmount, callbackUrl, expiresAt, graceExpiresAt, now));
     }
 
     /// <summary>

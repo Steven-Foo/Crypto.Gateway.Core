@@ -8,6 +8,7 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Contr
 /// </summary>
 public sealed record PaymentIntentView(
     Guid PublicReference,
+    Guid AssetId,
     string Address,
     string ExpectedAmountBaseUnits,
     string Status,

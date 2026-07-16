@@ -59,5 +59,34 @@ public sealed class TronRpc(HttpClient http) : ITronRpc
             : 0L;
     }
 
+    // TRON's node caps how many blocks /wallet/getblockbylimitnext returns per call; page through the
+    // requested range rather than assuming it fits in one request.
+    private const int BlockRangePageSize = 100;
+
+    public async Task<IReadOnlyList<TronNativeBlockDto>> GetBlockRangeAsync(
+        long fromBlock, long toBlock, CancellationToken cancellationToken = default)
+    {
+        var blocks = new List<TronNativeBlockDto>();
+        var start = fromBlock;
+
+        while (start <= toBlock)
+        {
+            // getblockbylimitnext takes [startNum, endNum) — startNum inclusive, endNum EXCLUSIVE.
+            var end = Math.Min(start + BlockRangePageSize, toBlock + 1);
+
+            using var response = await http.PostAsJsonAsync(
+                "wallet/getblockbylimitnext", new { startNum = start, endNum = end }, cancellationToken);
+            response.EnsureSuccessStatusCode();
+
+            var page = await response.Content.ReadFromJsonAsync<TronBlockRangeResponseDto>(cancellationToken);
+            if (page?.Block is { Count: > 0 })
+                blocks.AddRange(page.Block);
+
+            start = end;
+        }
+
+        return blocks;
+    }
+
     private static string ToHex(long value) => "0x" + value.ToString("x");
 }

@@ -40,25 +40,51 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
 
     private sealed class MintCounter { public int Value; }
 
-    private static IDepositAddressProvisioner Provisioner(MintCounter counter)
+    /// <summary>
+    /// Stands in for the Wallet module's real directory. <see cref="PaymentIntentRepository"/> now sources
+    /// reuse candidates from here (so a pre-provisioned pool is visible before any invoice ever touches a
+    /// wallet) rather than from this module's own PaymentIntent history — this fake mirrors that by
+    /// recording whatever the fake provisioner "mints" below.
+    /// </summary>
+    private sealed class FakeWalletDirectory : IWalletDirectory
+    {
+        private readonly List<AvailableWallet> _wallets = [];
+
+        public void Register(Guid walletId, string address) => _wallets.Add(new AvailableWallet(walletId, address));
+
+        public Task<WalletOwnership?> FindByAddressAsync(Chain chain, string address, CancellationToken cancellationToken = default) =>
+            Task.FromResult<WalletOwnership?>(null);
+
+        public Task<WalletOwnership?> FindByIdAsync(Guid walletId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<WalletOwnership?>(null);
+
+        public Task<IReadOnlyList<AvailableWallet>> ListAssignedWalletsAsync(
+            Guid merchantId, Chain chain, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<AvailableWallet>>(_wallets.AsReadOnly());
+    }
+
+    private static IDepositAddressProvisioner Provisioner(MintCounter counter, FakeWalletDirectory directory)
     {
         var provisioner = Substitute.For<IDepositAddressProvisioner>();
         provisioner.ProvisionDepositAddressAsync(Arg.Any<Guid>(), Arg.Any<Chain>(), Arg.Any<CancellationToken>())
             .Returns(_ =>
             {
                 counter.Value++;
-                return Result.Success(new ProvisionedDepositAddress(Guid.CreateVersion7(), Chain.Tron, "T" + Guid.NewGuid().ToString("N")[..19]));
+                var walletId = Guid.CreateVersion7();
+                var address = "T" + Guid.NewGuid().ToString("N")[..19];
+                directory.Register(walletId, address);
+                return Result.Success(new ProvisionedDepositAddress(walletId, Chain.Tron, address));
             });
         return provisioner;
     }
 
-    private static PaymentIntentService Service(PaymentIntentDbContext context, IDepositAddressProvisioner provisioner) =>
-        new(new PaymentIntentRepository(context), provisioner,
+    private static PaymentIntentService Service(PaymentIntentDbContext context, IDepositAddressProvisioner provisioner, IWalletDirectory directory) =>
+        new(new PaymentIntentRepository(context, directory), provisioner,
             Options.Create(new PaymentIntentOptions { ExpiryMinutes = 30 }),
             TimeProvider.System, NullLogger<PaymentIntentService>.Instance);
 
-    private static PaymentIntentMatchHandler Handler(PaymentIntentDbContext context) =>
-        new(new PaymentIntentRepository(context), TimeProvider.System, NullLogger<PaymentIntentMatchHandler>.Instance);
+    private static PaymentIntentMatchHandler Handler(PaymentIntentDbContext context, IWalletDirectory directory) =>
+        new(new PaymentIntentRepository(context, directory), TimeProvider.System, NullLogger<PaymentIntentMatchHandler>.Instance);
 
     private static async Task<Guid> WalletOfAsync(Guid reference)
     {
@@ -83,9 +109,10 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
     public async Task Creating_an_intent_reserves_an_address_and_persists_it_waiting()
     {
         var counter = new MintCounter();
+        var directory = new FakeWalletDirectory();
         await using var context = Context();
 
-        var result = await Service(context, Provisioner(counter)).CreateAsync(
+        var result = await Service(context, Provisioner(counter, directory), directory).CreateAsync(
             new CreatePaymentIntentCommand(Merchant, "tx-1", Chain.Tron, Asset, OneUsdt, "https://m.test/cb"), Ct);
 
         result.IsSuccess.ShouldBeTrue();
@@ -102,8 +129,9 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
     public async Task The_same_merchant_reference_is_idempotent()
     {
         var counter = new MintCounter();
+        var directory = new FakeWalletDirectory();
         await using var context = Context();
-        var service = Service(context, Provisioner(counter));
+        var service = Service(context, Provisioner(counter, directory), directory);
 
         var first = await service.CreateAsync(new CreatePaymentIntentCommand(Merchant, "tx-dup", Chain.Tron, Asset, OneUsdt, null), Ct);
         var second = await service.CreateAsync(new CreatePaymentIntentCommand(Merchant, "tx-dup", Chain.Tron, Asset, OneUsdt, null), Ct);
@@ -119,20 +147,21 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
     public async Task A_freed_address_is_reused_by_the_next_invoice()
     {
         var counter = new MintCounter();
-        var provisioner = Provisioner(counter);
+        var directory = new FakeWalletDirectory();
+        var provisioner = Provisioner(counter, directory);
 
-        var a = await CreateAsync(provisioner, "tx-a");
+        var a = await CreateAsync(provisioner, directory, "tx-a");
         var walletA = await WalletOfAsync(a);
 
         // Match A → its address is free again.
         await using (var context = Context())
         {
-            var intent = await new PaymentIntentRepository(context).FindWaitingByWalletAsync(walletA, Ct);
+            var intent = await new PaymentIntentRepository(context, directory).FindWaitingByWalletAsync(walletA, Ct);
             intent!.MatchTo(Guid.CreateVersion7(), "0xtx", OneUsdt, DateTimeOffset.UtcNow);
             await context.SaveChangesAsync(Ct);
         }
 
-        await CreateAsync(provisioner, "tx-b");
+        await CreateAsync(provisioner, directory, "tx-b");
 
         counter.Value.ShouldBe(1); // B reused A's address; nothing new minted
         await using var verify = Context();
@@ -143,11 +172,12 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
     public async Task A_confirmed_deposit_matches_the_waiting_invoice()
     {
         var counter = new MintCounter();
-        var reference = await CreateAsync(Provisioner(counter), "tx-m");
+        var directory = new FakeWalletDirectory();
+        var reference = await CreateAsync(Provisioner(counter, directory), directory, "tx-m");
         var walletId = await WalletOfAsync(reference);
 
         await using (var context = Context())
-            await Handler(context).HandleAsync(DepositTo(walletId, "1000000"), Ct);
+            await Handler(context, directory).HandleAsync(DepositTo(walletId, "1000000"), Ct);
 
         await using var verify = Context();
         var intent = await verify.PaymentIntents.SingleAsync(i => i.PublicReference == reference, Ct);
@@ -159,15 +189,16 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
     public async Task A_redelivered_old_deposit_cannot_hijack_a_newer_invoice_on_the_reused_address()
     {
         var counter = new MintCounter();
-        var provisioner = Provisioner(counter);
+        var directory = new FakeWalletDirectory();
+        var provisioner = Provisioner(counter, directory);
 
-        var a = await CreateAsync(provisioner, "tx-a2");
+        var a = await CreateAsync(provisioner, directory, "tx-a2");
         var walletId = await WalletOfAsync(a);
         var deposit = DepositTo(walletId, "1000000");
 
-        await using (var context = Context()) await Handler(context).HandleAsync(deposit, Ct); // matches A, frees address
-        await CreateAsync(provisioner, "tx-b2");                                                // B reuses the address
-        await using (var context = Context()) await Handler(context).HandleAsync(deposit, Ct); // redeliver the OLD deposit
+        await using (var context = Context()) await Handler(context, directory).HandleAsync(deposit, Ct); // matches A, frees address
+        await CreateAsync(provisioner, directory, "tx-b2");                                                // B reuses the address
+        await using (var context = Context()) await Handler(context, directory).HandleAsync(deposit, Ct); // redeliver the OLD deposit
 
         counter.Value.ShouldBe(1); // B reused A's address
         await using var verify = Context();
@@ -180,25 +211,26 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
     public async Task Expiry_frees_a_lapsed_invoices_address_for_reuse()
     {
         var counter = new MintCounter();
-        var provisioner = Provisioner(counter);
+        var directory = new FakeWalletDirectory();
+        var provisioner = Provisioner(counter, directory);
 
-        var reference = await CreateAsync(provisioner, "tx-exp");
+        var reference = await CreateAsync(provisioner, directory, "tx-exp");
         var walletId = await WalletOfAsync(reference);
 
         await using (var context = Context())
-            (await new PaymentIntentRepository(context).ExpireStaleAsync(DateTimeOffset.UtcNow.AddHours(1), 100, Ct)).ShouldBe(1);
+            (await new PaymentIntentRepository(context, directory).ExpireStaleAsync(DateTimeOffset.UtcNow.AddHours(1), 100, Ct)).ShouldBe(1);
 
-        await CreateAsync(provisioner, "tx-after-exp");
+        await CreateAsync(provisioner, directory, "tx-after-exp");
 
         counter.Value.ShouldBe(1); // reused the expired invoice's address
         await using var verify = Context();
         (await verify.PaymentIntents.SingleAsync(i => i.MerchantTransactionId == "tx-after-exp", Ct)).WalletId.ShouldBe(walletId);
     }
 
-    private static async Task<Guid> CreateAsync(IDepositAddressProvisioner provisioner, string reference)
+    private static async Task<Guid> CreateAsync(IDepositAddressProvisioner provisioner, FakeWalletDirectory directory, string reference)
     {
         await using var context = Context();
-        var result = await Service(context, provisioner).CreateAsync(
+        var result = await Service(context, provisioner, directory).CreateAsync(
             new CreatePaymentIntentCommand(Merchant, reference, Chain.Tron, Asset, OneUsdt, null), Ct);
         result.IsSuccess.ShouldBeTrue();
         return result.Value.Reference;

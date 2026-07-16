@@ -42,6 +42,11 @@ namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Infrastructure
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("datetimeoffset");
 
+                    b.Property<int>("DepositsReceivedCount")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
+
                     b.Property<Guid>("DerivedKeyId")
                         .HasColumnType("uniqueidentifier");
 

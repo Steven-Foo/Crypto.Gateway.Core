@@ -59,6 +59,9 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infra
                     b.Property<DateTimeOffset>("ExpiresAt")
                         .HasColumnType("datetimeoffset");
 
+                    b.Property<DateTimeOffset>("GraceExpiresAt")
+                        .HasColumnType("datetimeoffset");
+
                     b.Property<Guid?>("MatchedDepositId")
                         .HasColumnType("uniqueidentifier");
 
@@ -121,8 +124,8 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infra
                         .IsUnique()
                         .HasDatabaseName("UX_PaymentIntent_Idempotency");
 
-                    b.HasIndex("Status", "ExpiresAt")
-                        .HasDatabaseName("IX_PaymentIntent_Status_Expiry");
+                    b.HasIndex("Status", "GraceExpiresAt")
+                        .HasDatabaseName("IX_PaymentIntent_Status_GraceExpiry");
 
                     b.ToTable("PaymentIntent", "paymentintent");
                 });

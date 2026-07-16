@@ -1,5 +1,6 @@
 using System.Numerics;
 using System.Text.Json;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application.Abstractions;
@@ -73,7 +74,10 @@ public sealed class MoneyInCompositionTests : IAsyncLifetime
         services.AddScoped<ILedgerPoster>(sp => sp.GetRequiredService<LedgerPoster>());
         services.AddScoped<IIntegrationEventHandler<DepositConfirmed>, DepositConfirmedHandler>();
 
-        // PaymentIntent: the SECOND handler for the same DepositConfirmed — the fan-out.
+        // PaymentIntent: the SECOND handler for the same DepositConfirmed — the fan-out. This test drives
+        // the intent straight into the DB and never calls CreateAsync, so FindReusableAddressAsync (the
+        // only thing that touches IWalletDirectory) is never exercised — a stub just satisfies DI.
+        services.AddSingleton<IWalletDirectory>(new StubWalletDirectory());
         services.AddScoped<IPaymentIntentRepository, PaymentIntentRepository>();
         services.AddScoped<IIntegrationEventHandler<DepositConfirmed>, PaymentIntentMatchHandler>();
 
@@ -109,7 +113,7 @@ public sealed class MoneyInCompositionTests : IAsyncLifetime
         // A merchant invoice is waiting on this deposit address.
         var intent = PaymentIntentEntity.Create(
             Merchant, "tx-e2e", Chain.Tron, Asset, walletId, "TDepositAddress", OneUsdt, "https://merchant.test/cb",
-            now.AddMinutes(30), now).Value;
+            now.AddMinutes(30), now.AddMinutes(40), now).Value;
         await using (var scope = _provider.CreateAsyncScope())
         {
             var ctx = scope.ServiceProvider.GetRequiredService<PaymentIntentDbContext>();
@@ -199,6 +203,19 @@ public sealed class MoneyInCompositionTests : IAsyncLifetime
 
         public Task<IReadOnlyList<AssetDto>> GetActiveAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<AssetDto>>([]);
+    }
+
+    private sealed class StubWalletDirectory : IWalletDirectory
+    {
+        public Task<WalletOwnership?> FindByAddressAsync(Chain chain, string address, CancellationToken cancellationToken = default) =>
+            Task.FromResult<WalletOwnership?>(null);
+
+        public Task<WalletOwnership?> FindByIdAsync(Guid walletId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<WalletOwnership?>(null);
+
+        public Task<IReadOnlyList<AvailableWallet>> ListAssignedWalletsAsync(
+            Guid merchantId, Chain chain, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<AvailableWallet>>([]);
     }
 
     private sealed class NoOpLock : IDistributedLockFactory

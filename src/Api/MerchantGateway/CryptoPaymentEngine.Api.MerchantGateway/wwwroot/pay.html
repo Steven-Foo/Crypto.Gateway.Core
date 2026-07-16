@@ -1,0 +1,294 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Complete Payment</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0d0f1a;
+      color: #e2e5f0;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      padding: 24px;
+    }
+
+    .card {
+      background: #161929;
+      border: 1px solid #252840;
+      border-radius: 20px;
+      padding: 40px 36px;
+      max-width: 420px;
+      width: 100%;
+      text-align: center;
+    }
+
+    /* Brand */
+    .brand {
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      color: #5b6285;
+      margin-bottom: 28px;
+    }
+
+    /* Amount */
+    .amount-label { font-size: 12px; color: #5b6285; margin-bottom: 6px; }
+    .amount       { font-size: 38px; font-weight: 700; color: #fff; line-height: 1; margin-bottom: 10px; }
+    .network-badge {
+      display: flex;
+      width: fit-content;
+      align-items: center;
+      gap: 5px;
+      background: rgba(80, 200, 120, 0.12);
+      color: #4ecb71;
+      font-size: 11px;
+      font-weight: 600;
+      letter-spacing: 1px;
+      padding: 4px 12px;
+      border-radius: 20px;
+      margin: 0 auto 28px;
+    }
+    .dot { width: 6px; height: 6px; border-radius: 50%; background: #4ecb71; }
+
+    /* QR */
+    .qr-wrap {
+      display: inline-block;
+      background: #fff;
+      padding: 14px;
+      border-radius: 14px;
+      margin-bottom: 24px;
+    }
+
+    /* Address */
+    .address-label { font-size: 12px; color: #5b6285; margin-bottom: 8px; }
+    .address-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: #0d0f1a;
+      border: 1px solid #252840;
+      border-radius: 10px;
+      padding: 11px 14px;
+      margin-bottom: 28px;
+    }
+    .address-text {
+      font-family: 'Courier New', monospace;
+      font-size: 12px;
+      color: #a8aec9;
+      flex: 1;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+      text-align: left;
+    }
+    .copy-btn {
+      flex-shrink: 0;
+      background: #252840;
+      border: none;
+      border-radius: 7px;
+      color: #a8aec9;
+      cursor: pointer;
+      font-size: 11px;
+      font-weight: 600;
+      padding: 6px 14px;
+      transition: background 0.15s, color 0.15s;
+    }
+    .copy-btn:hover  { background: #2e3255; color: #e2e5f0; }
+    .copy-btn.copied { background: #1e3d2f; color: #4ecb71; }
+
+    /* Countdown */
+    .countdown-label { font-size: 12px; color: #5b6285; margin-bottom: 6px; }
+    .countdown {
+      font-size: 32px;
+      font-weight: 700;
+      color: #fff;
+      font-variant-numeric: tabular-nums;
+      letter-spacing: 2px;
+    }
+    .countdown.urgent { color: #f26b6b; }
+
+    /* Divider */
+    .divider { border: none; border-top: 1px solid #252840; margin: 24px 0; }
+
+    /* Note */
+    .note { font-size: 12px; color: #3e4465; line-height: 1.7; }
+    .note strong { color: #5b6285; }
+
+    /* State cards */
+    .state-icon  { font-size: 52px; margin-bottom: 16px; }
+    .state-title { font-size: 22px; font-weight: 700; margin-bottom: 10px; }
+    .state-sub   { font-size: 14px; color: #5b6285; line-height: 1.6; }
+    .confirmed .state-title { color: #4ecb71; }
+    .expired   .state-title { color: #f26b6b; }
+
+    #loading-card { color: #5b6285; font-size: 14px; }
+  </style>
+</head>
+<body>
+
+<div class="card" id="loading-card">Loading payment details…</div>
+
+<div class="card" id="pay-card" style="display:none">
+  <div class="brand" id="brand-name">Payment Gateway</div>
+
+  <div class="amount-label">Amount to Send</div>
+  <div class="amount" id="pay-amount">—</div>
+  <div class="network-badge"><span class="dot"></span> <span id="network-label">—</span></div>
+
+  <div class="qr-wrap">
+    <div id="qrcode"></div>
+  </div>
+
+  <div class="address-label">Send to this address</div>
+  <div class="address-row">
+    <span class="address-text" id="pay-address">—</span>
+    <button class="copy-btn" id="copy-btn" onclick="copyAddress()">Copy</button>
+  </div>
+
+  <hr class="divider">
+
+  <div class="countdown-label">Expires in</div>
+  <div class="countdown" id="countdown">—</div>
+
+  <hr class="divider">
+
+  <div class="note">
+    Send exactly the amount shown above to the address above on the
+    <strong id="note-network">correct</strong> network only.
+    Do not send other tokens or use other networks.
+    Payment is detected automatically — do not close this page.
+  </div>
+</div>
+
+<div class="card confirmed" id="confirmed-card" style="display:none">
+  <div class="state-icon">✅</div>
+  <div class="state-title">Payment Received</div>
+  <div class="state-sub">Your payment has been confirmed on-chain.<br>You may close this page.</div>
+</div>
+
+<div class="card expired" id="expired-card" style="display:none">
+  <div class="state-icon">⏱</div>
+  <div class="state-title">Payment Expired</div>
+  <div class="state-sub">This payment link has expired.<br>Please request a new one from the merchant.</div>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"
+        integrity="sha512-CNgIRecGo7nphbeZ04Sc13ka07paqdeTu0WR1IM4kNcpmBAUSHSQX0FslNhTDadL4O5SAGapGt4FodqL8My0mA=="
+        crossorigin="anonymous"></script>
+<script>
+  let countdownInterval = null;
+  let pollInterval      = null;
+  let expiresAt         = null;
+  let walletAddress     = '';
+
+  function show(id) {
+    ['loading-card', 'pay-card', 'confirmed-card', 'expired-card']
+      .forEach(x => {
+        const el = document.getElementById(x);
+        if (el) el.style.display = (x === id) ? '' : 'none';
+      });
+  }
+
+  function copyAddress() {
+    navigator.clipboard.writeText(walletAddress).then(() => {
+      const btn = document.getElementById('copy-btn');
+      btn.textContent = 'Copied!';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 2000);
+    });
+  }
+
+  function formatCountdown(ms) {
+    if (ms <= 0) return '00:00';
+    const total = Math.floor(ms / 1000);
+    const m = Math.floor(total / 60).toString().padStart(2, '0');
+    const s = (total % 60).toString().padStart(2, '0');
+    return `${m}:${s}`;
+  }
+
+  function startCountdown() {
+    const el = document.getElementById('countdown');
+    el.textContent = formatCountdown(expiresAt - Date.now());
+
+    countdownInterval = setInterval(() => {
+      const remaining = expiresAt - Date.now();
+      if (remaining <= 0) {
+        clearInterval(countdownInterval);
+        clearInterval(pollInterval);
+        el.textContent = '00:00';
+        show('expired-card');
+        return;
+      }
+      el.textContent = formatCountdown(remaining);
+      el.classList.toggle('urgent', remaining < 5 * 60 * 1000);
+    }, 1000);
+  }
+
+  async function pollStatus(referenceNo) {
+    try {
+      const res  = await fetch(`/pay/${referenceNo}/info`);
+      if (!res.ok) return;
+      const data = await res.json();
+      if (data.status === 'confirmed') {
+        clearInterval(countdownInterval);
+        clearInterval(pollInterval);
+        show('confirmed-card');
+      }
+    } catch (_) {}
+  }
+
+  // Chain enum values (Blockchain.Domain.Chain) → the network label shown to the payer.
+  const NETWORK_LABELS = { Tron: 'TRC-20', Ethereum: 'ERC-20', Solana: 'SPL' };
+
+  async function init() {
+    const parts       = window.location.pathname.replace(/\/$/, '').split('/');
+    const referenceNo = parts[parts.length - 1];
+
+    let info;
+    try {
+      const res = await fetch(`/pay/${referenceNo}/info`);
+      if (!res.ok) { show('expired-card'); return; }
+      info = await res.json();
+    } catch (_) { show('expired-card'); return; }
+
+    if (info.status === 'confirmed') { show('confirmed-card'); return; }
+    if (info.status === 'expired')   { show('expired-card');   return; }
+
+    walletAddress = info.address;
+    expiresAt     = new Date(info.expiresAt).getTime();
+
+    if (Date.now() >= expiresAt) { show('expired-card'); return; }
+
+    const networkLabel = NETWORK_LABELS[info.chain] || info.chain || '';
+    const badgeText     = [info.symbol, networkLabel].filter(Boolean).join(' · ');
+
+    document.getElementById('pay-amount').textContent   = `${parseFloat(info.amount)} ${info.symbol}`;
+    document.getElementById('pay-address').textContent  = info.address;
+    document.getElementById('network-label').textContent = badgeText;
+    document.getElementById('note-network').textContent  = `${info.symbol} (${networkLabel})`;
+
+    new QRCode(document.getElementById('qrcode'), {
+      text:         info.address,
+      width:        180,
+      height:       180,
+      correctLevel: QRCode.CorrectLevel.M
+    });
+
+    show('pay-card');
+    startCountdown();
+
+    pollInterval = setInterval(() => pollStatus(referenceNo), 8000);
+  }
+
+  init();
+</script>
+</body>
+</html>

@@ -50,4 +50,7 @@ public static class MerchantErrors
 
     public static readonly Error NotTransactable =
         Error.Unauthorized("merchant.not_transactable", "Merchant is not active.");
+
+    public static readonly Error NoValidIpsProvided =
+        Error.Validation("merchant.no_valid_ips_provided", "No valid IP addresses were provided; existing allowed IPs are unchanged.");
 }

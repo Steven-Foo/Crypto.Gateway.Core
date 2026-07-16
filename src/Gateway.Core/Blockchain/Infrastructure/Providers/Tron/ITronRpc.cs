@@ -19,4 +19,13 @@ public interface ITronRpc
 
     /// <summary><c>/walletsolidity/getnowblock</c> — the latest solidified (irreversible) block number.</summary>
     Task<long> GetSolidifiedBlockNumberAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <c>/wallet/getblockbylimitnext</c> — full blocks (with native transactions) across
+    /// <c>[fromBlock, toBlock]</c> inclusive. Used to detect native TRX transfers, which have no log/event
+    /// and so cannot be seen via <c>eth_getLogs</c>. Paginates internally since the node caps how many
+    /// blocks one call may return.
+    /// </summary>
+    Task<IReadOnlyList<TronNativeBlockDto>> GetBlockRangeAsync(
+        long fromBlock, long toBlock, CancellationToken cancellationToken = default);
 }

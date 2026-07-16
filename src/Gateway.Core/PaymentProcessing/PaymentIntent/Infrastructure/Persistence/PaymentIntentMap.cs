@@ -30,6 +30,7 @@ public sealed class PaymentIntentMap : IEntityTypeConfiguration<PaymentIntentEnt
         builder.Property(i => i.MatchedDepositId);
         builder.Property(i => i.AmountMatched);
         builder.Property(i => i.ExpiresAt).IsRequired();
+        builder.Property(i => i.GraceExpiresAt).IsRequired();
         builder.Property(i => i.CreatedAt).IsRequired();
         builder.Property(i => i.UpdatedAt).IsRequired();
 
@@ -58,8 +59,9 @@ public sealed class PaymentIntentMap : IEntityTypeConfiguration<PaymentIntentEnt
             .HasFilter("[Status] = 'Waiting'")
             .HasDatabaseName("UX_PaymentIntent_LiveWallet");
 
-        // Match-idempotency lookup and the expiry sweep's working set.
+        // Match-idempotency lookup and the expiry sweep's working set (sweeps on the grace cutoff, not the
+        // display expiry — see ExpireStaleAsync).
         builder.HasIndex(i => i.MatchedDepositId).HasDatabaseName("IX_PaymentIntent_MatchedDeposit");
-        builder.HasIndex(i => new { i.Status, i.ExpiresAt }).HasDatabaseName("IX_PaymentIntent_Status_Expiry");
+        builder.HasIndex(i => new { i.Status, i.GraceExpiresAt }).HasDatabaseName("IX_PaymentIntent_Status_GraceExpiry");
     }
 }
