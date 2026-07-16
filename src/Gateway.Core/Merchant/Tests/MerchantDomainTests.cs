@@ -88,7 +88,6 @@ public sealed class MerchantDomainTests
         merchant.IssueCredential("k", "h", 1, "cipher", Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
         merchant.UpdateConfiguration(true, 3, true, Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
         merchant.SetAssetPolicy(Guid.CreateVersion7(), 1, 1, 2, FeeSchedule.None, Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
-        merchant.SetAssetPolicy(Guid.CreateVersion7(), 1, 1, 2, 0, Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
         merchant.UpdateAllowedIps(["1.2.3.4"], Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
     }
 

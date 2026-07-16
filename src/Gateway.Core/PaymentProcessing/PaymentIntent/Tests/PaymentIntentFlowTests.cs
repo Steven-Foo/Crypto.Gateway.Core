@@ -90,10 +90,8 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
         return fees;
     }
 
-    private static PaymentIntentService Service(PaymentIntentDbContext context, IDepositAddressProvisioner provisioner) =>
-        new(new PaymentIntentRepository(context), provisioner, NoFees(),
     private static PaymentIntentService Service(PaymentIntentDbContext context, IDepositAddressProvisioner provisioner, IWalletDirectory directory) =>
-        new(new PaymentIntentRepository(context, directory), provisioner,
+        new(new PaymentIntentRepository(context, directory), provisioner, NoFees(),
             Options.Create(new PaymentIntentOptions { ExpiryMinutes = 30 }),
             TimeProvider.System, NullLogger<PaymentIntentService>.Instance);
 

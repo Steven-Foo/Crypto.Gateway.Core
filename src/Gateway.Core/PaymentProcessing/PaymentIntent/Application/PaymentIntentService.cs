@@ -77,8 +77,6 @@ public sealed class PaymentIntentService(
             var intentResult = PaymentIntentEntity.Create(
                 command.MerchantId, command.MerchantTransactionId, command.Chain, command.AssetId,
                 address.Value.WalletId, address.Value.Address, expectedAmount, command.CallbackUrl,
-                now.AddMinutes(_options.ExpiryMinutes), now);
-                address.Value.WalletId, address.Value.Address, command.ExpectedAmount, command.CallbackUrl,
                 now.AddMinutes(_options.ExpiryMinutes), now.AddMinutes(_options.ExpiryMinutes + _options.GraceMinutes), now);
 
             if (intentResult.IsFailure)
