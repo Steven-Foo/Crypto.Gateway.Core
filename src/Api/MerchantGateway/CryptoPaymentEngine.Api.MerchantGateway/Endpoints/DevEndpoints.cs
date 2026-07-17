@@ -1,6 +1,10 @@
 using System.Collections.Concurrent;
+using System.Globalization;
+using System.Numerics;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
+using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Application.Abstractions;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Contracts;
 using CryptoPaymentEngine.SharedKernel;
 
 namespace CryptoPaymentEngine.Api.MerchantGateway.Endpoints;
@@ -58,6 +62,70 @@ public static class DevEndpoints
             await cursors.SetLastScannedBlockAsync(parsed, start, http.RequestAborted);
 
             return Results.Ok(new { chain = parsed.ToString(), tip, cursorSetTo = start });
+        });
+
+        // Simulates a payer sending the invoiced amount, WITHOUT mainnet or real money: scripts the in-memory
+        // chain so the real workers do the real work — detection → confirmation → DepositConfirmed → outbox →
+        // ledger credit (net + fee split) → invoice match → signed merchant callback. Nothing is faked past
+        // the chain boundary; this only stands in for the node (§8's DI seam).
+        //
+        // Requires the in-memory chain source, i.e. Chains:Tron:Live=false. With Live=true a real node is
+        // authoritative and the only way to make a deposit appear is to actually send USDT.
+        group.MapPost("/simulate-deposit", async (
+            Guid reference,
+            decimal? amount,
+            IServiceProvider services,
+            IPaymentIntentDirectory intents,
+            IScanCursorStore cursors,
+            IDepositPolicyProvider policies,
+            HttpContext http) =>
+        {
+            if (services.GetService<InMemoryChainSource>() is not { } chain)
+                return Results.BadRequest(new { error = "Not using the in-memory chain. Set Chains:Tron:Live=false to simulate, or send real USDT." });
+
+            var intent = await intents.FindByPublicReferenceAsync(reference, http.RequestAborted);
+            if (intent is null)
+                return Results.NotFound(new { error = $"No payment intent for reference {reference}. Create one via POST /api/v1/deposit first." });
+
+            // Default to the exact invoiced amount so the intent matches; an override lets you exercise an
+            // under/over-payment (which still matches — the merchant decides — but flips AmountMatched).
+            var baseUnits = amount is null
+                ? BigInteger.Parse(intent.ExpectedAmountBaseUnits, CultureInfo.InvariantCulture)
+                : new BigInteger(decimal.Truncate(amount.Value * 1_000_000m)); // USDT-TRON: 6 dp
+
+            if (baseUnits <= BigInteger.Zero)
+                return Results.BadRequest(new { error = "Amount must be positive." });
+
+            var required = policies.For(Chain.Tron).RequiredConfirmations;
+            var tip = await chain.GetTipHeightAsync(Chain.Tron, http.RequestAborted);
+            var depositBlock = (tip > 0 ? tip : 1_000) + 1;
+
+            var transfer = new DetectedTransfer(
+                Chain.Tron, intent.Address, intent.AssetId, baseUnits,
+                $"0xsimulated{depositBlock}", 0, depositBlock, $"h{depositBlock}");
+
+            chain.AddBlock(Chain.Tron, depositBlock, $"h{depositBlock}", transfer);
+
+            // Bury it to the policy depth so the confirmation worker can credit it on its next pass.
+            for (var i = 1; i <= required; i++)
+                chain.AddBlock(Chain.Tron, depositBlock + i, $"h{depositBlock + i}");
+
+            // Point the scanner just behind the deposit. Without this the cold start would jump the cursor to
+            // the tip and skip straight past the block we just wrote.
+            await cursors.SetLastScannedBlockAsync(Chain.Tron, depositBlock - 1, http.RequestAborted);
+
+            return Results.Ok(new
+            {
+                simulated = true,
+                reference,
+                address = intent.Address,
+                amountBaseUnits = baseUnits.ToString(CultureInfo.InvariantCulture),
+                depositBlock,
+                confirmationsBuried = required,
+                whatNext = "Within ~20s the scanner detects it and the confirmation worker credits it. Watch: " +
+                           $"GET /pay/{reference}/info flips to 'confirmed', GET /dev/callbacks shows the signed " +
+                           "callback, and ledger.Journal/JournalEntry shows the credit + fee split.",
+            });
         });
     }
 }
