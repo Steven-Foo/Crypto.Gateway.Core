@@ -25,9 +25,16 @@ public sealed class DepositRepository(DepositDbContext context) : IDepositReposi
         }
     }
 
+    /// <summary>
+    /// The deposits still worth watching on this chain: not yet credited, or credited but not yet buried
+    /// beyond reorg reach. Finalized deposits are excluded — they can never change, so re-reading their
+    /// block would burn one RPC per pass forever (see <c>Deposit.MarkFinalized</c>).
+    /// </summary>
     public async Task<IReadOnlyList<DepositEntity>> GetTrackableAsync(Chain chain, CancellationToken cancellationToken = default) =>
         await context.Deposits
-            .Where(d => d.Chain == chain && (d.Status == DepositStatus.Detected || d.Status == DepositStatus.Confirmed))
+            .Where(d => d.Chain == chain
+                        && d.FinalizedAt == null
+                        && (d.Status == DepositStatus.Detected || d.Status == DepositStatus.Confirmed))
             .ToListAsync(cancellationToken);
 
     public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) =>

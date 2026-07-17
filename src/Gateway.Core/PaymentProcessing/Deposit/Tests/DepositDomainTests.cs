@@ -137,4 +137,53 @@ public sealed class DepositDomainTests
 
         deposit.DomainEvents.OfType<DepositOrphaned>().Count().ShouldBe(1);
     }
+
+    [Fact]
+    public void A_confirmed_deposit_settles_once_its_block_is_irreversible()
+    {
+        var deposit = Record(Amount, ThreeConfs);
+        deposit.RegisterConfirmations(3, isFinalized: false, ThreeConfs, Now);
+
+        deposit.IsFinalized.ShouldBeFalse(); // still watched — the block could still reorg
+
+        deposit.MarkFinalized(Now.AddMinutes(1));
+
+        deposit.IsFinalized.ShouldBeTrue();
+        deposit.FinalizedAt.ShouldBe(Now.AddMinutes(1));
+        deposit.Status.ShouldBe(DepositStatus.Confirmed); // settling is a tracking marker, not a money state
+    }
+
+    [Fact]
+    public void A_still_pending_deposit_never_settles_even_when_its_block_is_final()
+    {
+        // A chain whose finality arrives before the policy's confirmation depth must not strand the deposit:
+        // retiring it here would stop the tracker before it could ever credit.
+        var deposit = Record(Amount, ThreeConfs);
+        deposit.RegisterConfirmations(1, isFinalized: true, ThreeConfs, Now);
+        deposit.Status.ShouldBe(DepositStatus.Detected);
+
+        deposit.MarkFinalized(Now);
+
+        deposit.IsFinalized.ShouldBeFalse(); // still trackable, so it can still reach the threshold
+    }
+
+    [Fact]
+    public void Settling_is_idempotent_and_keeps_the_first_timestamp()
+    {
+        var deposit = Record(Amount, ThreeConfs);
+        deposit.RegisterConfirmations(3, isFinalized: false, ThreeConfs, Now);
+
+        deposit.MarkFinalized(Now.AddMinutes(1));
+        deposit.MarkFinalized(Now.AddMinutes(9));
+
+        deposit.FinalizedAt.ShouldBe(Now.AddMinutes(1));
+    }
+
+    [Fact]
+    public void Dust_never_settles_because_it_is_never_watched()
+    {
+        var deposit = Record(BigInteger.Parse("999"), ThreeConfs); // Ignored
+        deposit.MarkFinalized(Now);
+        deposit.IsFinalized.ShouldBeFalse();
+    }
 }

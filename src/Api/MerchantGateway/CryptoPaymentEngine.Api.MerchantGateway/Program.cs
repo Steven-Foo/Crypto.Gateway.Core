@@ -52,7 +52,20 @@ builder.Services.AddRedisInfrastructure(redisConnection);
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(o =>
 {
-    o.SwaggerDoc("v1", new OpenApiInfo { Title = "Crypto.Gateway.Core — Merchant API", Version = "v1" });
+    o.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "Crypto.Gateway.Core — Merchant API",
+        Version = "v1",
+        Description =
+            "Merchant-facing API. Requests to /api/v1/* are HMAC-signed: X-Api-Key + X-Timestamp + " +
+            "X-Signature = HMAC-SHA256(hexDecode(signingSecret), \"{timestamp}\\n{body}\").\n\n" +
+            "In Development, 'Try it out' signs each call for you with the dev seed merchant's key — leave the " +
+            "three X- headers blank and just Execute. (tools/dev/Invoke-MerchantRequest.ps1 does the same from " +
+            "PowerShell.) A real merchant integration must compute the signature itself.\n\n" +
+            "Deposit flow: POST /api/v1/deposit -> open the returned payUrl -> send USDT to the address shown -> " +
+            "it is detected, credited to the ledger (net + fee split), matched to the invoice, and the signed " +
+            "merchant callback fires (watch it at GET /dev/callbacks). The pay page and /dev/* are unauthenticated.",
+    });
     o.OperationFilter<CryptoPaymentEngine.Api.MerchantGateway.Security.HmacHeadersOperationFilter>();
 });
 
@@ -68,19 +81,6 @@ builder.Services.AddWithdrawalModule(config, dbConnection);
 builder.Services.AddConfigurationAssetCatalog();        // canonical AssetId shared by edge, scanner, ledger
 builder.Services.AddPaymentIntentModule(config, dbConnection); // deposit invoices + address pool; matches DepositConfirmed
 builder.Services.AddNotificationModule();               // consumes PaymentIntentMatched → signed merchant callback
-
-// ── Developer API docs (dev-only Swagger UI). §11 preferred tooling; carried over from the PoC. ──
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(c => c.SwaggerDoc("v1", new OpenApiInfo
-{
-    Title = "CryptoPaymentEngine — Merchant Gateway",
-    Version = "v1",
-    Description =
-        "Merchant-facing API. Requests to /api/v1/* are HMAC-signed: X-Api-Key + X-Timestamp + " +
-        "X-Signature = HMAC-SHA256(hexDecode(signingSecret), \"{timestamp}\\n{body}\"). Swagger's 'Try it out' " +
-        "cannot compute the signature — use tools/dev/Invoke-MerchantRequest.ps1 to make signed calls. The pay " +
-        "page and /dev/* endpoints are unauthenticated.",
-}));
 
 // ── Chain source + signing: swap dev↔prod by DI, not code (§8, §10) ───────────
 if (builder.Environment.IsDevelopment())
@@ -166,6 +166,18 @@ if (app.Environment.IsDevelopment())
     {
         c.SwaggerEndpoint("/swagger/v1/swagger.json", "Merchant Gateway v1");
         c.RoutePrefix = "swagger";
+
+        // Sign /api/v1 calls in the browser with the dev seed merchant's key, so "Try it out" exercises the
+        // REAL signed flow rather than 400ing on the missing signature. Dev-only, and only when the dev
+        // merchant seed is on — a real signing secret must never be embedded in a page (§10).
+        var devApiKey = config["Merchant:DevSeed:ApiKey"];
+        var devSigningSecret = config["Merchant:DevSeed:SigningSecret"];
+        if (config.GetValue<bool>("Merchant:DevSeed:Enabled")
+            && !string.IsNullOrWhiteSpace(devApiKey)
+            && !string.IsNullOrWhiteSpace(devSigningSecret))
+        {
+            c.UseRequestInterceptor(DevSwaggerRequestSigning.InterceptorJs(devApiKey, devSigningSecret));
+        }
     });
 }
 

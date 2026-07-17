@@ -1,4 +1,4 @@
-SET QUOTED_IDENTIFIER ON;
+﻿SET QUOTED_IDENTIFIER ON;
 SET ANSI_NULLS ON;
 GO
 
@@ -140,6 +140,43 @@ IF NOT EXISTS (
 BEGIN
     INSERT INTO [paymentintent].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
     VALUES (N'20260714082137_InitialPaymentIntent', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [paymentintent].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260716060225_AddPaymentIntentGracePeriod'
+)
+BEGIN
+    DROP INDEX [IX_PaymentIntent_Status_Expiry] ON [paymentintent].[PaymentIntent];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [paymentintent].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260716060225_AddPaymentIntentGracePeriod'
+)
+BEGIN
+    ALTER TABLE [paymentintent].[PaymentIntent] ADD [GraceExpiresAt] datetimeoffset NOT NULL DEFAULT '0001-01-01T00:00:00.0000000+00:00';
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [paymentintent].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260716060225_AddPaymentIntentGracePeriod'
+)
+BEGIN
+    CREATE INDEX [IX_PaymentIntent_Status_GraceExpiry] ON [paymentintent].[PaymentIntent] ([Status], [GraceExpiresAt]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [paymentintent].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260716060225_AddPaymentIntentGracePeriod'
+)
+BEGIN
+    INSERT INTO [paymentintent].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260716060225_AddPaymentIntentGracePeriod', N'10.0.9');
 END;
 
 COMMIT;

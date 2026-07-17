@@ -153,6 +153,54 @@ public sealed class DepositPersistenceTests : DepositTestHost
     }
 
     [Fact]
+    public async Task A_deposit_whose_block_is_irreversible_is_retired_from_the_tracker()
+    {
+        // The tracker re-reads one block per tracked deposit per pass. A deposit on a solidified/finalized
+        // block can never reorg, so leaving it tracked would burn an RPC per pass forever and grow without
+        // bound as deposits accumulate — eventually exhausting the node's rate limit.
+        var chain = new InMemoryChainSource();
+        chain.AddBlock(Chain.Tron, 99, "h99");
+        await using (var ctx = Context())
+            await Detection(ctx, chain, WalletsWithWatchedAddress(), Policy).ScanOnceAsync(Chain.Tron, Ct);
+
+        chain.AddBlock(Chain.Tron, 100, "h100", Transfer(OneUsdt, 100, "h100"));
+        await using (var ctx = Context())
+            await Detection(ctx, chain, WalletsWithWatchedAddress(), Policy).ScanOnceAsync(Chain.Tron, Ct);
+
+        chain.AddBlock(Chain.Tron, 101, "h101");
+        chain.AddBlock(Chain.Tron, 102, "h102");
+
+        // Confirms (3 deep) but block 100 is not yet solidified → still watched for reorgs.
+        await using (var ctx = Context())
+            await Confirmation(ctx, chain, Policy).TrackOnceAsync(Chain.Tron, Ct);
+
+        await using (var ctx = Context())
+        {
+            var stillTracked = await new DepositRepository(ctx).GetTrackableAsync(Chain.Tron, Ct);
+            stillTracked.ShouldHaveSingleItem().IsFinalized.ShouldBeFalse();
+        }
+
+        // The chain now solidifies block 100 — it is irreversible from here.
+        chain.SetFinalizedHeight(Chain.Tron, 100);
+
+        await using (var ctx = Context())
+            await Confirmation(ctx, chain, Policy).TrackOnceAsync(Chain.Tron, Ct);
+
+        await using (var verify = Context())
+        {
+            var deposit = await verify.Deposits.SingleAsync(Ct);
+            deposit.Status.ShouldBe(DepositStatus.Confirmed); // money state untouched — it stays credited
+            deposit.IsFinalized.ShouldBeTrue();
+
+            // The point of the fix: the tracker's working set is now empty, so subsequent passes cost no RPC.
+            (await new DepositRepository(verify).GetTrackableAsync(Chain.Tron, Ct)).ShouldBeEmpty();
+
+            // And still exactly one credit — settling must not re-raise anything.
+            (await verify.OutboxMessages.CountAsync(Ct)).ShouldBe(1);
+        }
+    }
+
+    [Fact]
     public async Task A_reorg_orphans_a_confirmed_deposit_and_writes_a_DepositOrphaned_outbox_message()
     {
         var chain = new InMemoryChainSource();

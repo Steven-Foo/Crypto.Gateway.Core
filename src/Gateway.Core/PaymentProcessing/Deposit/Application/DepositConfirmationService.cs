@@ -56,6 +56,13 @@ public sealed class DepositConfirmationService(
                 var confirmations = checked((int)Math.Max(0, tip - deposit.BlockNumber + 1));
                 var isFinalized = deposit.BlockNumber <= finalizedHeight;
                 deposit.RegisterConfirmations(confirmations, isFinalized, policy, now);
+
+                // Once the carrying block is irreversible there is nothing left to watch, so retire the
+                // deposit from the trackable set. Without this the tracker re-checks every deposit ever
+                // taken on every pass — one RPC each, forever — which grows without bound and exhausts the
+                // node's rate limit. A no-op unless the deposit is credited (see MarkFinalized).
+                if (isFinalized)
+                    deposit.MarkFinalized(now);
             }
 
             if (deposit.Status != statusBefore)

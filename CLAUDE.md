@@ -206,22 +206,55 @@ same port. The dev round-trip address is now per-merchant deterministic (not the
 **Human-testable mainnet deposit harness (migrating the PoC's proven deposit flow onto our spine) — DONE, 369
 tests green, host-boot verified.** Reuses the legacy PoC's `pay.html` **unmodified** (served at `/pay/{ref}` via
 `UseStaticFiles`; our `/pay/{ref}/info` already returns its exact `{address,amount,expiresAt,status}` contract,
-status already mapped to `pending/confirmed/expired`). Adds dev-only **Swagger** (`/swagger`, Swashbuckle 10.2.3
-— docs only: the merchant API is HMAC-signed so "Try it out" can't sign; use `tools/dev/Invoke-MerchantRequest.ps1`).
+status already mapped to `pending/confirmed/expired`). Adds dev-only **Swagger** (`/swagger`, Swashbuckle 10.2.3)
+that **actually exercises the signed flow**: `Security/DevSwaggerRequestSigning.cs` injects a swagger-ui
+requestInterceptor computing `hex(HMAC-SHA256(hexDecode(secret),"{ts}\n{body}"))` in the browser from the
+`Merchant:DevSeed` credentials, so "Try it out" works with the three `X-` headers left blank (they're documented
+`Required=false` precisely so swagger-ui doesn't block Execute; the middleware still enforces them on the wire).
+Dev-only + only when `Merchant:DevSeed:Enabled` — a real signing secret must never be embedded in a page (§10);
+`tools/dev/Invoke-MerchantRequest.ps1` remains the PowerShell equivalent. (The PoC's Swagger could **not** do
+this — it declared only an `X-Api-Key` scheme while `MerchantSecurityFilter` still demanded the signature, so its
+deposit flow was proven with a signing client, never through Swagger.)
 `docker-compose.yml` brings up **SQL Server :1433 (DBeaver-reviewable) + Redis :6379 (callbacks need it) + Mongo
 :27017**; `tools/dev/Setup-LocalEnv.ps1` creates the DB + applies all 9 module migrations; per-developer secrets
 live in the git-ignored `appsettings.Local.json`. The dev host now takes the **real TRON adapter when
 `Chains:Tron:Live=true`** (+ a fresh TronGrid key — NEVER the leaked one), else the in-memory source; signer/keys
 stay in-memory (deposit detection never signs, §10). New dev-only host endpoints (`Endpoints/DevEndpoints.cs`,
 mapped only in Development): **`/dev/callbacks`** (in-host sink so a human sees the signed merchant callback the
-`HttpWebhookSender` fires on detection) and **`/dev/scan-cursor`** (seeds the deposit scan cursor near the chain
-tip — the scanner otherwise cold-starts at block 1 and never reaches a live mainnet deposit; a config-driven
-cold-start block on the Deposit module is the proper follow-up). For recoverable/private mainnet addresses the
+`HttpWebhookSender` fires on detection) and **`/dev/scan-cursor`** (seeds the scan cursor *behind* the tip via
+`?lookback=N`, for a transfer already sent — the scanner cold-starts at the tip on its own, it does NOT crawl
+from genesis). For recoverable/private mainnet addresses the
 dev provisioner takes an optional real account xpub (`KeyManagement:DevMerchantXpub` at `m/44'/195'/0'/0`), else
 the throwaway public-salt seed (test-only). Full runbook: `docs/dev-mainnet-deposit.md`. **Deferred/known:** the
-live TRON adapter's first mainnet exercise may need rate-limit/start-block/confirmation tuning (was deferred to
+live TRON adapter's first mainnet exercise may need rate-limit/confirmation tuning (was deferred to
 staging); withdrawal stays inert in dev (no real signer). We did NOT port the legacy MVC controllers — they drag
 in the old `Core`/`UsdtService` projects; the flow is reproduced in our minimal-API edge (§15).
+
+**Deposit-flow hardening + fresh-env repair — DONE, 393 tests green, proven end-to-end over HTTP.** Four real
+defects found by reviewing the deposit use case:
+1. **`db/sql` had drifted from the migrations** (`AddMerchantAllowedIps`, `AddDepositsReceivedCount`,
+   `AddPaymentIntentGracePeriod` shipped in `0f05da8` without regenerated scripts). A fresh environment built
+   from `db/sql` therefore booted onto a schema the code couldn't use: the dev merchant seed died on
+   `Invalid column name 'AllowedIpsCsv'`, so **every signed `/api/v1` call returned 401 "Invalid API
+   credentials"** and the deposit use case was untestable. Scripts regenerated; `db/README.md` now carries a
+   drift-check + the `SET QUOTED_IDENTIFIER ON` header rule (both are silent-failure traps).
+2. **Unbounded reorg tracking:** `GetTrackableAsync` never retired confirmed deposits, so the tracker re-read one
+   block per deposit *ever taken*, per pass, forever — unbounded RPC growth that would exhaust TronGrid's limit.
+   Fixed with a nullable `FinalizedAt` **tracking marker** (NOT a new status — `Status` stays the money
+   lifecycle) set once the block passes the chain's irreversibility point; `IX_Deposit_Chain_Status` is now
+   filtered `WHERE [FinalizedAt] IS NULL`. **Only a Confirmed deposit settles** — retiring a still-Detected one
+   on finality alone would strand it uncredited on any chain whose finality precedes the policy depth (TRON
+   solidifies ~19, a 20-conf policy hits exactly this). Migration `20260717072121_DepositFinalizedAt`.
+3. **The pay page shipped with no CSP:** `PayEndpoints` had a dead `GetPageAsync` holding the security headers
+   while the live route was an inline lambda that skipped them — so the CSP landed on the JSON `/info` (useless)
+   and not on the HTML that renders the address and loads a CDN QR script. Wired up; verified by response headers.
+4. **`Gateway:BaseUrl` pointed at `:7114`** while the host listens on `:51078/:51079`, so the `payUrl` handed to
+   the payer was a dead link. Now pinned to `launchSettings.json` and commented as such.
+
+**Proven:** from a database built *only* from `db/sql`, a signed `POST /api/v1/deposit` returns
+`{referenceNo, address: T…, payUrl}`, `/pay/{ref}/info` returns the pay-page contract, and `/pay/{ref}` serves
+the page with its CSP. `Api.IntegrationTests` contains **zero tests** (builds, discovers none) — false comfort,
+worth filling.
 
 Every other module in the map is a placeholder in this doc, not yet on disk — scaffold a module
 only when real feature work on it starts, following the same 8-layer layout.
