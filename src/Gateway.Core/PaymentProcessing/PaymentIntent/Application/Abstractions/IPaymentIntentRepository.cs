@@ -13,19 +13,16 @@ public enum PaymentIntentAddOutcome
     AddressBusy,
 }
 
-/// <summary>A reusable deposit address: one a merchant already owns that no live invoice is holding.</summary>
-public sealed record ReusableAddress(Guid WalletId, string Address);
-
 public interface IPaymentIntentRepository
 {
     /// <summary>Idempotency lookup: the intent already created for this merchant reference, if any.</summary>
     Task<PaymentIntentEntity?> FindByMerchantReferenceAsync(Guid merchantId, string merchantTransactionId, CancellationToken cancellationToken = default);
 
-    /// <summary>A previously-used address for this merchant+chain that no Waiting intent holds — the pool's free list.</summary>
-    Task<ReusableAddress?> FindReusableAddressAsync(Guid merchantId, Chain chain, CancellationToken cancellationToken = default);
-
     /// <summary>The single live (Waiting) invoice holding an address — for matching a confirmed deposit. Returned tracked.</summary>
     Task<PaymentIntentEntity?> FindWaitingByWalletAsync(Guid walletId, CancellationToken cancellationToken = default);
+
+    /// <summary>Staff lookup by the public reference shown on the pay page — for a manual fail. Returned tracked.</summary>
+    Task<PaymentIntentEntity?> FindByPublicReferenceAsync(Guid publicReference, CancellationToken cancellationToken = default);
 
     /// <summary>Whether a deposit has already resolved some intent — makes matching idempotent per deposit across redelivery.</summary>
     Task<bool> IsDepositMatchedAsync(Guid depositId, CancellationToken cancellationToken = default);

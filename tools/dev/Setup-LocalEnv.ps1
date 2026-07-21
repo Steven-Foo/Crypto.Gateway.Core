@@ -39,6 +39,7 @@ $modules = [ordered]@{
     "WithdrawalDbContext"     = "src/Gateway.Core/PaymentProcessing/Withdrawal/Infrastructure"
     "PaymentIntentDbContext"  = "src/Gateway.Core/PaymentProcessing/PaymentIntent/Infrastructure"
     "EnergyDbContext"         = "src/Gateway.Core/AssetManagement/Energy/Infrastructure"
+    "IdentityDbContext"       = "src/Gateway.Core/Platform/Identity/Infrastructure"
 }
 
 Write-Host "Waiting for SQL Server on $SqlHost ..." -ForegroundColor Cyan

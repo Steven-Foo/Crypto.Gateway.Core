@@ -8,6 +8,7 @@ using CryptoPaymentEngine.SharedKernel;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using StackExchange.Redis;
 
 namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Infrastructure;
 
@@ -29,6 +30,10 @@ public static class WalletModuleExtensions
         services.AddScoped<IWalletDirectory, WalletDirectory>();
         services.AddScoped<IPlatformWalletDirectory, PlatformWalletDirectory>();
         services.AddScoped<IDepositAddressProvisioner, WalletProvisioningService>();
+
+        // Requires IConnectionMultiplexer (AddRedisInfrastructure) — resolved lazily, so this registration
+        // is harmless in a host that never actually reserves a wallet (DI only constructs it on first use).
+        services.AddScoped<IWalletReservationLock, RedisWalletReservationLock>();
 
         // Bumps DepositsReceivedCount on the wallet a confirmed deposit landed on — only fires wherever the
         // Deposit module's outbox is actually dispatched (today: the MerchantGateway host); harmless, unused

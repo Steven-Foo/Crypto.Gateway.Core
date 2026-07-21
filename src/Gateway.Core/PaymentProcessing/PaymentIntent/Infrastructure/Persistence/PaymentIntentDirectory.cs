@@ -23,6 +23,7 @@ public sealed class PaymentIntentDirectory(PaymentIntentDbContext context, TimeP
         {
             PaymentIntentStatus.Matched => "confirmed",
             PaymentIntentStatus.Expired => "expired",
+            PaymentIntentStatus.Failed => "failed",
             _ => timeProvider.GetUtcNow() >= intent.ExpiresAt ? "expired" : "pending",
         };
 
@@ -34,4 +35,11 @@ public sealed class PaymentIntentDirectory(PaymentIntentDbContext context, TimeP
             status,
             intent.ExpiresAt);
     }
+
+    public Task<Guid?> FindMatchedDepositIdAsync(
+        Guid merchantId, string merchantTransactionId, CancellationToken cancellationToken = default) =>
+        context.PaymentIntents.AsNoTracking()
+            .Where(i => i.MerchantId == merchantId && i.MerchantTransactionId == merchantTransactionId)
+            .Select(i => i.MatchedDepositId)
+            .SingleOrDefaultAsync(cancellationToken);
 }

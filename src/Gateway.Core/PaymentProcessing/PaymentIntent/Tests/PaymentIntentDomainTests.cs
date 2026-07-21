@@ -1,5 +1,6 @@
 using System.Numerics;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Domain;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Events;
 using CryptoPaymentEngine.SharedKernel;
 using Shouldly;
 using Xunit;
@@ -99,5 +100,39 @@ public sealed class PaymentIntentDomainTests
         intent.MatchTo(Guid.CreateVersion7(), "0xtx", BigInteger.Parse("1000000"), Now);
         intent.Status.ShouldBe(PaymentIntentStatus.Expired);
         intent.MatchedDepositId.ShouldBeNull();
+    }
+
+    [Fact]
+    public void Failing_a_waiting_intent_succeeds_and_raises_PaymentIntentFailed()
+    {
+        var intent = NewWaiting();
+        var result = intent.Fail("merchant testing", Now);
+
+        result.IsSuccess.ShouldBeTrue();
+        intent.Status.ShouldBe(PaymentIntentStatus.Failed);
+        intent.DomainEvents.OfType<PaymentIntentFailed>().Single().Reason.ShouldBe("merchant testing");
+    }
+
+    [Fact]
+    public void Failing_an_already_matched_intent_is_rejected_not_silently_ignored()
+    {
+        var intent = NewWaiting();
+        intent.MatchTo(Guid.CreateVersion7(), "0xtx", BigInteger.Parse("1000000"), Now);
+
+        var result = intent.Fail("too late", Now);
+
+        result.IsFailure.ShouldBeTrue();
+        result.Error!.Code.ShouldBe(PaymentIntentErrors.InvalidStateTransition.Code);
+        intent.Status.ShouldBe(PaymentIntentStatus.Matched); // unchanged
+    }
+
+    [Fact]
+    public void Failing_an_already_expired_intent_is_rejected()
+    {
+        var intent = NewWaiting();
+        intent.Expire(Now);
+
+        intent.Fail("too late", Now).IsFailure.ShouldBeTrue();
+        intent.Status.ShouldBe(PaymentIntentStatus.Expired);
     }
 }

@@ -76,9 +76,9 @@ public sealed class MoneyInCompositionTests : IAsyncLifetime
         services.AddScoped<IIntegrationEventHandler<DepositConfirmed>, DepositConfirmedHandler>();
 
         // PaymentIntent: the SECOND handler for the same DepositConfirmed — the fan-out. This test drives
-        // the intent straight into the DB and never calls CreateAsync, so FindReusableAddressAsync (the
-        // only thing that touches IWalletDirectory) is never exercised — a stub just satisfies DI.
-        services.AddSingleton<IWalletDirectory>(new StubWalletDirectory());
+        // the intent straight into the DB and never calls CreateAsync, so it never exercises address
+        // reservation itself — only the release-on-match call the handler makes, hence the no-op lock.
+        services.AddSingleton<IWalletReservationLock>(new NoOpWalletReservationLock());
         services.AddScoped<IPaymentIntentRepository, PaymentIntentRepository>();
         services.AddScoped<IIntegrationEventHandler<DepositConfirmed>, PaymentIntentMatchHandler>();
 
@@ -219,17 +219,12 @@ public sealed class MoneyInCompositionTests : IAsyncLifetime
             Task.FromResult(Result.Success(netTarget));
     }
 
-    private sealed class StubWalletDirectory : IWalletDirectory
+    private sealed class NoOpWalletReservationLock : IWalletReservationLock
     {
-        public Task<WalletOwnership?> FindByAddressAsync(Chain chain, string address, CancellationToken cancellationToken = default) =>
-            Task.FromResult<WalletOwnership?>(null);
+        public Task<bool> TryReserveAsync(Guid walletId, string referenceId, TimeSpan ttl, CancellationToken cancellationToken = default) =>
+            Task.FromResult(true);
 
-        public Task<WalletOwnership?> FindByIdAsync(Guid walletId, CancellationToken cancellationToken = default) =>
-            Task.FromResult<WalletOwnership?>(null);
-
-        public Task<IReadOnlyList<AvailableWallet>> ListAssignedWalletsAsync(
-            Guid merchantId, Chain chain, CancellationToken cancellationToken = default) =>
-            Task.FromResult<IReadOnlyList<AvailableWallet>>([]);
+        public Task ReleaseAsync(Guid walletId, CancellationToken cancellationToken = default) => Task.CompletedTask;
     }
 
     private sealed class NoOpLock : IDistributedLockFactory

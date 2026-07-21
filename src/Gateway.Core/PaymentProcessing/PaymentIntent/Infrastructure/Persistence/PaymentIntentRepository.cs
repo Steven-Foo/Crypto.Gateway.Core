@@ -1,46 +1,30 @@
-using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Domain;
-using CryptoPaymentEngine.SharedKernel;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
 using PaymentIntentEntity = CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Domain.PaymentIntent;
 
 namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infrastructure.Persistence;
 
-public sealed class PaymentIntentRepository(PaymentIntentDbContext context, IWalletDirectory walletDirectory) : IPaymentIntentRepository
+/// <summary>
+/// Wallet candidate selection (who's free to reuse) now lives in the Application layer, walking
+/// <c>IWalletDirectory</c> and reserving via <c>IWalletReservationLock</c> — this repository is persistence
+/// only: idempotency lookups, the insert whose unique indexes are the money-safety backstop, and expiry.
+/// </summary>
+public sealed class PaymentIntentRepository(PaymentIntentDbContext context) : IPaymentIntentRepository
 {
     public Task<PaymentIntentEntity?> FindByMerchantReferenceAsync(
         Guid merchantId, string merchantTransactionId, CancellationToken cancellationToken = default) =>
         context.PaymentIntents.AsNoTracking()
             .SingleOrDefaultAsync(i => i.MerchantId == merchantId && i.MerchantTransactionId == merchantTransactionId, cancellationToken);
 
-    public async Task<ReusableAddress?> FindReusableAddressAsync(
-        Guid merchantId, Chain chain, CancellationToken cancellationToken = default)
-    {
-        // Candidates come from the Wallet module (Contracts-only, §4.5) rather than this module's own
-        // invoice history, so a freshly pre-provisioned pool (e.g. the 10 wallets minted at merchant
-        // onboarding) is visible here even before any of them has ever had an invoice created against it.
-        // Ordered by deposit activity descending — the non-money-duplicating proxy for "closest to a sweep
-        // threshold" (see Wallet.DepositsReceivedCount).
-        var candidates = await walletDirectory.ListAssignedWalletsAsync(merchantId, chain, cancellationToken);
-        if (candidates.Count == 0)
-            return null;
-
-        // An address is free once no invoice is Waiting on it (the expiry sweep flips lapsed ones out).
-        var busy = await context.PaymentIntents.AsNoTracking()
-            .Where(i => i.Status == PaymentIntentStatus.Waiting)
-            .Select(i => i.WalletId)
-            .ToListAsync(cancellationToken);
-        var busySet = busy.Count == 0 ? [] : busy.ToHashSet();
-
-        var free = candidates.FirstOrDefault(w => !busySet.Contains(w.WalletId));
-        return free is null ? null : new ReusableAddress(free.WalletId, free.Address);
-    }
-
     public Task<PaymentIntentEntity?> FindWaitingByWalletAsync(Guid walletId, CancellationToken cancellationToken = default) =>
         context.PaymentIntents
             .SingleOrDefaultAsync(i => i.WalletId == walletId && i.Status == PaymentIntentStatus.Waiting, cancellationToken);
+
+    public Task<PaymentIntentEntity?> FindByPublicReferenceAsync(Guid publicReference, CancellationToken cancellationToken = default) =>
+        context.PaymentIntents
+            .SingleOrDefaultAsync(i => i.PublicReference == publicReference, cancellationToken);
 
     public Task<bool> IsDepositMatchedAsync(Guid depositId, CancellationToken cancellationToken = default) =>
         context.PaymentIntents.AnyAsync(i => i.MatchedDepositId == depositId, cancellationToken);

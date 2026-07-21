@@ -42,10 +42,9 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
     private sealed class MintCounter { public int Value; }
 
     /// <summary>
-    /// Stands in for the Wallet module's real directory. <see cref="PaymentIntentRepository"/> now sources
-    /// reuse candidates from here (so a pre-provisioned pool is visible before any invoice ever touches a
-    /// wallet) rather than from this module's own PaymentIntent history — this fake mirrors that by
-    /// recording whatever the fake provisioner "mints" below.
+    /// Stands in for the Wallet module's real directory. <see cref="PaymentIntentService"/> now sources
+    /// reuse candidates from here directly (so a pre-provisioned pool is visible before any invoice ever
+    /// touches a wallet) — this fake mirrors that by recording whatever the fake provisioner "mints" below.
     /// </summary>
     private sealed class FakeWalletDirectory : IWalletDirectory
     {
@@ -62,6 +61,27 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
         public Task<IReadOnlyList<AvailableWallet>> ListAssignedWalletsAsync(
             Guid merchantId, Chain chain, CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<AvailableWallet>>(_wallets.AsReadOnly());
+    }
+
+    /// <summary>
+    /// In-memory stand-in for the Redis-backed reservation — real claim/release semantics (a walletId can
+    /// only be held once at a time), no TTL expiry (tests that need "already reserved" pre-seed a claim
+    /// directly via <see cref="ForceReserve"/> rather than waiting out a clock).
+    /// </summary>
+    private sealed class FakeWalletReservationLock : IWalletReservationLock
+    {
+        private readonly HashSet<Guid> _held = [];
+
+        public void ForceReserve(Guid walletId) => _held.Add(walletId);
+
+        public Task<bool> TryReserveAsync(Guid walletId, string referenceId, TimeSpan ttl, CancellationToken cancellationToken = default) =>
+            Task.FromResult(_held.Add(walletId));
+
+        public Task ReleaseAsync(Guid walletId, CancellationToken cancellationToken = default)
+        {
+            _held.Remove(walletId);
+            return Task.CompletedTask;
+        }
     }
 
     private static IDepositAddressProvisioner Provisioner(MintCounter counter, FakeWalletDirectory directory)
@@ -90,13 +110,18 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
         return fees;
     }
 
-    private static PaymentIntentService Service(PaymentIntentDbContext context, IDepositAddressProvisioner provisioner, IWalletDirectory directory) =>
-        new(new PaymentIntentRepository(context, directory), provisioner, NoFees(),
+    private static PaymentIntentService Service(
+        PaymentIntentDbContext context, IDepositAddressProvisioner provisioner, IWalletDirectory directory, IWalletReservationLock? walletLock = null) =>
+        new(new PaymentIntentRepository(context), directory, walletLock ?? new FakeWalletReservationLock(), provisioner, NoFees(),
             Options.Create(new PaymentIntentOptions { ExpiryMinutes = 30 }),
             TimeProvider.System, NullLogger<PaymentIntentService>.Instance);
 
-    private static PaymentIntentMatchHandler Handler(PaymentIntentDbContext context, IWalletDirectory directory) =>
-        new(new PaymentIntentRepository(context, directory), TimeProvider.System, NullLogger<PaymentIntentMatchHandler>.Instance);
+    private static PaymentIntentMatchHandler Handler(PaymentIntentDbContext context, IWalletReservationLock? walletLock = null) =>
+        new(new PaymentIntentRepository(context), walletLock ?? new FakeWalletReservationLock(),
+            TimeProvider.System, NullLogger<PaymentIntentMatchHandler>.Instance);
+
+    private static PaymentIntentAdminService AdminService(PaymentIntentDbContext context, IWalletReservationLock walletLock) =>
+        new(new PaymentIntentRepository(context), walletLock, TimeProvider.System, NullLogger<PaymentIntentAdminService>.Instance);
 
     private static async Task<Guid> WalletOfAsync(Guid reference)
     {
@@ -168,7 +193,7 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
         // Match A → its address is free again.
         await using (var context = Context())
         {
-            var intent = await new PaymentIntentRepository(context, directory).FindWaitingByWalletAsync(walletA, Ct);
+            var intent = await new PaymentIntentRepository(context).FindWaitingByWalletAsync(walletA, Ct);
             intent!.MatchTo(Guid.CreateVersion7(), "0xtx", OneUsdt, DateTimeOffset.UtcNow);
             await context.SaveChangesAsync(Ct);
         }
@@ -189,7 +214,7 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
         var walletId = await WalletOfAsync(reference);
 
         await using (var context = Context())
-            await Handler(context, directory).HandleAsync(DepositTo(walletId, "1000000"), Ct);
+            await Handler(context).HandleAsync(DepositTo(walletId, "1000000"), Ct);
 
         await using var verify = Context();
         var intent = await verify.PaymentIntents.SingleAsync(i => i.PublicReference == reference, Ct);
@@ -208,9 +233,9 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
         var walletId = await WalletOfAsync(a);
         var deposit = DepositTo(walletId, "1000000");
 
-        await using (var context = Context()) await Handler(context, directory).HandleAsync(deposit, Ct); // matches A, frees address
+        await using (var context = Context()) await Handler(context).HandleAsync(deposit, Ct); // matches A, frees address
         await CreateAsync(provisioner, directory, "tx-b2");                                                // B reuses the address
-        await using (var context = Context()) await Handler(context, directory).HandleAsync(deposit, Ct); // redeliver the OLD deposit
+        await using (var context = Context()) await Handler(context).HandleAsync(deposit, Ct); // redeliver the OLD deposit
 
         counter.Value.ShouldBe(1); // B reused A's address
         await using var verify = Context();
@@ -230,7 +255,7 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
         var walletId = await WalletOfAsync(reference);
 
         await using (var context = Context())
-            (await new PaymentIntentRepository(context, directory).ExpireStaleAsync(DateTimeOffset.UtcNow.AddHours(1), 100, Ct)).ShouldBe(1);
+            (await new PaymentIntentRepository(context).ExpireStaleAsync(DateTimeOffset.UtcNow.AddHours(1), 100, Ct)).ShouldBe(1);
 
         await CreateAsync(provisioner, directory, "tx-after-exp");
 
@@ -239,10 +264,11 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
         (await verify.PaymentIntents.SingleAsync(i => i.MerchantTransactionId == "tx-after-exp", Ct)).WalletId.ShouldBe(walletId);
     }
 
-    private static async Task<Guid> CreateAsync(IDepositAddressProvisioner provisioner, FakeWalletDirectory directory, string reference)
+    private static async Task<Guid> CreateAsync(
+        IDepositAddressProvisioner provisioner, FakeWalletDirectory directory, string reference, IWalletReservationLock? walletLock = null)
     {
         await using var context = Context();
-        var result = await Service(context, provisioner, directory).CreateAsync(
+        var result = await Service(context, provisioner, directory, walletLock).CreateAsync(
             new CreatePaymentIntentCommand(Merchant, reference, Chain.Tron, Asset, OneUsdt, null), Ct);
         result.IsSuccess.ShouldBeTrue();
         return result.Value.Reference;
@@ -251,4 +277,90 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
     private static DepositConfirmed DepositTo(Guid walletId, string amountBaseUnits) =>
         new(Guid.CreateVersion7(), DateTimeOffset.UtcNow, Guid.CreateVersion7(), walletId, Merchant, Asset,
             amountBaseUnits, Chain.Tron, "0x" + Guid.NewGuid().ToString("N"), 0, DateTimeOffset.UtcNow);
+
+    [Fact]
+    public async Task A_reserved_busiest_wallet_is_skipped_in_favour_of_the_next_free_one()
+    {
+        // Two pre-provisioned wallets; the first (busiest, listed first) is already held by another
+        // in-flight invoice's reservation. Creation must walk past it to the second rather than minting new.
+        var counter = new MintCounter();
+        var directory = new FakeWalletDirectory();
+        var walletBusy = Guid.CreateVersion7();
+        directory.Register(walletBusy, "TWalletBusy");
+        directory.Register(Guid.CreateVersion7(), "TWalletFree");
+
+        var sharedLock = new FakeWalletReservationLock();
+        sharedLock.ForceReserve(walletBusy); // simulates another in-flight invoice already holding it
+
+        await using var context = Context();
+        var provisioner = Provisioner(counter, directory);
+
+        var result = await Service(context, provisioner, directory, sharedLock).CreateAsync(
+            new CreatePaymentIntentCommand(Merchant, "tx-contended", Chain.Tron, Asset, OneUsdt, null), Ct);
+
+        result.IsSuccess.ShouldBeTrue();
+        counter.Value.ShouldBe(0); // reused an existing wallet — never minted
+        result.Value.Address.ShouldBe("TWalletFree");
+    }
+
+    [Fact]
+    public async Task A_confirmed_match_releases_the_wallet_reservation()
+    {
+        var counter = new MintCounter();
+        var directory = new FakeWalletDirectory();
+        var sharedLock = new FakeWalletReservationLock();
+        var provisioner = Provisioner(counter, directory);
+
+        var reference = await CreateAsync(provisioner, directory, "tx-release-match", sharedLock);
+        var walletId = await WalletOfAsync(reference);
+
+        await using (var context = Context())
+            await Handler(context, sharedLock).HandleAsync(DepositTo(walletId, "1000000"), Ct);
+
+        (await sharedLock.TryReserveAsync(walletId, "someone-else", TimeSpan.FromMinutes(1), Ct)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Manually_failing_a_waiting_intent_releases_its_wallet_and_marks_it_failed()
+    {
+        var counter = new MintCounter();
+        var directory = new FakeWalletDirectory();
+        var sharedLock = new FakeWalletReservationLock();
+        var provisioner = Provisioner(counter, directory);
+
+        var reference = await CreateAsync(provisioner, directory, "tx-fail", sharedLock);
+        var walletId = await WalletOfAsync(reference);
+
+        await using (var context = Context())
+        {
+            var result = await AdminService(context, sharedLock).FailAsync(
+                new FailPaymentIntentCommand(reference, "merchant testing"), Ct);
+            result.IsSuccess.ShouldBeTrue();
+        }
+
+        await using var verify = Context();
+        (await verify.PaymentIntents.SingleAsync(i => i.PublicReference == reference, Ct)).Status.ShouldBe(PaymentIntentStatus.Failed);
+        (await sharedLock.TryReserveAsync(walletId, "someone-else", TimeSpan.FromMinutes(1), Ct)).ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Failing_an_already_matched_intent_returns_a_conflict_and_leaves_the_reservation_alone()
+    {
+        var counter = new MintCounter();
+        var directory = new FakeWalletDirectory();
+        var sharedLock = new FakeWalletReservationLock();
+        var provisioner = Provisioner(counter, directory);
+
+        var reference = await CreateAsync(provisioner, directory, "tx-fail-too-late", sharedLock);
+        var walletId = await WalletOfAsync(reference);
+
+        await using (var context = Context())
+            await Handler(context, sharedLock).HandleAsync(DepositTo(walletId, "1000000"), Ct); // matches + releases
+
+        await using var admin = Context();
+        var result = await AdminService(admin, sharedLock).FailAsync(new FailPaymentIntentCommand(reference, "too late"), Ct);
+
+        result.IsFailure.ShouldBeTrue();
+        result.Error!.Code.ShouldBe(PaymentIntentErrors.InvalidStateTransition.Code);
+    }
 }

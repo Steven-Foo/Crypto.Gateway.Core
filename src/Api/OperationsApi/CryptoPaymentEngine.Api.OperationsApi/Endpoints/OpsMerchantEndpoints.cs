@@ -1,5 +1,6 @@
 using System.Net;
 using CryptoPaymentEngine.Api.OperationsApi.Models;
+using CryptoPaymentEngine.Api.OperationsApi.Security;
 using CryptoPaymentEngine.Api.OperationsApi.Services;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Application;
@@ -23,13 +24,16 @@ public static class OpsMerchantEndpoints
 
     public static void MapOpsMerchantApi(this IEndpointRouteBuilder app)
     {
+        // Reads — any authenticated staff (Admin or Viewer).
         app.MapGet("/api/v1/ops/merchants", ListMerchantsAsync);
         app.MapGet("/api/v1/ops/merchants/{id:guid}", GetMerchantAsync);
-        app.MapPost("/api/v1/ops/merchants", CreateMerchantAsync);
-        app.MapPatch("/api/v1/ops/merchants/{id:guid}/status", SetStatusAsync);
-        app.MapPost("/api/v1/ops/merchants/{id:guid}/regenerate-key", RegenerateKeyAsync);
         app.MapGet("/api/v1/ops/merchants/{id:guid}/allowed-ips", GetAllowedIpsAsync);
-        app.MapPut("/api/v1/ops/merchants/{id:guid}/allowed-ips", UpdateAllowedIpsAsync);
+
+        // Mutations — Admin only.
+        app.MapPost("/api/v1/ops/merchants", CreateMerchantAsync).RequireAdmin();
+        app.MapPatch("/api/v1/ops/merchants/{id:guid}/status", SetStatusAsync).RequireAdmin();
+        app.MapPost("/api/v1/ops/merchants/{id:guid}/regenerate-key", RegenerateKeyAsync).RequireAdmin();
+        app.MapPut("/api/v1/ops/merchants/{id:guid}/allowed-ips", UpdateAllowedIpsAsync).RequireAdmin();
     }
 
     private static async Task<IResult> ListMerchantsAsync(

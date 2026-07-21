@@ -17,6 +17,7 @@ public static class NotificationModuleExtensions
         services.AddHttpClient(HttpWebhookSender.HttpClientName, client => client.Timeout = TimeSpan.FromSeconds(10));
         services.AddScoped<IWebhookSender, HttpWebhookSender>();
         services.AddScoped<IIntegrationEventHandler<PaymentIntentMatched>, DepositCallbackHandler>();
+        services.AddScoped<IIntegrationEventHandler<PaymentIntentFailed>, PaymentIntentFailedCallbackHandler>();
         return services;
     }
 }

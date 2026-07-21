@@ -32,14 +32,24 @@ public interface IPaymentIntentService
     Task<Result<PaymentIntentResult>> CreateAsync(CreatePaymentIntentCommand command, CancellationToken cancellationToken = default);
 }
 
+/// <summary>A wallet address available to hold this invoice, reused or freshly minted.</summary>
+public sealed record ReusableAddress(Guid WalletId, string Address);
+
 /// <summary>
-/// Creates invoices and assigns each a deposit address, reusing a free one from the merchant's pool before
-/// minting a new one — the concentration strategy that keeps address count (and therefore sweep gas) low.
-/// No distributed lock: the DB unique indexes are the arbiter (§7.3). A lost address race retries with a
-/// fresh address; a duplicate reference returns the winner. Application holds no infrastructure (§4.4).
+/// Creates invoices and assigns each a deposit address, reusing the merchant's busiest wallet first — the
+/// concentration strategy that keeps address count (and therefore sweep gas) low. Address candidates come
+/// from the Wallet module's directory (Contracts-only, §4.5), sorted by deposit activity descending; each is
+/// tried non-blocking against <see cref="IWalletReservationLock"/> until one is free, so a request never mints
+/// a new wallet just because the busiest one happened to be reserved a moment earlier. The reservation's TTL
+/// spans the invoice's full Waiting + grace window, so it needs no separate extend step — it lapses on its
+/// own exactly when the invoice would anyway. The DB's filtered UNIQUE index on the live wallet remains the
+/// money-safety backstop if the reservation is ever lost (§7.3) — that degrades to "mint an extra wallet,"
+/// never to two invoices sharing an address.
 /// </summary>
 public sealed class PaymentIntentService(
     IPaymentIntentRepository repository,
+    IWalletDirectory walletDirectory,
+    IWalletReservationLock walletLock,
     IDepositAddressProvisioner addressProvisioner,
     IMerchantFeeSchedule feeSchedule,
     IOptions<PaymentIntentOptions> options,
@@ -64,13 +74,17 @@ public sealed class PaymentIntentService(
             return Result.Failure<PaymentIntentResult>(grossResult.Error!);
 
         var expectedAmount = grossResult.Value;
+        var reservationTtl = TimeSpan.FromMinutes(_options.ExpiryMinutes + _options.GraceMinutes);
 
-        // 3. Reserve an address and insert. First attempt reuses a free address; retries mint a fresh one.
+        // 3. Reserve an address and insert. First attempt reuses a free address; retries mint a fresh one —
+        //    only reachable now via the rare DB-level AddressBusy backstop, since the reservation lock
+        //    already prevented the ordinary concurrent-request race before we ever get here.
         for (var attempt = 0; attempt < _options.MaxProvisionRetries; attempt++)
         {
             var now = timeProvider.GetUtcNow();
 
-            var address = await AcquireAddressAsync(command.MerchantId, command.Chain, forceNew: attempt > 0, cancellationToken);
+            var address = await AcquireAddressAsync(
+                command.MerchantId, command.Chain, command.MerchantTransactionId, reservationTtl, forceNew: attempt > 0, cancellationToken);
             if (address.IsFailure)
                 return Result.Failure<PaymentIntentResult>(address.Error!);
 
@@ -80,7 +94,10 @@ public sealed class PaymentIntentService(
                 now.AddMinutes(_options.ExpiryMinutes), now.AddMinutes(_options.ExpiryMinutes + _options.GraceMinutes), now);
 
             if (intentResult.IsFailure)
+            {
+                await walletLock.ReleaseAsync(address.Value.WalletId, cancellationToken);
                 return Result.Failure<PaymentIntentResult>(intentResult.Error!);
+            }
 
             var outcome = await repository.TryAddAsync(intentResult.Value, cancellationToken);
             switch (outcome)
@@ -89,13 +106,17 @@ public sealed class PaymentIntentService(
                     return Result.Success(ToResult(intentResult.Value));
 
                 case PaymentIntentAddOutcome.DuplicateReference:
+                    await walletLock.ReleaseAsync(address.Value.WalletId, cancellationToken); // reserved for nothing — give it back
                     var winner = await repository.FindByMerchantReferenceAsync(command.MerchantId, command.MerchantTransactionId, cancellationToken);
                     return winner is not null
                         ? Result.Success(ToResult(winner))
                         : Result.Failure<PaymentIntentResult>(PaymentIntentErrors.DuplicateReference);
 
                 case PaymentIntentAddOutcome.AddressBusy:
-                    logger.LogDebug("Address {WalletId} taken concurrently; retrying with a fresh address.", address.Value.WalletId);
+                    // Should be near-impossible with the reservation lock in place — a race the lock missed
+                    // (e.g. a lost/expired reservation). Give up this wallet and mint a fresh one.
+                    await walletLock.ReleaseAsync(address.Value.WalletId, cancellationToken);
+                    logger.LogWarning("Address {WalletId} was busy despite a held reservation; minting a fresh one.", address.Value.WalletId);
                     continue;
             }
         }
@@ -103,19 +124,28 @@ public sealed class PaymentIntentService(
         return Result.Failure<PaymentIntentResult>(PaymentIntentErrors.AddressUnavailable);
     }
 
-    private async Task<Result<ReusableAddress>> AcquireAddressAsync(Guid merchantId, Chain chain, bool forceNew, CancellationToken cancellationToken)
+    private async Task<Result<ReusableAddress>> AcquireAddressAsync(
+        Guid merchantId, Chain chain, string referenceId, TimeSpan reservationTtl, bool forceNew, CancellationToken cancellationToken)
     {
         if (!forceNew)
         {
-            var reusable = await repository.FindReusableAddressAsync(merchantId, chain, cancellationToken);
-            if (reusable is not null)
-                return Result.Success(reusable);
+            // Busiest-first: the wallet closest to a sweep threshold gets reused before an idle one.
+            var candidates = await walletDirectory.ListAssignedWalletsAsync(merchantId, chain, cancellationToken);
+            foreach (var candidate in candidates)
+            {
+                if (await walletLock.TryReserveAsync(candidate.WalletId, referenceId, reservationTtl, cancellationToken))
+                    return Result.Success(new ReusableAddress(candidate.WalletId, candidate.Address));
+            }
         }
 
+        // Pool exhausted (every candidate already reserved) or a forced retry — mint a new one. It has never
+        // been reserved by anyone, so the claim below is expected to always succeed.
         var provisioned = await addressProvisioner.ProvisionDepositAddressAsync(merchantId, chain, cancellationToken);
-        return provisioned.IsFailure
-            ? Result.Failure<ReusableAddress>(provisioned.Error!)
-            : Result.Success(new ReusableAddress(provisioned.Value.WalletId, provisioned.Value.Address));
+        if (provisioned.IsFailure)
+            return Result.Failure<ReusableAddress>(provisioned.Error!);
+
+        await walletLock.TryReserveAsync(provisioned.Value.WalletId, referenceId, reservationTtl, cancellationToken);
+        return Result.Success(new ReusableAddress(provisioned.Value.WalletId, provisioned.Value.Address));
     }
 
     private static PaymentIntentResult ToResult(PaymentIntentEntity intent) =>

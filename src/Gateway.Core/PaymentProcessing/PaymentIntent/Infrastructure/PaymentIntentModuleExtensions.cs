@@ -35,6 +35,7 @@ public static class PaymentIntentModuleExtensions
 
         services.AddScoped<IPaymentIntentRepository, PaymentIntentRepository>();
         services.AddScoped<IPaymentIntentService, PaymentIntentService>();
+        services.AddScoped<IPaymentIntentAdminService, PaymentIntentAdminService>();
         services.AddScoped<IPaymentIntentDirectory, PaymentIntentDirectory>();
 
         // Consumes Deposit's confirmation event to match invoices (§7.5). Coexists with the Ledger's own

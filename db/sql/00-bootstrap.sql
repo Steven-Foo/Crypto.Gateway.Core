@@ -61,6 +61,7 @@ INSERT INTO @schemas (name) VALUES
     (N'energy'),          -- TRON energy/bandwidth monitoring    (P2)
     (N'sweep'),           --                                     (P2)
     (N'platform'),        -- AuditLog, Configuration, Jobs       (P2)
+    (N'identity'),        -- Staff (Ops) accounts + sessions     (P2)
     (N'settlement'),      --                                     (P3)
     (N'reconciliation');  --                                     (P3)
 

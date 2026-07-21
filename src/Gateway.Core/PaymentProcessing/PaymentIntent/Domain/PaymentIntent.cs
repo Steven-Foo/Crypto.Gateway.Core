@@ -166,4 +166,24 @@ public sealed class PaymentIntent : Entity<Guid>
         UpdatedAt = now;
         return Result.Success();
     }
+
+    /// <summary>
+    /// Staff-initiated cancellation (e.g. a test invoice). Unlike <see cref="Expire"/>/<see cref="MatchTo"/>
+    /// this is an explicit action with a caller expecting feedback, so an invalid transition is a failure,
+    /// not a silent no-op — only a still-<see cref="PaymentIntentStatus.Waiting"/> invoice can be failed;
+    /// no money has moved for it, so there is nothing to reverse in the Ledger.
+    /// </summary>
+    public Result Fail(string reason, DateTimeOffset now)
+    {
+        if (Status != PaymentIntentStatus.Waiting)
+            return Result.Failure(PaymentIntentErrors.InvalidStateTransition);
+
+        Status = PaymentIntentStatus.Failed;
+        UpdatedAt = now;
+
+        Raise(new PaymentIntentFailed(
+            Guid.CreateVersion7(), now, MerchantId, PublicReference, MerchantTransactionId, CallbackUrl, reason, now));
+
+        return Result.Success();
+    }
 }

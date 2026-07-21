@@ -61,8 +61,9 @@ the repo root; `-s` is always the host above.
 | `70-withdrawal.sql` | `WithdrawalDbContext` | `src/Gateway.Core/PaymentProcessing/Withdrawal/Infrastructure` |
 | `80-paymentintent.sql` | `PaymentIntentDbContext` | `src/Gateway.Core/PaymentProcessing/PaymentIntent/Infrastructure` |
 | `90-energy.sql` | `EnergyDbContext` | `src/Gateway.Core/AssetManagement/Energy/Infrastructure` |
+| `100-identity.sql` | `IdentityDbContext` | `src/Gateway.Core/Platform/Identity/Infrastructure` |
 
-Apply in that order (`10` → `90`) — later modules only ever reference earlier ones by opaque
+Apply in that order (`10` → `100`) — later modules only ever reference earlier ones by opaque
 `Guid`, never a cross-schema FK (§4.5), but keeping the numeric order matches how the modules
 were built and is a reasonable default.
 

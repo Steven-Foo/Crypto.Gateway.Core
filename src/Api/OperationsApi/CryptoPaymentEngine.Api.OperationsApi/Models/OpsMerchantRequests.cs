@@ -18,3 +18,8 @@ public sealed class UpdateAllowedIpsRequest
 {
     [Required] public List<string> IpAddresses { get; init; } = [];
 }
+
+public sealed class FailPaymentIntentRequest
+{
+    [Required, MaxLength(512)] public string Reason { get; init; } = null!;
+}

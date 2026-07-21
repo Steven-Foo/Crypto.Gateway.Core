@@ -17,4 +17,12 @@ public sealed record PaymentIntentView(
 public interface IPaymentIntentDirectory
 {
     Task<PaymentIntentView?> FindByPublicReferenceAsync(Guid publicReference, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Resolves a merchant's own transaction reference to the confirmed deposit it matched, if any — the
+    /// bridge an ops transaction search needs to go from "the string a merchant gave us" to the Ledger's
+    /// <c>ReferenceId</c>, without the Ledger ever needing to know PaymentIntent exists (§4.5). Null if no
+    /// intent exists for that reference, or it exists but hasn't matched a deposit yet.
+    /// </summary>
+    Task<Guid?> FindMatchedDepositIdAsync(Guid merchantId, string merchantTransactionId, CancellationToken cancellationToken = default);
 }

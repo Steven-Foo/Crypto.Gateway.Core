@@ -61,4 +61,106 @@ public sealed class LedgerQueryTests : LedgerTestHost
         (await query.GetMerchantBalanceAsync(Merchant, Guid.CreateVersion7(), Ct)).ShouldBe(BigInteger.Zero); // other asset
         (await query.GetMerchantBalanceAsync(Guid.CreateVersion7(), Asset, Ct)).ShouldBe(BigInteger.Zero);    // other merchant
     }
+
+    [Fact]
+    public async Task Journal_history_shows_a_deposit_as_a_credit_on_the_merchant_liability_line()
+    {
+        var merchant = Guid.CreateVersion7();
+        await using (var ctx = Context())
+            (await Poster(ctx).CreditDepositAsync(new CreditDepositCommand(Guid.CreateVersion7(), merchant, Asset, Deposited), Ct))
+                .IsSuccess.ShouldBeTrue();
+
+        await using var verify = Context();
+        var (items, total) = await new LedgerQuery(verify).GetJournalsAsync(merchant, null, null, null, 1, 50, Ct);
+
+        total.ShouldBe(1);
+        var journal = items.Single();
+        journal.ReferenceType.ShouldBe("Deposit");
+        journal.Direction.ShouldBe("Credit");
+        journal.Amount.ShouldBe(Deposited);
+    }
+
+    [Fact]
+    public async Task Journal_history_is_paged_newest_first_and_isolated_per_merchant()
+    {
+        var merchant = Guid.CreateVersion7();
+        var other = Guid.CreateVersion7();
+
+        await using (var ctx = Context())
+        {
+            var poster = Poster(ctx);
+            await poster.CreditDepositAsync(new CreditDepositCommand(Guid.CreateVersion7(), merchant, Asset, Deposited), Ct);
+            await poster.CreditDepositAsync(new CreditDepositCommand(Guid.CreateVersion7(), merchant, Asset, Amount), Ct);
+            await poster.CreditDepositAsync(new CreditDepositCommand(Guid.CreateVersion7(), other, Asset, Deposited), Ct);
+        }
+
+        await using var verify = Context();
+        var (items, total) = await new LedgerQuery(verify).GetJournalsAsync(merchant, null, null, null, 1, 1, Ct);
+
+        total.ShouldBe(2); // the other merchant's journal is excluded from the count
+        items.Count.ShouldBe(1); // page size respected
+    }
+
+    [Fact]
+    public async Task No_merchant_filter_returns_every_merchants_journals()
+    {
+        var merchantA = Guid.CreateVersion7();
+        var merchantB = Guid.CreateVersion7();
+
+        await using (var ctx = Context())
+        {
+            var poster = Poster(ctx);
+            await poster.CreditDepositAsync(new CreditDepositCommand(Guid.CreateVersion7(), merchantA, Asset, Deposited), Ct);
+            await poster.CreditDepositAsync(new CreditDepositCommand(Guid.CreateVersion7(), merchantB, Asset, Amount), Ct);
+        }
+
+        await using var verify = Context();
+        var (items, total) = await new LedgerQuery(verify).GetJournalsAsync(null, null, null, null, 1, 50, Ct);
+
+        total.ShouldBeGreaterThanOrEqualTo(2);
+        items.ShouldContain(i => i.Amount == Deposited);
+        items.ShouldContain(i => i.Amount == Amount);
+    }
+
+    [Fact]
+    public async Task A_date_range_excludes_journals_outside_it()
+    {
+        var merchant = Guid.CreateVersion7();
+        await using (var ctx = Context())
+            await Poster(ctx).CreditDepositAsync(new CreditDepositCommand(Guid.CreateVersion7(), merchant, Asset, Deposited), Ct);
+
+        await using var verify = Context();
+        var query = new LedgerQuery(verify);
+
+        var future = DateTimeOffset.UtcNow.AddDays(1);
+        var (futureItems, futureTotal) = await query.GetJournalsAsync(merchant, null, future, null, 1, 50, Ct);
+        futureTotal.ShouldBe(0);
+        futureItems.ShouldBeEmpty();
+
+        var past = DateTimeOffset.UtcNow.AddDays(-1);
+        var (pastItems, pastTotal) = await query.GetJournalsAsync(merchant, null, past, null, 1, 50, Ct);
+        pastTotal.ShouldBe(1);
+        pastItems.ShouldHaveSingleItem();
+    }
+
+    [Fact]
+    public async Task A_referenceId_filter_returns_only_that_journal()
+    {
+        var merchant = Guid.CreateVersion7();
+        var depositId = Guid.CreateVersion7();
+
+        await using (var ctx = Context())
+        {
+            var poster = Poster(ctx);
+            await poster.CreditDepositAsync(new CreditDepositCommand(depositId, merchant, Asset, Deposited), Ct);
+            await poster.CreditDepositAsync(new CreditDepositCommand(Guid.CreateVersion7(), merchant, Asset, Amount), Ct);
+        }
+
+        await using var verify = Context();
+        var (items, total) = await new LedgerQuery(verify).GetJournalsAsync(merchant, depositId, null, null, 1, 50, Ct);
+
+        total.ShouldBe(1);
+        items.Single().ReferenceId.ShouldBe(depositId);
+        items.Single().Amount.ShouldBe(Deposited);
+    }
 }

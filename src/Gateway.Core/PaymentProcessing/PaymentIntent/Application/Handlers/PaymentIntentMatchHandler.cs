@@ -1,5 +1,6 @@
 using System.Globalization;
 using System.Numerics;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Events;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Application.Abstractions;
 using CryptoPaymentEngine.SharedKernel;
@@ -17,6 +18,7 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Appli
 /// </summary>
 public sealed class PaymentIntentMatchHandler(
     IPaymentIntentRepository repository,
+    IWalletReservationLock walletLock,
     TimeProvider timeProvider,
     ILogger<PaymentIntentMatchHandler> logger) : IIntegrationEventHandler<DepositConfirmed>
 {
@@ -32,6 +34,10 @@ public sealed class PaymentIntentMatchHandler(
         var amount = BigInteger.Parse(@event.AmountBaseUnits, CultureInfo.InvariantCulture);
         intent.MatchTo(@event.DepositId, @event.TransactionHash, amount, timeProvider.GetUtcNow());
         await repository.SaveChangesAsync(cancellationToken);
+
+        // Resolved — free the wallet immediately rather than waiting out the reservation's TTL, so the next
+        // invoice can reuse it right away.
+        await walletLock.ReleaseAsync(intent.WalletId, cancellationToken);
 
         logger.LogInformation(
             "Payment intent {Reference} matched to deposit {DepositId} (amount matched: {Matched}).",

@@ -31,4 +31,10 @@ public static class PaymentIntentErrors
 
     public static readonly Error AddressUnavailable =
         Error.Conflict("payment_intent.address_unavailable", "Could not reserve a deposit address; retry shortly.");
+
+    public static readonly Error NotFound =
+        Error.NotFound("payment_intent.not_found", "Payment intent not found.");
+
+    public static readonly Error InvalidStateTransition =
+        Error.Conflict("payment_intent.invalid_state_transition", "Only a Waiting payment intent can be failed.");
 }
