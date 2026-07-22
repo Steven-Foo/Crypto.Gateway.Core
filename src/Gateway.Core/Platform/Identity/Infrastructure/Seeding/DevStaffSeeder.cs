@@ -16,7 +16,6 @@ namespace CryptoPaymentEngine.Gateway.Core.Platform.Identity.Infrastructure.Seed
 public sealed class DevStaffSeeder(
     IServiceScopeFactory scopeFactory,
     IOptions<DevStaffSeedOptions> options,
-    IStaffPasswordHasher hasher,
     TimeProvider timeProvider,
     ILogger<DevStaffSeeder> logger) : IHostedService
 {
@@ -34,8 +33,12 @@ public sealed class DevStaffSeeder(
 
         try
         {
+            // IHostedService is always singleton — IStaffUserRepository/IStaffPasswordHasher are scoped
+            // (EF Core DbContext underneath), so both must come from a scope created here, not the
+            // constructor. Same convention as DevMerchantSeeder.
             await using var scope = scopeFactory.CreateAsyncScope();
             var repository = scope.ServiceProvider.GetRequiredService<IStaffUserRepository>();
+            var hasher = scope.ServiceProvider.GetRequiredService<IStaffPasswordHasher>();
 
             if (await repository.UsernameExistsAsync(seed.Username, cancellationToken))
             {

@@ -48,11 +48,23 @@ builder.Services.AddRedisInfrastructure(redisConnection);
 
 // Dev-only interactive API docs — UI is gated behind Development below (never in prod, matching the
 // Swagger-gating fix already applied to APIGateway's hosts). Documents the HMAC headers the merchant
-// signature middleware enforces, since Swashbuckle can't see them on its own (§7.1).
+// signature middleware enforces, since Swashbuckle can't see them on its own (§7.1). One registration —
+// this used to be two separate AddSwaggerGen calls that both registered a "v1" doc, which throws
+// ArgumentException("An item with the same key has already been added: v1") the instant Swashbuckle's
+// options are actually resolved; merged into one so that's no longer possible.
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(o =>
 {
-    o.SwaggerDoc("v1", new OpenApiInfo { Title = "Crypto.Gateway.Core — Merchant API", Version = "v1" });
+    o.SwaggerDoc("v1", new OpenApiInfo
+    {
+        Title = "CryptoPaymentEngine — Merchant Gateway",
+        Version = "v1",
+        Description =
+            "Merchant-facing API. Requests to /api/v1/* are HMAC-signed: X-Api-Key + X-Timestamp + " +
+            "X-Signature = HMAC-SHA256(hexDecode(signingSecret), \"{timestamp}\\n{body}\"). Swagger's 'Try it out' " +
+            "cannot compute the signature — use tools/dev/Invoke-MerchantRequest.ps1 to make signed calls. The pay " +
+            "page and /dev/* endpoints are unauthenticated.",
+    });
     o.OperationFilter<CryptoPaymentEngine.Api.MerchantGateway.Security.HmacHeadersOperationFilter>();
 });
 
@@ -68,19 +80,6 @@ builder.Services.AddWithdrawalModule(config, dbConnection);
 builder.Services.AddConfigurationAssetCatalog();        // canonical AssetId shared by edge, scanner, ledger
 builder.Services.AddPaymentIntentModule(config, dbConnection); // deposit invoices + address pool; matches DepositConfirmed
 builder.Services.AddNotificationModule();               // consumes PaymentIntentMatched → signed merchant callback
-
-// ── Developer API docs (dev-only Swagger UI). §11 preferred tooling; carried over from the PoC. ──
-builder.Services.AddEndpointsApiExplorer();
-builder.Services.AddSwaggerGen(c => c.SwaggerDoc("v1", new OpenApiInfo
-{
-    Title = "CryptoPaymentEngine — Merchant Gateway",
-    Version = "v1",
-    Description =
-        "Merchant-facing API. Requests to /api/v1/* are HMAC-signed: X-Api-Key + X-Timestamp + " +
-        "X-Signature = HMAC-SHA256(hexDecode(signingSecret), \"{timestamp}\\n{body}\"). Swagger's 'Try it out' " +
-        "cannot compute the signature — use tools/dev/Invoke-MerchantRequest.ps1 to make signed calls. The pay " +
-        "page and /dev/* endpoints are unauthenticated.",
-}));
 
 // ── Chain source + signing: swap dev↔prod by DI, not code (§8, §10) ───────────
 if (builder.Environment.IsDevelopment())
