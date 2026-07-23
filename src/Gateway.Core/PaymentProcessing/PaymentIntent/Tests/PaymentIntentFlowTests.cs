@@ -163,7 +163,7 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task The_same_merchant_reference_is_idempotent()
+    public async Task A_reused_merchant_reference_is_rejected_as_a_hard_duplicate()
     {
         var counter = new MintCounter();
         var directory = new FakeWalletDirectory();
@@ -173,8 +173,10 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
         var first = await service.CreateAsync(new CreatePaymentIntentCommand(Merchant, "tx-dup", Chain.Tron, Asset, OneUsdt, null), Ct);
         var second = await service.CreateAsync(new CreatePaymentIntentCommand(Merchant, "tx-dup", Chain.Tron, Asset, OneUsdt, null), Ct);
 
-        second.Value.Reference.ShouldBe(first.Value.Reference);
-        counter.Value.ShouldBe(1); // the replay minted nothing
+        first.IsSuccess.ShouldBeTrue();
+        second.IsFailure.ShouldBeTrue();
+        second.Error!.Code.ShouldBe(PaymentIntentErrors.DuplicateReference.Code);
+        counter.Value.ShouldBe(1); // the rejected replay minted nothing
 
         await using var verify = Context();
         (await verify.PaymentIntents.CountAsync(Ct)).ShouldBe(1);

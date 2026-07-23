@@ -1,8 +1,4 @@
-SET QUOTED_IDENTIFIER ON;
-SET ANSI_NULLS ON;
-GO
-
-IF OBJECT_ID(N'[merchant].[__EFMigrationsHistory]') IS NULL
+﻿IF OBJECT_ID(N'[merchant].[__EFMigrationsHistory]') IS NULL
 BEGIN
     IF SCHEMA_ID(N'merchant') IS NULL EXEC(N'CREATE SCHEMA [merchant];');
     CREATE TABLE [merchant].[__EFMigrationsHistory] (
@@ -312,6 +308,27 @@ IF NOT EXISTS (
 BEGIN
     INSERT INTO [merchant].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
     VALUES (N'20260716032641_MerchantFeeSchedule', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260716055049_AddMerchantAllowedIps'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantConfiguration] ADD [AllowedIpsCsv] varchar(2048) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260716055049_AddMerchantAllowedIps'
+)
+BEGIN
+    INSERT INTO [merchant].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260716055049_AddMerchantAllowedIps', N'10.0.9');
 END;
 
 COMMIT;
