@@ -40,7 +40,7 @@ public static class MerchantApiEndpoints
             new CreatePaymentIntentCommand(MerchantId(http), request.TransactionId, asset.Chain, asset.AssetId, amount, request.CallbackUrl),
             http.RequestAborted);
         if (result.IsFailure)
-            return Fail(StatusCodes.Status400BadRequest, result.Error!.Message);
+            return Fail(StatusFor(result.Error!), result.Error!.Message);
 
         var baseUrl = (configuration["Gateway:BaseUrl"] ?? string.Empty).TrimEnd('/');
         return Results.Ok(ApiResponse.Ok(new
@@ -107,4 +107,11 @@ public static class MerchantApiEndpoints
     };
 
     private static IResult Fail(int status, string message) => Results.Json(ApiResponse.Fail(message), statusCode: status);
+
+    /// <summary>Duplicate transactionId (a Conflict-typed error) reports 409; everything else stays 400.</summary>
+    private static int StatusFor(Error error) => error.Type switch
+    {
+        ErrorType.Conflict => StatusCodes.Status409Conflict,
+        _ => StatusCodes.Status400BadRequest,
+    };
 }

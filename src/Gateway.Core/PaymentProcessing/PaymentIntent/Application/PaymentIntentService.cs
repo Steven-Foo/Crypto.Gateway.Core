@@ -61,10 +61,13 @@ public sealed class PaymentIntentService(
     public async Task<Result<PaymentIntentResult>> CreateAsync(
         CreatePaymentIntentCommand command, CancellationToken cancellationToken = default)
     {
-        // 1. Idempotent replay: same merchant reference → return the existing invoice unchanged.
+        // 1. Reject a reused merchant reference outright — the merchant integration must send a unique
+        //    transactionId per deposit. This intentionally trades away retry-safe idempotent replay (§7.3's
+        //    usual pattern) for an explicit error, per product decision: a client-side retry with the same
+        //    transactionId now surfaces as a hard duplicate rather than silently returning the prior invoice.
         var existing = await repository.FindByMerchantReferenceAsync(command.MerchantId, command.MerchantTransactionId, cancellationToken);
         if (existing is not null)
-            return Result.Success(ToResult(existing));
+            return Result.Failure<PaymentIntentResult>(PaymentIntentErrors.DuplicateReference);
 
         // 2. Payer-on-top: ask the payer for the merchant's target net grossed up by the deposit fee, so the
         //    Ledger's fee split leaves the merchant with (at least) what they asked to receive. No fee → gross
@@ -106,11 +109,10 @@ public sealed class PaymentIntentService(
                     return Result.Success(ToResult(intentResult.Value));
 
                 case PaymentIntentAddOutcome.DuplicateReference:
+                    // Lost a concurrent race against another request with the same transactionId — same
+                    // hard-duplicate error as the upfront check above, not a replay.
                     await walletLock.ReleaseAsync(address.Value.WalletId, cancellationToken); // reserved for nothing — give it back
-                    var winner = await repository.FindByMerchantReferenceAsync(command.MerchantId, command.MerchantTransactionId, cancellationToken);
-                    return winner is not null
-                        ? Result.Success(ToResult(winner))
-                        : Result.Failure<PaymentIntentResult>(PaymentIntentErrors.DuplicateReference);
+                    return Result.Failure<PaymentIntentResult>(PaymentIntentErrors.DuplicateReference);
 
                 case PaymentIntentAddOutcome.AddressBusy:
                     // Should be near-impossible with the reservation lock in place — a race the lock missed

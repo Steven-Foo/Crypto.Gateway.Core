@@ -27,7 +27,7 @@ public static class PaymentIntentErrors
         Error.Validation("payment_intent.grace_expiry_before_expiry", "Grace expiry cannot be before the display expiry.");
 
     public static readonly Error DuplicateReference =
-        Error.Conflict("payment_intent.duplicate_reference", "A payment intent already exists for this transaction reference.");
+        Error.Conflict("payment_intent.duplicate_reference", "Duplicate transactionId.");
 
     public static readonly Error AddressUnavailable =
         Error.Conflict("payment_intent.address_unavailable", "Could not reserve a deposit address; retry shortly.");
