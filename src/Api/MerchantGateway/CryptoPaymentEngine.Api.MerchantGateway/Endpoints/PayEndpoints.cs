@@ -19,8 +19,7 @@ public static class PayEndpoints
         // The hosted pay page (reused as-is from the proven PoC): reads the reference from its own URL,
         // polls /info, renders amount + QR + countdown, flips to "confirmed" on detection. The same static
         // file backs every reference. Unauthenticated — the reference is the unguessable public id.
-        app.MapGet("/pay/{reference:guid}", (Guid reference, IWebHostEnvironment env) =>
-            Results.File(Path.Combine(env.ContentRootPath, "wwwroot", "pay.html"), "text/html"))
+        app.MapGet("/pay/{reference:guid}", GetPage)
             .ExcludeFromDescription(); // it's a page, not an API operation — keep it out of Swagger
 
         app.MapGet("/pay/{reference:guid}/info", GetInfoAsync)
@@ -28,11 +27,15 @@ public static class PayEndpoints
             .WithTags("Pay");
     }
 
-    private static IResult GetPageAsync(Guid reference, HttpContext http, IWebHostEnvironment env)
+    /// <summary>
+    /// Serves the pay page. The security headers matter most HERE — this is the document that renders the
+    /// payment address and pulls the QR library from a CDN, so its CSP is what bounds which script may run.
+    /// (The route constraint validates the reference; the page itself reads it from its own URL.)
+    /// </summary>
+    private static IResult GetPage(HttpContext http, IWebHostEnvironment env)
     {
         AddSecurityHeaders(http);
-        var path = Path.Combine(env.WebRootPath, "pay.html");
-        return Results.File(path, "text/html");
+        return Results.File(Path.Combine(env.ContentRootPath, "wwwroot", "pay.html"), "text/html");
     }
 
     private static async Task<IResult> GetInfoAsync(

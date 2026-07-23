@@ -1,4 +1,4 @@
-SET QUOTED_IDENTIFIER ON;
+﻿SET QUOTED_IDENTIFIER ON;
 SET ANSI_NULLS ON;
 GO
 
@@ -151,6 +151,27 @@ IF NOT EXISTS (
 BEGIN
     INSERT INTO [wallet].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
     VALUES (N'20260713031326_InitialWallet', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [wallet].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260716054157_AddDepositsReceivedCount'
+)
+BEGIN
+    ALTER TABLE [wallet].[Wallet] ADD [DepositsReceivedCount] int NOT NULL DEFAULT 0;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [wallet].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260716054157_AddDepositsReceivedCount'
+)
+BEGIN
+    INSERT INTO [wallet].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260716054157_AddDepositsReceivedCount', N'10.0.9');
 END;
 
 COMMIT;

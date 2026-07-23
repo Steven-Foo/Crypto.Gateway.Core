@@ -71,11 +71,22 @@ public sealed class Deposit : Entity<Guid>
     public int Confirmations { get; private set; }
     public DateTimeOffset DetectedAt { get; private set; }
     public DateTimeOffset? ConfirmedAt { get; private set; }
+
+    /// <summary>
+    /// When the carrying block passed the chain's irreversibility point, after which this deposit is retired
+    /// from reorg watching. Null while still watched. This is a <em>tracking</em> marker, not a money state —
+    /// <see cref="Status"/> remains the financial lifecycle.
+    /// </summary>
+    public DateTimeOffset? FinalizedAt { get; private set; }
+
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
 
     public bool IsConfirmed => Status == DepositStatus.Confirmed;
     public bool IsPending => Status == DepositStatus.Detected;
+
+    /// <summary>Whether the deposit is beyond reorg reach and no longer needs watching.</summary>
+    public bool IsFinalized => FinalizedAt is not null;
 
     /// <summary>
     /// Records a newly-detected transfer. An amount below the policy minimum is recorded as
@@ -136,6 +147,26 @@ public sealed class Deposit : Entity<Guid>
                 Guid.CreateVersion7(), now, Id, WalletId, MerchantId, AssetId, AmountString, Chain, TransactionHash, OutputIndex, now));
         }
 
+        return Result.Success();
+    }
+
+    /// <summary>
+    /// Retires the deposit from reorg watching once its block is buried beyond the chain's own
+    /// irreversibility point (Tron's solidified block, Ethereum's finalized checkpoint). Such a block can
+    /// never be reorged, so re-checking it costs one RPC per deposit per pass forever and could never change
+    /// the outcome.
+    ///
+    /// <para>Only a credited deposit settles: one still <see cref="DepositStatus.Detected"/> must keep being
+    /// tracked until it reaches the confirmation threshold, even when its block is already final — otherwise
+    /// a chain whose finality arrives before the policy depth would strand it uncredited. Idempotent.</para>
+    /// </summary>
+    public Result MarkFinalized(DateTimeOffset now)
+    {
+        if (Status != DepositStatus.Confirmed || FinalizedAt is not null)
+            return Result.Success();
+
+        FinalizedAt = now;
+        UpdatedAt = now;
         return Result.Success();
     }
 
