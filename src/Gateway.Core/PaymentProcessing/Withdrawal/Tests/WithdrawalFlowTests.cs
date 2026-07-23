@@ -28,6 +28,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Shouldly;
 using Xunit;
+using WithdrawalEntity = CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Domain.Withdrawal;
 
 namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Tests;
 
@@ -188,7 +189,119 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
         (await BalanceAsync(AccountType.MerchantLiability, Merchant)).ShouldBe(BigInteger.Parse("6900000")); // debited once
     }
 
+    // ── Level 1: fake-blockchain chain scenarios (revert / delay / reorg-after-broadcast) ──
+
+    [Fact]
+    public async Task A_transaction_that_reverts_on_chain_is_left_for_ops_never_settled()
+    {
+        // The most important previously-uncovered path: broadcast succeeds and the tx is mined, but it
+        // REVERTS on-chain. Funds may not have moved as intended, so the withdrawal must stay Broadcast for
+        // ops — never settled, and never released (releasing after broadcast could double-spend).
+        await SeedMerchantBalanceAsync(BigInteger.Parse("10000000"));
+        Engine.NextTransactionReverts = true;
+
+        (await RequestAsync(BigInteger.Parse("3000000"), "idem-revert")).Value.Status.ShouldBe(nameof(WithdrawalStatus.Approved));
+        await ProcessAsync();  // build → sign → broadcast (accepted, will report revert)
+        await ConfirmAsync();  // status.Succeeded = false → left in Broadcast
+
+        var w = await SingleWithdrawalAsync();
+        w.Status.ShouldBe(WithdrawalStatus.Broadcast);       // not Confirmed, not Failed
+        w.TransactionHash.ShouldNotBeNull();
+        (await OutboxCountContainingAsync("WithdrawalConfirmed")).ShouldBe(0); // nothing settled
+
+        // Funds are still held in clearing — neither settled to custody nor returned to the merchant.
+        // (TreasuryAsset stays at the seed 10_000_000: no settle debited/credited it.)
+        (await BalanceAsync(AccountType.WithdrawalClearing, null)).ShouldBe(BigInteger.Parse("3100000"));
+        (await BalanceAsync(AccountType.TreasuryAsset, null)).ShouldBe(BigInteger.Parse("10000000"));
+        (await BalanceAsync(AccountType.MerchantLiability, Merchant)).ShouldBe(BigInteger.Parse("6900000"));
+    }
+
+    [Fact]
+    public async Task A_broadcast_the_node_rejects_fails_the_withdrawal_and_releases_the_funds()
+    {
+        // The other "failed transaction" flavour: the node refuses the broadcast, BEFORE anything reaches the
+        // chain. Unlike a revert, this is safe to release — the merchant gets their funds back in full.
+        await SeedMerchantBalanceAsync(BigInteger.Parse("10000000"));
+        Engine.NextBroadcastSucceeds = false;
+
+        await RequestAsync(BigInteger.Parse("3000000"), "idem-reject-broadcast");
+        (await BalanceAsync(AccountType.MerchantLiability, Merchant)).ShouldBe(BigInteger.Parse("6900000")); // reserved
+
+        await ProcessAsync();  // broadcast rejected → Fail → WithdrawalFailed
+        await DispatchAsync(); // → Ledger release
+
+        var w = await SingleWithdrawalAsync();
+        w.Status.ShouldBe(WithdrawalStatus.Failed);
+        w.TransactionHash.ShouldBeNull(); // never broadcast
+        (await BalanceAsync(AccountType.WithdrawalClearing, null)).ShouldBe(BigInteger.Zero);
+        (await BalanceAsync(AccountType.MerchantLiability, Merchant)).ShouldBe(BigInteger.Parse("10000000")); // fully restored
+    }
+
+    [Fact]
+    public async Task A_transaction_not_yet_mined_is_polled_safely_and_settles_once_it_appears()
+    {
+        // Inclusion / network delay: the tx isn't visible for the first two confirmation passes. The tracker
+        // must poll harmlessly (no settle, no state change) until it appears, then settle exactly once.
+        await SeedMerchantBalanceAsync(BigInteger.Parse("10000000"));
+        Engine.MineDelayPolls = 2;
+
+        await RequestAsync(BigInteger.Parse("3000000"), "idem-delay");
+        await ProcessAsync();
+
+        await ConfirmAsync(); // poll 1 — not mined yet
+        (await SingleWithdrawalAsync()).Status.ShouldBe(WithdrawalStatus.Broadcast);
+        await ConfirmAsync(); // poll 2 — still not mined
+        (await SingleWithdrawalAsync()).Status.ShouldBe(WithdrawalStatus.Broadcast);
+
+        await ConfirmAsync(); // poll 3 — appears, buried to the confirmation depth → confirms
+        await DispatchAsync();
+
+        (await SingleWithdrawalAsync()).Status.ShouldBe(WithdrawalStatus.Confirmed);
+        (await OutboxCountContainingAsync("WithdrawalConfirmed")).ShouldBe(1); // settled exactly once
+        (await BalanceAsync(AccountType.WithdrawalClearing, null)).ShouldBe(BigInteger.Zero);
+        // Custody drops by the amount that left the chain: seed 10_000_000 − 3_000_000 = 7_000_000.
+        (await BalanceAsync(AccountType.TreasuryAsset, null)).ShouldBe(BigInteger.Parse("7000000"));
+    }
+
+    [Fact]
+    public async Task A_broadcast_transaction_orphaned_by_a_reorg_is_not_falsely_settled()
+    {
+        // The tx was mined then dropped from the canonical chain (reorg after broadcast) before reaching the
+        // confirmation depth. Status goes back to "not found", so the tracker must NOT settle — it keeps
+        // waiting (a real re-broadcast / ops decision follows), never crediting custody on a vanished tx.
+        await SeedMerchantBalanceAsync(BigInteger.Parse("10000000"));
+
+        await RequestAsync(BigInteger.Parse("3000000"), "idem-reorg");
+        await ProcessAsync();
+
+        var txHash = (await SingleWithdrawalAsync()).TransactionHash!;
+        Engine.OrphanTransaction(txHash); // reorg drops the mined tx
+
+        await ConfirmAsync();
+
+        var w = await SingleWithdrawalAsync();
+        w.Status.ShouldBe(WithdrawalStatus.Broadcast); // still awaiting, not settled
+        (await OutboxCountContainingAsync("WithdrawalConfirmed")).ShouldBe(0);
+        // Custody untouched by a settle — still at the seed 10_000_000.
+        (await BalanceAsync(AccountType.TreasuryAsset, null)).ShouldBe(BigInteger.Parse("10000000"));
+    }
+
     // ── helpers ──
+
+    private InMemoryTransactionEngine Engine => _provider.GetRequiredService<InMemoryTransactionEngine>();
+
+    private async Task<WithdrawalEntity> SingleWithdrawalAsync()
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<WithdrawalDbContext>().Withdrawals.SingleAsync(Ct);
+    }
+
+    private async Task<int> OutboxCountContainingAsync(string typeFragment)
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<WithdrawalDbContext>()
+            .OutboxMessages.CountAsync(m => m.Type.Contains(typeFragment), Ct);
+    }
 
     private async Task SeedMerchantBalanceAsync(BigInteger amount)
     {
