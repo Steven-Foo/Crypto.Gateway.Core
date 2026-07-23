@@ -3,6 +3,7 @@
   <ItemGroup>
     <ProjectReference Include="../Application/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Application.csproj" />
     <ProjectReference Include="../Domain/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Domain.csproj" />
+    <ProjectReference Include="../Contracts/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Contracts.csproj" />
     <ProjectReference Include="../../../../SharedKernel/CryptoPaymentEngine.SharedKernel/CryptoPaymentEngine.SharedKernel.csproj" />
     <ProjectReference Include="../../../../Infrastructure/CryptoPaymentEngine.Infrastructure/CryptoPaymentEngine.Infrastructure.csproj" />
   </ItemGroup>

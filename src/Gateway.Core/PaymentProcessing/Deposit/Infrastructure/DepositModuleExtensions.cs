@@ -1,5 +1,6 @@
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Application;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Application.Abstractions;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Infrastructure.Configuration;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Infrastructure.Persistence;
 using CryptoPaymentEngine.Infrastructure.Persistence.Money;
@@ -39,6 +40,7 @@ public static class DepositModuleExtensions
 
         services.AddScoped<IDepositRepository, DepositRepository>();
         services.AddScoped<IScanCursorStore, ScanCursorStore>();
+        services.AddScoped<IDepositLookup, DepositLookup>();
 
         services.AddScoped<DepositDetectionService>();
         services.AddScoped<DepositConfirmationService>();

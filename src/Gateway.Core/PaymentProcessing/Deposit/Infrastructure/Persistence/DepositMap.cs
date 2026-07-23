@@ -48,6 +48,9 @@ public sealed class DepositMap : IEntityTypeConfiguration<DepositEntity>
         // The confirmation tracker's working set: pending deposits for a chain.
         builder.HasIndex(d => new { d.Chain, d.Status }).HasDatabaseName("IX_Deposit_Chain_Status");
 
+        // The pay page's "confirming" lookup (IDepositLookup) — polled frequently, keyed by address, not merchant.
+        builder.HasIndex(d => new { d.Chain, d.Address, d.Status }).HasDatabaseName("IX_Deposit_Chain_Address_Status");
+
         builder.HasIndex(d => d.MerchantId).HasDatabaseName("IX_Deposit_Merchant");
     }
 }

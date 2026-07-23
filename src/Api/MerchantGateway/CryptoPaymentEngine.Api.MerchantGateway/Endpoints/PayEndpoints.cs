@@ -1,6 +1,7 @@
 using System.Numerics;
 using CryptoPaymentEngine.Api.MerchantGateway.Money;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Contracts;
 using CryptoPaymentEngine.SharedKernel;
 
@@ -36,7 +37,7 @@ public static class PayEndpoints
     }
 
     private static async Task<IResult> GetInfoAsync(
-        Guid reference, HttpContext http, IPaymentIntentDirectory directory, IAssetCatalog assets)
+        Guid reference, HttpContext http, IPaymentIntentDirectory directory, IAssetCatalog assets, IDepositLookup deposits)
     {
         AddSecurityHeaders(http);
 
@@ -50,12 +51,23 @@ public static class PayEndpoints
         var asset = await assets.FindByIdAsync(view.AssetId, http.RequestAborted);
         var decimals = asset?.Decimals ?? 6;
 
+        // UX-only: while still "pending", check whether the scanner has already seen a transfer at this
+        // address (Deposit's own Detected status) so the payer isn't staring at a blank spinner for the
+        // ~60-90s a real confirmation threshold takes. Never influences the actual credit — that still
+        // waits for the full DepositConfirmed event (§9).
+        var status = view.Status;
+        if (status == "pending" && asset is not null &&
+            await deposits.HasDetectedDepositAsync(asset.Chain, view.Address, http.RequestAborted))
+        {
+            status = "confirming";
+        }
+
         return Results.Ok(new
         {
             address = view.Address,
             amount = AmountConversion.ToDisplay(BigInteger.Parse(view.ExpectedAmountBaseUnits), decimals),
             expiresAt = view.ExpiresAt,
-            status = view.Status,
+            status,
             symbol = asset?.Symbol ?? "",
             chain = asset?.Chain.ToString() ?? "",
         });

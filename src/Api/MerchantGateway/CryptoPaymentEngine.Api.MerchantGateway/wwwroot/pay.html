@@ -126,8 +126,20 @@
     .state-icon  { font-size: 52px; margin-bottom: 16px; }
     .state-title { font-size: 22px; font-weight: 700; margin-bottom: 10px; }
     .state-sub   { font-size: 14px; color: #5b6285; line-height: 1.6; }
-    .confirmed .state-title { color: #4ecb71; }
-    .expired   .state-title { color: #f26b6b; }
+    .confirmed .state-title  { color: #4ecb71; }
+    .confirming .state-title { color: #e2b23c; }
+    .expired   .state-title  { color: #f26b6b; }
+
+    .spinner {
+      width: 40px;
+      height: 40px;
+      margin: 0 auto 16px;
+      border: 3px solid #252840;
+      border-top-color: #e2b23c;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
 
     #loading-card { color: #5b6285; font-size: 14px; }
   </style>
@@ -168,6 +180,12 @@
   </div>
 </div>
 
+<div class="card confirming" id="confirming-card" style="display:none">
+  <div class="spinner"></div>
+  <div class="state-title">Payment Detected</div>
+  <div class="state-sub">We've seen your payment on-chain and it's now confirming.<br>This usually takes under a minute — do not close this page or send another payment.</div>
+</div>
+
 <div class="card confirmed" id="confirmed-card" style="display:none">
   <div class="state-icon">✅</div>
   <div class="state-title">Payment Received</div>
@@ -190,7 +208,7 @@
   let walletAddress     = '';
 
   function show(id) {
-    ['loading-card', 'pay-card', 'confirmed-card', 'expired-card']
+    ['loading-card', 'pay-card', 'confirming-card', 'confirmed-card', 'expired-card']
       .forEach(x => {
         const el = document.getElementById(x);
         if (el) el.style.display = (x === id) ? '' : 'none';
@@ -241,6 +259,9 @@
         clearInterval(countdownInterval);
         clearInterval(pollInterval);
         show('confirmed-card');
+      } else if (data.status === 'confirming') {
+        clearInterval(countdownInterval);
+        show('confirming-card');
       }
     } catch (_) {}
   }
@@ -256,8 +277,13 @@
       info = await res.json();
     } catch (_) { show('expired-card'); return; }
 
-    if (info.status === 'confirmed') { show('confirmed-card'); return; }
-    if (info.status === 'expired')   { show('expired-card');   return; }
+    if (info.status === 'confirmed')  { show('confirmed-card');  return; }
+    if (info.status === 'expired')    { show('expired-card');    return; }
+    if (info.status === 'confirming') {
+      show('confirming-card');
+      pollInterval = setInterval(() => pollStatus(referenceNo), 8000);
+      return;
+    }
 
     walletAddress = info.address;
     expiresAt     = new Date(info.expiresAt).getTime();

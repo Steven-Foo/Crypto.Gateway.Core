@@ -1,8 +1,4 @@
-SET QUOTED_IDENTIFIER ON;
-SET ANSI_NULLS ON;
-GO
-
-IF OBJECT_ID(N'[deposit].[__EFMigrationsHistory]') IS NULL
+﻿IF OBJECT_ID(N'[deposit].[__EFMigrationsHistory]') IS NULL
 BEGIN
     IF SCHEMA_ID(N'deposit') IS NULL EXEC(N'CREATE SCHEMA [deposit];');
     CREATE TABLE [deposit].[__EFMigrationsHistory] (
@@ -138,6 +134,27 @@ IF NOT EXISTS (
 BEGIN
     INSERT INTO [deposit].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
     VALUES (N'20260713082649_InitialDeposit', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [deposit].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260723073311_AddDepositAddressStatusIndex'
+)
+BEGIN
+    CREATE INDEX [IX_Deposit_Chain_Address_Status] ON [deposit].[Deposit] ([Chain], [Address], [Status]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [deposit].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260723073311_AddDepositAddressStatusIndex'
+)
+BEGIN
+    INSERT INTO [deposit].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260723073311_AddDepositAddressStatusIndex', N'10.0.9');
 END;
 
 COMMIT;
