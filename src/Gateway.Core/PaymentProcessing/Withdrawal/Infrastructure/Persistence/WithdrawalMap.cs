@@ -27,11 +27,16 @@ public sealed class WithdrawalMap : IEntityTypeConfiguration<WithdrawalEntity>
         builder.Property(w => w.Status).HasConversion<string>().HasMaxLength(16).IsRequired();
         builder.Property(w => w.ApprovedBy).HasMaxLength(128);
         builder.Property(w => w.SigningRequestId);
+
+        // The signed, broadcast-ready transaction blob (public, not key material). varbinary(max), nullable.
+        builder.Property(w => w.SignedTransaction);
+
         builder.Property(w => w.TransactionHash).IsUnicode(false).HasMaxLength(128);
         builder.Property(w => w.FailureReason).HasMaxLength(512);
 
         builder.Property<byte[]>("RowVersion").IsRowVersion();
 
+        builder.Ignore(w => w.HasSignedTransaction);
         builder.Ignore(w => w.DomainEvents);
 
         // Append-heavy: non-clustered GUID PK + monotonic clustered Seq.

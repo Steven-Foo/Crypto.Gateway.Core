@@ -5,6 +5,7 @@ using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructu
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -12,9 +13,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(WithdrawalDbContext))]
-    partial class WithdrawalDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260723103610_AddWithdrawalSignedTransaction")]
+    partial class AddWithdrawalSignedTransaction
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

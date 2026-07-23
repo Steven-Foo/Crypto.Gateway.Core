@@ -88,10 +88,14 @@ builder.Services.AddNotificationModule();               // consumes PaymentInten
 // ── Chain source + signing: swap dev↔prod by DI, not code (§8, §10) ───────────
 if (builder.Environment.IsDevelopment())
 {
-    // Deposits: real mainnet detection when opted in (Chains:Tron:Live + a fresh TronGrid key in
-    // appsettings.Local.json), else the deterministic node-free in-memory source. Signing/keys stay
-    // in-memory regardless — deposit detection never signs, so a real chain source is safe in dev (§10).
-    if (config.GetValue<bool>("Chains:Tron:Live"))
+    // Live money-out on TRON Nile testnet (Level 3): opt in with Withdrawal:LiveTron=true plus a THROWAWAY
+    // testnet key + endpoint in the git-ignored appsettings.Local.json (see docs/withdrawal-testnet.md). It
+    // implies the real chain source too, because confirming a broadcast withdrawal needs the real tip/finality.
+    var liveTron = config.GetValue<bool>("Withdrawal:LiveTron");
+
+    // Deposits: real mainnet/testnet detection when opted in (Chains:Tron:Live, or implied by LiveTron, + a
+    // fresh TronGrid/Nile key in appsettings.Local.json), else the deterministic node-free in-memory source.
+    if (config.GetValue<bool>("Chains:Tron:Live") || liveTron)
     {
         builder.Services.AddJsonRpcChainSources();
         builder.Services.AddTronChainAdapter(config);
@@ -101,8 +105,20 @@ if (builder.Environment.IsDevelopment())
         builder.Services.AddInMemoryChainSource();
     }
 
-    builder.Services.AddInMemoryTransactionEngine();
-    builder.Services.AddInMemorySigner(); // NEVER touches a key; a real KMS signer replaces it in prod (§10)
+    if (liveTron)
+    {
+        // Real TRON build → broadcast → status over the node, and a real secp256k1 signer over the throwaway
+        // testnet key. The key never leaves the signer (§10); this branch is Development-only and gated, so a
+        // real key-holding signer can never be wired in production.
+        builder.Services.AddTronTransactionEngine(config);
+        builder.Services.AddTronSigner();
+    }
+    else
+    {
+        builder.Services.AddInMemoryTransactionEngine();
+        builder.Services.AddInMemorySigner(); // NEVER touches a key; a real KMS signer replaces it in prod (§10)
+    }
+
     builder.Services.AddInMemoryAccountResourceReader(); // read-only resource observation for the Energy monitor
 
     // In-memory secret provider (PUBLIC xpub only) + idempotent HD-wallet seeder, so a signed /deposit can
