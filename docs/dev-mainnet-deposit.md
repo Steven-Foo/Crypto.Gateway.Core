@@ -43,21 +43,32 @@ dotnet run --project src/Api/MerchantGateway/CryptoPaymentEngine.Api.MerchantGat
 ```
 Dev URL: `http://localhost:51079` (https `51078`). Swagger (API docs): `http://localhost:51079/swagger`.
 
-## 4 · Point the scanner at "now"
-On a fresh DB the scanner would cold-start at block 1 and crawl from genesis. Seed the cursor near the tip
-**once**, after the host is up:
+## 4 · (Optional) Point the scanner further back
+On a fresh DB the scanner **cold-starts at the current tip** and watches forward from there — it does not
+crawl from genesis, so no action is needed for a deposit you are about to send. Only if you need it to look
+*back* a little (e.g. you already sent the transfer) seed the cursor behind the tip:
 ```bash
-curl -X POST "http://localhost:51079/dev/scan-cursor?chain=Tron"
-# → { "chain":"Tron", "tip":<current>, "cursorSetTo":<tip-20> }
+curl -X POST "http://localhost:51079/dev/scan-cursor?chain=Tron&lookback=50"
+# → { "chain":"Tron", "tip":<current>, "cursorSetTo":<tip-50> }
 ```
 
 ## 5 · Create the deposit invoice
-Use the signing helper (Swagger can't sign — see below):
+**Easiest — Swagger:** open `http://localhost:51079/swagger`, expand **POST /api/v1/deposit**, *Try it out*,
+**leave the three `X-` headers blank** and Execute. In Development, Swagger signs the request for you with the
+dev seed merchant's key (see "Swagger and the signature" below).
+
+Body:
+```json
+{ "paymentMethod": "USDT", "transactionId": "mainnet-test-1", "userId": "u1",
+  "expectedAmount": 1.00, "callbackUrl": "http://localhost:51079/dev/callbacks" }
+```
+
+**Or from PowerShell:**
 ```powershell
 ./tools/dev/Invoke-MerchantRequest.ps1 -BaseUrl http://localhost:51079 `
-  -Path /api/v1/deposit -Body '{ "paymentMethod":"USDT", "transactionId":"mainnet-test-1", "userId":"u1", "expectedAmount":"1.00", "callbackUrl":null }'
+  -Path /api/v1/deposit -Body '{ "paymentMethod":"USDT", "transactionId":"mainnet-test-1", "userId":"u1", "expectedAmount":1.00, "callbackUrl":"http://localhost:51079/dev/callbacks" }'
 ```
-The response has `address`, `referenceNo`, and `payUrl`.
+Either way the response has `address`, `referenceNo`, and `payUrl`.
 
 ## 6 · Open the pay page and pay
 Open the `payUrl` (`http://localhost:51079/pay/{referenceNo}`) — the reused pay page shows the amount, a QR of
@@ -88,9 +99,23 @@ Connect: host `localhost` · port `1433` · user `sa` · password `Cpe_Dev_Passw
 | The deposit address ↔ merchant | `wallet.Wallet` + per-merchant HD wallet in `keymgmt.HdWallet` |
 
 ## Swagger and the signature
-`/swagger` documents the API, but its **"Try it out" cannot sign** requests (the merchant API is HMAC-signed:
-`X-Api-Key` + `X-Timestamp` + `X-Signature` over `"{timestamp}\n{body}"`). Make real signed calls with
-`tools/dev/Invoke-MerchantRequest.ps1`.
+The merchant API is HMAC-signed: `X-Api-Key` + `X-Timestamp` + `X-Signature = hex(HMAC-SHA256(
+hexDecode(signingSecret), "{timestamp}\n{body}"))`, within a 5-minute window.
+
+**In Development, Swagger signs for you.** A swagger-ui request interceptor
+(`Security/DevSwaggerRequestSigning.cs`) computes the signature in the browser with the **dev seed
+merchant's** credentials (`Merchant:DevSeed`), so *Try it out* exercises the real signed path. Leave
+`X-Api-Key` / `X-Timestamp` / `X-Signature` blank — they're documented as optional only so swagger-ui doesn't
+block Execute on an empty required field; the middleware still demands them on the wire.
+
+This is **dev-only and never wired in production** (a real signing secret must never be embedded in a page,
+§10). A real merchant integration computes the signature itself — `tools/dev/Invoke-MerchantRequest.ps1` does
+exactly that from PowerShell.
+
+> The legacy PoC could **not** do this: its Swagger declared only an `X-Api-Key` scheme while
+> `MerchantSecurityFilter` still required the signature, so its *Try it out* always failed with
+> *"Missing X-Timestamp or X-Signature header."* Its deposit flow was proven with a signing client, not
+> through Swagger.
 
 ## Fund recovery
 - With **`DevMerchantXpub` set**, deposit addresses are in your own wallet — recover/sweep with your wallet.
@@ -99,6 +124,15 @@ Connect: host `localhost` · port `1433` · user `sa` · password `Cpe_Dev_Passw
 
 ## Known live-adapter caveats (first mainnet exercise)
 The TRON JSON-RPC adapter was fixture-tested but its live round-trip was deferred to staging — this is that
-first live run. Expect to tune: the **scan start** (step 4), **TronGrid rate limits** (a paid key helps),
-**confirmations** (`Deposit:Policies:Tron`), and **native-TRX vs TRC-20** (only TRC-20 USDT is detected).
-Withdrawal remains inert in dev (no real signer, §10).
+first live run. Expect to tune: **TronGrid rate limits** (a paid key helps), **confirmations**
+(`Deposit:Policies:Tron`), and **native-TRX vs TRC-20** (only TRC-20 USDT is detected). Withdrawal remains
+inert in dev (no real signer, §10).
+
+## Troubleshooting
+| Symptom | Cause |
+|---|---|
+| `401 "Invalid API credentials."` on every signed call | The dev merchant failed to seed. Check the host log for `Invalid column name '…'` — it means `db/sql` is **stale vs. the EF migrations**. Regenerate the module's script (see `db/README.md`) or use `dotnet ef database update`. |
+| `401 "Request timestamp expired."` | Clock skew > 5 min, or a stale Swagger tab that cached an old timestamp — just Execute again. |
+| `payUrl` opens nothing | `Gateway:BaseUrl` must match `launchSettings.json`'s `applicationUrl`. |
+| Deposit credits but no callback arrives | Redis is down — the outbox dispatcher single-flights on a Redis lock. `docker compose up -d`. |
+| Swagger *Try it out* returns 400 "Missing X-Timestamp…" | The interceptor didn't load: `Merchant:DevSeed:Enabled` is false, or you're not in Development. |

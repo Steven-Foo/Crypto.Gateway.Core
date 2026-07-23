@@ -88,6 +88,28 @@ dotnet ef migrations script --idempotent \
 on regeneration. After regenerating that one file, re-append the block from git history (or from
 `00-bootstrap.sql`'s commented Step 4, which documents the same DENY statements).
 
+> ⚠️ **Add a migration → regenerate its script, in the same commit.** These scripts do not update
+> themselves. When they drift, the failure is nasty and remote: a teammate builds a fresh database
+> from `db/sql`, the tables look fine, and the app then dies at runtime on `Invalid column name '…'`
+> — the dev merchant fails to seed and every signed `/api/v1` call returns *"Invalid API
+> credentials."* (This has already happened once: `AddMerchantAllowedIps`,
+> `AddDepositsReceivedCount`, and `AddPaymentIntentGracePeriod` shipped without their scripts.)
+>
+> Check for drift before you push — every migration on disk must appear in its script:
+>
+> ```bash
+> # example: Merchant. Prints any migration missing from the generated script.
+> for m in $(ls src/Gateway.Core/Merchant/Infrastructure/Persistence/Migrations/*.cs \
+>              | grep -vE 'Designer|ModelSnapshot' | xargs -n1 basename | sed 's/\.cs$//'); do
+>   grep -q "$m" db/sql/20-merchant.sql || echo "MISSING from 20-merchant.sql: $m"
+> done
+> ```
+>
+> Every generated script must also keep the `SET QUOTED_IDENTIFIER ON; SET ANSI_NULLS ON; GO`
+> header at the top. `dotnet ef` does not emit it, and without it `sqlcmd` fails on any table
+> carrying a **filtered index** (`UX_PaymentIntent_LiveWallet`, `IX_Deposit_Chain_Status`,
+> `IX_HdWallet_MerchantId_Chain_Purpose`). Re-add it after regenerating.
+
 ### Step 3 — lock down the ledger (after the ledger migration exists)
 
 The ledger is append-only. Enforce it in the database, not just the app — see the commented

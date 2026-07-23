@@ -142,6 +142,43 @@ GO
 BEGIN TRANSACTION;
 IF NOT EXISTS (
     SELECT * FROM [deposit].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260717072121_DepositFinalizedAt'
+)
+BEGIN
+    DROP INDEX [IX_Deposit_Chain_Status] ON [deposit].[Deposit];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [deposit].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260717072121_DepositFinalizedAt'
+)
+BEGIN
+    ALTER TABLE [deposit].[Deposit] ADD [FinalizedAt] datetimeoffset NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [deposit].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260717072121_DepositFinalizedAt'
+)
+BEGIN
+    EXEC(N'CREATE INDEX [IX_Deposit_Chain_Status] ON [deposit].[Deposit] ([Chain], [Status]) WHERE [FinalizedAt] IS NULL');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [deposit].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260717072121_DepositFinalizedAt'
+)
+BEGIN
+    INSERT INTO [deposit].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260717072121_DepositFinalizedAt', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [deposit].[__EFMigrationsHistory]
     WHERE [MigrationId] = N'20260723073311_AddDepositAddressStatusIndex'
 )
 BEGIN

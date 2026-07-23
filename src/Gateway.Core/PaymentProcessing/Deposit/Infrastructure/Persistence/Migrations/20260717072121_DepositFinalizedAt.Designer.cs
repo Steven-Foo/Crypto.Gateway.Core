@@ -5,6 +5,7 @@ using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Infrastructure.
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -12,9 +13,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(DepositDbContext))]
-    partial class DepositDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260717072121_DepositFinalizedAt")]
+    partial class DepositFinalizedAt
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -119,9 +122,6 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Infrastruct
                     b.HasIndex("Chain", "Status")
                         .HasDatabaseName("IX_Deposit_Chain_Status")
                         .HasFilter("[FinalizedAt] IS NULL");
-
-                    b.HasIndex("Chain", "Address", "Status")
-                        .HasDatabaseName("IX_Deposit_Chain_Address_Status");
 
                     b.HasIndex("Chain", "TransactionHash", "OutputIndex")
                         .IsUnique()

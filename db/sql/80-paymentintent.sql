@@ -1,4 +1,8 @@
-﻿IF OBJECT_ID(N'[paymentintent].[__EFMigrationsHistory]') IS NULL
+﻿SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+GO
+
+IF OBJECT_ID(N'[paymentintent].[__EFMigrationsHistory]') IS NULL
 BEGIN
     IF SCHEMA_ID(N'paymentintent') IS NULL EXEC(N'CREATE SCHEMA [paymentintent];');
     CREATE TABLE [paymentintent].[__EFMigrationsHistory] (
