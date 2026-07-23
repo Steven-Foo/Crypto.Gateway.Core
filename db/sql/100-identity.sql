@@ -1,4 +1,8 @@
-﻿IF OBJECT_ID(N'[identity].[__EFMigrationsHistory]') IS NULL
+﻿SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+GO
+
+IF OBJECT_ID(N'[identity].[__EFMigrationsHistory]') IS NULL
 BEGIN
     IF SCHEMA_ID(N'identity') IS NULL EXEC(N'CREATE SCHEMA [identity];');
     CREATE TABLE [identity].[__EFMigrationsHistory] (
