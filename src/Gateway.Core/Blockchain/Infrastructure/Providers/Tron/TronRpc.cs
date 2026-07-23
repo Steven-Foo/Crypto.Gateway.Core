@@ -11,9 +11,9 @@ namespace CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers.T
 /// is a typed client the DI layer wires with the RPC base URL and a standard resilience handler.
 ///
 /// NOTE: exercised against a live node only in staging (needs an endpoint/API key). The adapter's
-/// response-mapping logic is unit-tested separately via <see cref="ITronRpc"/> fakes.
+/// response-mapping logic is unit-tested separately via <see cref="ITronRpc"/>/<see cref="ITronTxRpc"/> fakes.
 /// </summary>
-public sealed class TronRpc(HttpClient http) : ITronRpc
+public sealed class TronRpc(HttpClient http) : ITronRpc, ITronTxRpc
 {
     public async Task<long> GetBlockNumberAsync(CancellationToken cancellationToken = default)
     {
@@ -86,6 +86,44 @@ public sealed class TronRpc(HttpClient http) : ITronRpc
         }
 
         return blocks;
+    }
+
+    // ── Write path (ITronTxRpc): native /wallet/* API, keyless (§10) ──
+
+    public async Task<TronTriggerResultDto> TriggerSmartContractAsync(
+        TriggerSmartContractRequest request, CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PostAsJsonAsync("wallet/triggersmartcontract", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        return await response.Content.ReadFromJsonAsync<TronTriggerResultDto>(cancellationToken)
+            ?? throw new JsonRpcException("triggersmartcontract", "empty response.");
+    }
+
+    public async Task<TronBroadcastResultDto> BroadcastTransactionAsync(
+        JsonElement signedTransaction, CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PostAsJsonAsync("wallet/broadcasttransaction", signedTransaction, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        return await response.Content.ReadFromJsonAsync<TronBroadcastResultDto>(cancellationToken)
+            ?? throw new JsonRpcException("broadcasttransaction", "empty response.");
+    }
+
+    public async Task<TronTransactionInfoDto?> GetTransactionInfoAsync(
+        string transactionId, CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PostAsJsonAsync(
+            "wallet/gettransactioninfobyid", new { value = transactionId }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        var element = await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
+
+        // An empty object {} means the transaction is not yet in a block (or unknown/dropped).
+        if (element.ValueKind is not JsonValueKind.Object)
+            return null;
+        using var enumerator = element.EnumerateObject();
+        return enumerator.MoveNext() ? element.Deserialize<TronTransactionInfoDto>() : null;
     }
 
     private static string ToHex(long value) => "0x" + value.ToString("x");

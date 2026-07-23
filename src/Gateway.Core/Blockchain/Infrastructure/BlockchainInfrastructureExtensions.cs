@@ -97,17 +97,40 @@ public static class BlockchainInfrastructureExtensions
     /// </summary>
     public static IServiceCollection AddTronChainAdapter(this IServiceCollection services, IConfiguration configuration)
     {
-        var options = configuration.GetSection(TronOptions.SectionName).Get<TronOptions>() ?? new TronOptions();
+        var options = ReadTronOptions(configuration);
 
-        services.AddHttpClient<ITronRpc, TronRpc>(client =>
-        {
-            var baseUrl = options.RpcBaseUrl.EndsWith('/') ? options.RpcBaseUrl : options.RpcBaseUrl + "/";
-            client.BaseAddress = new Uri(baseUrl);
-            if (!string.IsNullOrWhiteSpace(options.ApiKey))
-                client.DefaultRequestHeaders.Add("TRON-PRO-API-KEY", options.ApiKey);
-        }).AddStandardResilienceHandler();
-
+        services.AddHttpClient<ITronRpc, TronRpc>(ConfigureTronClient(options)).AddStandardResilienceHandler();
         services.AddScoped<IChainAdapter, TronChainAdapter>();
         return services;
     }
+
+    /// <summary>
+    /// Registers the real TRON <b>money-out</b> engine — <see cref="ITransactionBuilder"/> +
+    /// <see cref="ITransactionBroadcaster"/> — over a resilient typed <see cref="System.Net.Http.HttpClient"/>
+    /// (the write-path counterpart to <see cref="AddTronChainAdapter"/>, via a segregated
+    /// <see cref="Providers.Tron.ITronTxRpc"/>). Build/broadcast/status only; it never signs (§10) — a
+    /// separate <c>ISigner</c> must still turn the unsigned blob into a signed one before funds can move.
+    /// Not wired into the host yet: it comes online alongside a real signer (never a fake signer in prod, §10).
+    /// </summary>
+    public static IServiceCollection AddTronTransactionEngine(this IServiceCollection services, IConfiguration configuration)
+    {
+        var options = ReadTronOptions(configuration);
+        services.TryAddSingleton(options);
+
+        services.AddHttpClient<Providers.Tron.ITronTxRpc, TronRpc>(ConfigureTronClient(options)).AddStandardResilienceHandler();
+        services.AddScoped<ITransactionBuilder, TronTransactionBuilder>();
+        services.AddScoped<ITransactionBroadcaster, TronTransactionBroadcaster>();
+        return services;
+    }
+
+    private static TronOptions ReadTronOptions(IConfiguration configuration) =>
+        configuration.GetSection(TronOptions.SectionName).Get<TronOptions>() ?? new TronOptions();
+
+    private static Action<System.Net.Http.HttpClient> ConfigureTronClient(TronOptions options) => client =>
+    {
+        var baseUrl = options.RpcBaseUrl.EndsWith('/') ? options.RpcBaseUrl : options.RpcBaseUrl + "/";
+        client.BaseAddress = new Uri(baseUrl);
+        if (!string.IsNullOrWhiteSpace(options.ApiKey))
+            client.DefaultRequestHeaders.Add("TRON-PRO-API-KEY", options.ApiKey);
+    };
 }
