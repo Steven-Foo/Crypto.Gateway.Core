@@ -18,6 +18,12 @@ public interface IPaymentIntentDirectory
 {
     Task<PaymentIntentView?> FindByPublicReferenceAsync(Guid publicReference, CancellationToken cancellationToken = default);
 
+    /// <summary>Looks up an invoice by the merchant's own transaction reference — the merchant-facing
+    /// transaction-query endpoint's deposit-side lookup. Scoped to <paramref name="merchantId"/>: this
+    /// reference is only unique per-merchant, never globally.</summary>
+    Task<PaymentIntentView?> FindByMerchantReferenceAsync(
+        Guid merchantId, string merchantTransactionId, CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Resolves a merchant's own transaction reference to the confirmed deposit it matched, if any — the
     /// bridge an ops transaction search needs to go from "the string a merchant gave us" to the Ledger's

@@ -1,5 +1,6 @@
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application.Abstractions;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure.Configuration;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure.Persistence;
 using CryptoPaymentEngine.Infrastructure.Persistence.Money;
@@ -34,6 +35,7 @@ public static class WithdrawalModuleExtensions
         services.AddSingleton<IHotWalletProvider>(_ => new ConfigurationHotWalletProvider(configuration));
 
         services.AddScoped<IWithdrawalRepository, WithdrawalRepository>();
+        services.AddScoped<IWithdrawalDirectory, WithdrawalDirectory>();
         services.AddScoped<IWithdrawalRequestService, WithdrawalRequestService>();
         services.AddScoped<IWithdrawalApprovalService, WithdrawalApprovalService>();
         services.AddScoped<WithdrawalProcessingService>();

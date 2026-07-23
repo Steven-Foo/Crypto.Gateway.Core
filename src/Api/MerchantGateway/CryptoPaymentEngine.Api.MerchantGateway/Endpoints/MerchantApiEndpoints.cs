@@ -3,8 +3,11 @@ using CryptoPaymentEngine.Api.MerchantGateway.Money;
 using CryptoPaymentEngine.Api.MerchantGateway.Security;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Contracts;
+using System.Numerics;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Application;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Contracts;
 using CryptoPaymentEngine.SharedKernel;
 
 namespace CryptoPaymentEngine.Api.MerchantGateway.Endpoints;
@@ -24,6 +27,7 @@ public static class MerchantApiEndpoints
         group.MapPost("/deposit", DepositAsync);
         group.MapPost("/withdraw", WithdrawAsync);
         group.MapPost("/balance", BalanceAsync);
+        group.MapPost("/transactions/query", TransactionQueryAsync);
     }
 
     private static async Task<IResult> DepositAsync(
@@ -92,6 +96,54 @@ public static class MerchantApiEndpoints
             balance = AmountConversion.ToDisplay(balance, asset.Decimals),
             currency = asset.Symbol,
         }));
+    }
+
+    /// <summary>
+    /// Looks up the merchant's own transactionId against both the deposit side (PaymentIntent) and the
+    /// withdrawal side (Withdrawal) — a merchant's reference is scoped per-merchant, never globally, so both
+    /// lookups are scoped to the calling merchant (never a request parameter, §4.5/§7.3). Deposit is checked
+    /// first purely because it's the more common query; a given transactionId is only ever one or the other.
+    /// </summary>
+    private static async Task<IResult> TransactionQueryAsync(
+        TransactionQueryRequest request, HttpContext http, IAssetCatalog assets,
+        IPaymentIntentDirectory intents, IWithdrawalDirectory withdrawals)
+    {
+        var merchantId = MerchantId(http);
+
+        var deposit = await intents.FindByMerchantReferenceAsync(merchantId, request.TransactionId, http.RequestAborted);
+        if (deposit is not null)
+        {
+            var depositAsset = await assets.FindByIdAsync(deposit.AssetId, http.RequestAborted);
+            return Results.Ok(ApiResponse.Ok(new
+            {
+                type = "deposit",
+                referenceNo = deposit.PublicReference,
+                status = deposit.Status,
+                amount = AmountConversion.ToDisplay(BigInteger.Parse(deposit.ExpectedAmountBaseUnits), depositAsset?.Decimals ?? 6),
+                currency = depositAsset?.Symbol ?? "",
+                address = deposit.Address,
+                expiresAt = deposit.ExpiresAt,
+            }));
+        }
+
+        var withdrawal = await withdrawals.FindByMerchantReferenceAsync(merchantId, request.TransactionId, http.RequestAborted);
+        if (withdrawal is not null)
+        {
+            var withdrawalAsset = await assets.FindByIdAsync(withdrawal.AssetId, http.RequestAborted);
+            return Results.Ok(ApiResponse.Ok(new
+            {
+                type = "withdraw",
+                referenceNo = withdrawal.WithdrawalId,
+                status = MapWithdrawalStatus(withdrawal.Status),
+                amount = AmountConversion.ToDisplay(BigInteger.Parse(withdrawal.AmountBaseUnits), withdrawalAsset?.Decimals ?? 6),
+                currency = withdrawalAsset?.Symbol ?? "",
+                toAddress = withdrawal.DestinationAddress,
+                txHash = withdrawal.TransactionHash,
+                createdAt = withdrawal.CreatedAt,
+            }));
+        }
+
+        return Fail(StatusCodes.Status404NotFound, "No deposit or withdrawal found for this transactionId.");
     }
 
     private static Guid MerchantId(HttpContext http) => (Guid)http.Items[MerchantSignatureMiddleware.MerchantIdItem]!;

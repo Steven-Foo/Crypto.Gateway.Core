@@ -14,6 +14,13 @@ public sealed class DepositRequest
     [Required, Url] public string CallbackUrl { get; init; } = null!;
 }
 
+/// <summary>Transaction-query request — looks up a deposit or withdrawal by the merchant's own reference.
+/// Not part of the frozen partner contract; a new, additive endpoint.</summary>
+public sealed class TransactionQueryRequest
+{
+    [Required] public string TransactionId { get; init; } = null!;
+}
+
 /// <summary>Frozen withdraw-request body. <see cref="Amount"/> is a display decimal — the destination receives
 /// it in full; the merchant is debited amount + fee at the ledger (on-top fee).</summary>
 public sealed class WithdrawRequest
