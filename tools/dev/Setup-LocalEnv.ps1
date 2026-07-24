@@ -1,18 +1,20 @@
 <#
 .SYNOPSIS
-  Brings the local dev database up to date against the Docker Compose SQL Server, so a reviewable
-  end-to-end deposit run works and DBeaver can connect to localhost:1433.
+  Brings the dev database up to date on a SQL Server at -SqlHost (a native install or the Docker Compose
+  container), so an end-to-end run works and DBeaver can connect to it. Mirrors the EC2 layout.
 
 .DESCRIPTION
-  Run AFTER `docker compose up -d`. Waits for SQL Server to accept connections, then applies every
-  module's EF Core migrations (each module owns its own DbContext + schema). Mongo collections are
-  created by the container's first-init script (db/mongo); Redis needs no schema.
+  Point -SqlHost at any reachable SQL Server (default localhost,1433). Waits for it to accept connections
+  via sqlcmd, then applies every module's EF Core migrations (each module owns its own DbContext + schema);
+  EF creates the CryptoPaymentEngine database on the first update. Mongo collections come from db/mongo;
+  Redis needs no schema.
 
-  DEV ONLY. The SA password here is the fixed dev secret from docker-compose.yml — never production.
+  DEV/STAGING ONLY. The SA password default is the fixed dev secret — never production.
 
 .EXAMPLE
-  docker compose up -d
+  # Native SQL Server (e.g. localhost or EC2):
   ./tools/dev/Setup-LocalEnv.ps1
+  ./tools/dev/Setup-LocalEnv.ps1 -SqlHost "10.0.0.5,1433" -SaPassword "<staging-sa-pwd>"
 #>
 [CmdletBinding()]
 param(
@@ -46,13 +48,13 @@ Write-Host "Waiting for SQL Server on $SqlHost ..." -ForegroundColor Cyan
 $ready = $false
 foreach ($i in 1..30) {
     try {
-        docker exec cpe-sqlserver /opt/mssql-tools18/bin/sqlcmd -S localhost -U sa -P $SaPassword -C -Q "SELECT 1" -b -o /dev/null 2>$null
+        sqlcmd -S $SqlHost -U sa -P $SaPassword -C -Q "SELECT 1" -b 1>$null 2>$null
         if ($LASTEXITCODE -eq 0) { $ready = $true; break }
     } catch { }
     Start-Sleep -Seconds 3
 }
 if (-not $ready) {
-    throw "SQL Server did not become ready. Is Docker running and 'docker compose up -d' done? Check 'docker compose logs sqlserver'."
+    throw "SQL Server on $SqlHost did not accept connections. Is it running (native install, or 'docker compose up -d'), and is the sa password correct?"
 }
 Write-Host "SQL Server is ready." -ForegroundColor Green
 

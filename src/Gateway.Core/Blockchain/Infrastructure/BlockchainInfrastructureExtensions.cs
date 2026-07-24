@@ -85,7 +85,11 @@ public static class BlockchainInfrastructureExtensions
     /// </summary>
     public static IServiceCollection AddInMemoryTransactionEngine(this IServiceCollection services)
     {
-        services.TryAddSingleton<InMemoryTransactionEngine>();
+        // Mine at block 0 so a broadcast on a FRESH in-memory chain (whose tip is 0) reaches the confirmation
+        // depth and settles — the default mined block sits far above an empty chain's tip, which would leave a
+        // dev host's withdrawals stuck in Broadcast forever. Tests that need a specific mined block/tip construct
+        // the engine directly, so this host-only registration doesn't affect them.
+        services.TryAddSingleton(new InMemoryTransactionEngine { MinedAtBlock = 0 });
         services.TryAddSingleton<ITransactionBuilder>(sp => sp.GetRequiredService<InMemoryTransactionEngine>());
         services.TryAddSingleton<ITransactionBroadcaster>(sp => sp.GetRequiredService<InMemoryTransactionEngine>());
         return services;
