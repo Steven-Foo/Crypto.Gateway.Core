@@ -1,8 +1,11 @@
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Numerics;
+using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers;
+using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application;
+using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Contracts;
 using CryptoPaymentEngine.SharedKernel;
@@ -10,10 +13,10 @@ using CryptoPaymentEngine.SharedKernel;
 namespace CryptoPaymentEngine.Api.MerchantGateway.Endpoints;
 
 /// <summary>
-/// DEVELOPMENT ONLY. An in-host sink for the merchant callback the Notification module POSTs when a deposit is
-/// detected, so a developer can SEE the callback fire end-to-end without standing up an external receiver.
-/// Point the dev merchant's <c>CallbackUrl</c> here (appsettings.Local.json). It stores the most recent
-/// callbacks in memory; GET them to review. Never mapped outside Development (§10 — no dev surface in prod).
+/// TESTNET TIER ONLY (Development + Staging — mapped by the host only when <c>isTestnetTier</c>, never in
+/// Production, §10). Manual-testing helpers: an in-host sink for the signed merchant callback, a scan-cursor
+/// seeder for the live scanner, an in-memory deposit simulator, and a ledger balance seeder for exercising the
+/// withdrawal flow. None of these move real money; none exist in Production.
 /// </summary>
 public static class DevEndpoints
 {
@@ -62,6 +65,48 @@ public static class DevEndpoints
             await cursors.SetLastScannedBlockAsync(parsed, start, http.RequestAborted);
 
             return Results.Ok(new { chain = parsed.ToString(), tip, cursorSetTo = start });
+        });
+
+        // Credits a merchant's ledger balance directly — the SAME double-entry a confirmed deposit posts
+        // (Dr TreasuryAsset / Cr MerchantLiability) — so the withdrawal flow can be tested without first running
+        // a full on-chain deposit. Testnet tier only, never mapped in Production (§10). It moves no real money;
+        // it is bookkeeping so a test merchant has something to withdraw. USDT-TRON, 6 dp.
+        group.MapPost("/credit-balance", async (
+            string merchantCode,
+            decimal amount,
+            IMerchantDirectory merchants,
+            IAssetCatalog assets,
+            ILedgerPoster ledger,
+            HttpContext http) =>
+        {
+            var merchant = await merchants.FindByCodeAsync(merchantCode, http.RequestAborted);
+            if (merchant is null)
+                return Results.NotFound(new { error = $"No merchant with code '{merchantCode}'." });
+
+            var asset = await assets.FindAsync(Chain.Tron, "USDT", http.RequestAborted);
+            if (asset is null)
+                return Results.BadRequest(new { error = "No USDT-TRON asset is configured." });
+
+            var baseUnits = new BigInteger(decimal.Truncate(amount * 1_000_000m)); // USDT-TRON: 6 dp
+            if (baseUnits <= BigInteger.Zero)
+                return Results.BadRequest(new { error = "Amount must be positive." });
+
+            var result = await ledger.CreditDepositAsync(
+                new CreditDepositCommand(Guid.CreateVersion7(), merchant.MerchantId, asset.AssetId, baseUnits),
+                http.RequestAborted);
+            if (result.IsFailure)
+                return Results.BadRequest(new { error = result.Error!.Message });
+
+            return Results.Ok(new
+            {
+                credited = true,
+                merchantId = merchant.MerchantId,
+                assetId = asset.AssetId,
+                amountBaseUnits = baseUnits.ToString(CultureInfo.InvariantCulture),
+                whatNext = "The merchant can now withdraw up to this balance. Call POST /api/v1/withdraw (Swagger " +
+                           "auto-signs), then watch withdrawal.Withdrawal go Approved -> Signing -> Broadcast -> " +
+                           "Confirmed and the ledger settle. Check GET /api/v1/balance.",
+            });
         });
 
         // Simulates a payer sending the invoiced amount, WITHOUT mainnet or real money: scripts the in-memory
