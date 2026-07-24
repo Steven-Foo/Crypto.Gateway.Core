@@ -1,4 +1,4 @@
-SET QUOTED_IDENTIFIER ON;
+﻿SET QUOTED_IDENTIFIER ON;
 SET ANSI_NULLS ON;
 GO
 
@@ -123,6 +123,27 @@ IF NOT EXISTS (
 BEGIN
     INSERT INTO [withdrawal].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
     VALUES (N'20260714030859_InitialWithdrawal', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260723103610_AddWithdrawalSignedTransaction'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [SignedTransaction] varbinary(max) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260723103610_AddWithdrawalSignedTransaction'
+)
+BEGIN
+    INSERT INTO [withdrawal].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260723103610_AddWithdrawalSignedTransaction', N'10.0.9');
 END;
 
 COMMIT;

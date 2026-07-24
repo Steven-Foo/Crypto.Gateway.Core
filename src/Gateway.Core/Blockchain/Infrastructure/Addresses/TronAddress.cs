@@ -41,6 +41,14 @@ public static class TronAddress
     }
 
     /// <summary>
+    /// TRON Base58Check address → 21-byte <c>41…</c> hex (lowercase, no <c>0x</c>) — the form the native
+    /// wallet API expects for <c>owner_address</c>/<c>contract_address</c> when <c>visible=false</c>.
+    /// Inverse of <see cref="FromRawHex"/>.
+    /// </summary>
+    public static string ToRawHex(string base58Address) =>
+        Convert.ToHexString(TronAddressEncoder.ToRawAddress(base58Address)).ToLowerInvariant();
+
+    /// <summary>
     /// The 21-byte, already <c>0x41</c>-prefixed hex TRON's *native* wallet API returns for addresses
     /// (e.g. <c>to_address</c>/<c>owner_address</c> on a <c>TransferContract</c>) → TRON Base58Check.
     /// Distinct from <see cref="FromEvmHex"/>, which takes the 20-byte unprefixed form the Ethereum-

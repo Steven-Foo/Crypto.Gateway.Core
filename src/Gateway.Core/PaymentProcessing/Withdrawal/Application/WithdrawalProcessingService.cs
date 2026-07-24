@@ -44,36 +44,59 @@ public sealed class WithdrawalProcessingService(
     {
         try
         {
+            // Already signed (a resumed/retried pass): re-broadcast the SAME persisted blob — never rebuild.
+            // Rebuilding would mint a new tx id the chain won't dedup, risking a double-send.
+            if (withdrawal.Status == WithdrawalStatus.Signing && withdrawal.HasSignedTransaction)
+                return await BroadcastAsync(withdrawal, withdrawal.SignedTransaction!, cancellationToken);
+
+            // Fresh (Approved): build → sign → persist the signed blob (→ Signing) → broadcast.
             var hotWallet = hotWallets.For(withdrawal.Chain);
 
             var unsigned = await transactionBuilder.BuildTransferAsync(
                 new BuildWithdrawalRequest(withdrawal.Chain, withdrawal.AssetId, hotWallet.Address, withdrawal.DestinationAddress, withdrawal.Amount),
                 cancellationToken);
 
-            if (withdrawal.Status == WithdrawalStatus.Approved)
-            {
-                withdrawal.BeginSigning(Guid.CreateVersion7(), timeProvider.GetUtcNow());
-                await repository.SaveChangesAsync(cancellationToken);
-            }
-
             var signed = await signer.SignAsync(
                 new SigningRequest(withdrawal.Id, withdrawal.Chain, unsigned.Payload, hotWallet.KeyReference), cancellationToken);
             if (signed.IsFailure)
-                return await FailAsync(withdrawal, $"sign: {signed.Error!.Message}", cancellationToken);
+                return await FailAsync(withdrawal, $"sign: {signed.Error!.Message}", cancellationToken); // pre-broadcast → safe to release
 
-            var broadcast = await broadcaster.BroadcastAsync(withdrawal.Chain, signed.Value.SignedPayload, cancellationToken);
-            if (broadcast.IsFailure)
-                return await FailAsync(withdrawal, $"broadcast: {broadcast.Error!.Message}", cancellationToken);
-
-            withdrawal.MarkBroadcast(broadcast.Value.TransactionHash, timeProvider.GetUtcNow());
+            // Persist the signed blob atomically with the → Signing transition. If we crash after this, the
+            // next pass re-broadcasts this exact blob (above); if we crash before it, we are still Approved and
+            // rebuild safely (nothing signed or broadcast yet).
+            var recorded = withdrawal.RecordSigned(Guid.CreateVersion7(), signed.Value.SignedPayload, timeProvider.GetUtcNow());
+            if (recorded.IsFailure)
+                return false; // state moved under us — leave for the next pass
             await repository.SaveChangesAsync(cancellationToken);
-            return true;
+
+            return await BroadcastAsync(withdrawal, signed.Value.SignedPayload, cancellationToken);
         }
         catch (Exception ex)
         {
+            // Ambiguous failures (e.g. a lost broadcast ack) land here: no state change, retried next pass.
+            // A withdrawal already in Signing is re-broadcast (idempotent), never released, so this cannot double-spend.
             logger.LogError(ex, "Processing withdrawal {WithdrawalId} failed; will retry next pass.", withdrawal.Id);
             return false;
         }
+    }
+
+    private async Task<bool> BroadcastAsync(WithdrawalEntity withdrawal, byte[] signedPayload, CancellationToken cancellationToken)
+    {
+        var broadcast = await broadcaster.BroadcastAsync(withdrawal.Chain, signedPayload, cancellationToken);
+        if (broadcast.IsFailure)
+        {
+            // A definitive node rejection (result:false) means the transaction was NOT accepted — nothing
+            // reached the chain — so releasing the reserve is safe. A duplicate is mapped to success by the
+            // broadcaster, so a re-broadcast of an accepted tx never lands here. (A lost ack throws instead,
+            // handled by the caller's catch: no release.)
+            return await FailAsync(withdrawal, $"broadcast: {broadcast.Error!.Message}", cancellationToken);
+        }
+
+        var marked = withdrawal.MarkBroadcast(broadcast.Value.TransactionHash, timeProvider.GetUtcNow());
+        if (marked.IsFailure)
+            return false;
+        await repository.SaveChangesAsync(cancellationToken);
+        return true;
     }
 
     private async Task<bool> FailAsync(WithdrawalEntity withdrawal, string reason, CancellationToken cancellationToken)

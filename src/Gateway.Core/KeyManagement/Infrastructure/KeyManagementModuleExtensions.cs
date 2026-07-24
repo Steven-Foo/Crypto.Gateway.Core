@@ -59,6 +59,19 @@ public static class KeyManagementModuleExtensions
     }
 
     /// <summary>
+    /// Registers the real TRON signer, which loads a private key from the registered
+    /// <see cref="ISecretProvider"/> and produces a genuine secp256k1 signature. Wire this ONLY where that
+    /// provider holds a <b>testnet throwaway</b> key (Dev/testnet) — NEVER in production, where the private
+    /// key must never enter the process and signing belongs to a KMS/HSM-backed signer behind this same
+    /// <see cref="ISigner"/> port (§10). The composition root chooses; there is no environment default.
+    /// </summary>
+    public static IServiceCollection AddTronSigner(this IServiceCollection services)
+    {
+        services.TryAddSingleton<ISigner, TronSigner>();
+        return services;
+    }
+
+    /// <summary>
     /// DEVELOPMENT / LOCAL ONLY. Wires the in-memory secret provider and an idempotent HD-wallet seeder from
     /// configuration (section <c>KeyManagement</c>: <c>DevWallets</c> + <c>DevSecrets</c>), so a signed
     /// <c>/deposit</c> can provision a deposit address on a fresh clone with no manual seeding. A developer

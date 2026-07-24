@@ -57,6 +57,16 @@ public sealed class Withdrawal : Entity<Guid>
     public WithdrawalStatus Status { get; private set; }
     public string? ApprovedBy { get; private set; }
     public Guid? SigningRequestId { get; private set; }
+
+    /// <summary>
+    /// The signed, broadcast-ready transaction blob, persisted the moment it is signed (see
+    /// <see cref="RecordSigned"/>). Opaque bytes — public, broadcastable, never key material. Retained so a
+    /// re-processing pass re-broadcasts the <em>same</em> transaction instead of building a new one.
+    /// </summary>
+    public byte[]? SignedTransaction { get; private set; }
+
+    public bool HasSignedTransaction => SignedTransaction is { Length: > 0 };
+
     public string? TransactionHash { get; private set; }
     public string? FailureReason { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
@@ -152,6 +162,28 @@ public sealed class Withdrawal : Entity<Guid>
             return Result.Failure(WithdrawalErrors.InvalidStateTransition);
 
         SigningRequestId = signingRequestId;
+        Status = WithdrawalStatus.Signing;
+        UpdatedAt = now;
+        return Result.Success();
+    }
+
+    /// <summary>
+    /// Records the signed transaction blob and moves Approved → Signing in one step. Persisting the signed
+    /// blob <em>before</em> broadcast is the money-out safety guarantee: a transaction's on-chain identity is
+    /// fixed once signed, so a crash-and-retry re-broadcasts <b>this exact blob</b> (identical tx id, which the
+    /// chain dedups) rather than building a fresh transaction the chain would treat as a second, distinct send
+    /// — the double-send hazard on chains (like TRON) that stamp a fresh reference/expiry at build time.
+    /// </summary>
+    public Result RecordSigned(Guid signingRequestId, byte[] signedTransaction, DateTimeOffset now)
+    {
+        if (Status != WithdrawalStatus.Approved)
+            return Result.Failure(WithdrawalErrors.InvalidStateTransition);
+
+        if (signedTransaction is not { Length: > 0 })
+            return Result.Failure(WithdrawalErrors.InvalidStateTransition);
+
+        SigningRequestId = signingRequestId;
+        SignedTransaction = signedTransaction;
         Status = WithdrawalStatus.Signing;
         UpdatedAt = now;
         return Result.Success();
