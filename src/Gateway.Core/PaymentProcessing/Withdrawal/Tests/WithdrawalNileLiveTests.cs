@@ -1,7 +1,9 @@
 using System.Numerics;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
+using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Addresses;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers.Tron;
+using NBitcoin;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Contracts;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Secrets;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Signing;
@@ -75,8 +77,14 @@ public sealed class WithdrawalNileLiveTests
         signed.IsSuccess.ShouldBeTrue(signed.Error?.Message);
 
         var broadcast = await broadcaster.BroadcastAsync(Chain.Tron, signed.Value.SignedPayload, ct);
+        if (broadcast.IsFailure)
+            Report($"broadcast_failed={broadcast.Error!.Code}: {broadcast.Error.Message}");
         broadcast.IsSuccess.ShouldBeTrue(broadcast.Error?.Message); // a real Nile node accepted our signature
         var txId = broadcast.Value.TransactionHash;
+
+        var explorer = $"https://nile.tronscan.org/#/transaction/{txId}";
+        Report($"txid={txId}");
+        Report($"explorer={explorer}");
 
         // Poll until the node reports it mined (Nile block time ≈ 3s).
         TransactionStatus? status = null;
@@ -86,11 +94,39 @@ public sealed class WithdrawalNileLiveTests
             status = await broadcaster.GetTransactionStatusAsync(Chain.Tron, txId, ct);
         }
 
-        status.ShouldNotBeNull($"Transaction {txId} was not mined on Nile within the timeout. Explorer: https://nile.tronscan.org/#/transaction/{txId}");
-        status!.Succeeded.ShouldBeTrue($"Transaction {txId} reverted on-chain. Explorer: https://nile.tronscan.org/#/transaction/{txId}");
+        Report(status is null ? "status=NOT_MINED" : $"status={(status.Succeeded ? "SUCCESS" : "REVERT")} block={status.BlockNumber}");
+
+        status.ShouldNotBeNull($"Transaction {txId} was not mined on Nile within the timeout. Explorer: {explorer}");
+        status!.Succeeded.ShouldBeTrue($"Transaction {txId} reverted on-chain. Explorer: {explorer}");
+    }
+
+    [Fact]
+    public void The_private_key_derives_the_source_address()
+    {
+        var privateKeyHex = Env("CPE_NILE_PRIVKEY");
+        if (string.IsNullOrWhiteSpace(privateKeyHex))
+        {
+            Assert.Skip("Set CPE_NILE_PRIVKEY to check the key derives CPE_NILE_FROM.");
+            return;
+        }
+
+        using var key = new Key(Convert.FromHexString(privateKeyHex));
+        var derived = new TronAddressEncoder().Encode(key.PubKey.Decompress().ToBytes());
+        Report($"derived_address={derived}");
+        Report($"expected_from={Env("CPE_NILE_FROM")}");
+
+        if (Env("CPE_NILE_FROM") is { Length: > 0 } expected)
+            derived.ShouldBe(expected);
     }
 
     private static string? Env(string name) => Environment.GetEnvironmentVariable(name);
+
+    // Appends a result line to CPE_NILE_OUT when set, so a manual live run reports its txid/status even on success.
+    private static void Report(string line)
+    {
+        if (Env("CPE_NILE_OUT") is { Length: > 0 } path)
+            File.AppendAllText(path, line + Environment.NewLine);
+    }
 
     private sealed class SingleAssetCatalog(Guid assetId, string contractAddress) : IAssetCatalog
     {

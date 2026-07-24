@@ -27,10 +27,15 @@ the transaction confirms on-chain.
 
 1. **A throwaway Nile account.** Generate a key pair (any TRON tool, e.g. TronLink set to Nile, or `tronweb`).
    Keep the **private key (64-hex)** and its **`T…` address**. This account is disposable.
-2. **Fund it from the Nile faucet:** <https://nileex.io/join/getJoinPage> — get test **TRX** (pays the
-   energy/bandwidth for the transfer).
+2. **Fund it from the Nile faucet:** <https://nileex.io/join/getJoinPage> — get test **TRX**. This is not
+   optional: a TRON account does not exist on-chain until it receives TRX, and it needs TRX (or staked energy) to
+   pay for the transfer. **A TRC-20 balance alone does NOT activate or fund the account** — the tokens sit in the
+   token contract while the native account stays empty, and the node rejects any send with *"account … does not
+   exist."* Verify with `POST /wallet/getaccount {"address":"T…","visible":true}`: a `{}` response means it is not
+   yet activated — send it TRX first.
 3. **Hold some test TRC-20** at that address to transfer. Use a Nile TRC-20 token contract you can obtain test
-   balance for (a Nile test-USDT, or any TRC-20 you control). Note its **contract `T…` address**.
+   balance for (a Nile test-USDT, or any TRC-20 you control). Note its **contract `T…` address**. Check the
+   balance actually landed with `GET /v1/accounts/{address}/transactions/trc20`.
 4. **A Nile RPC endpoint:** `https://nile.trongrid.io` (a TronGrid Nile API key raises rate limits; optional).
 5. **A destination `T…` address** to receive the transfer.
 
