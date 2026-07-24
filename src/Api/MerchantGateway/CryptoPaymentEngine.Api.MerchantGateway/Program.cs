@@ -85,12 +85,21 @@ builder.Services.AddConfigurationAssetCatalog();        // canonical AssetId sha
 builder.Services.AddPaymentIntentModule(config, dbConnection); // deposit invoices + address pool; matches DepositConfirmed
 builder.Services.AddNotificationModule();               // consumes PaymentIntentMatched → signed merchant callback
 
-// ── Chain source + signing: swap dev↔prod by DI, not code (§8, §10) ───────────
-if (builder.Environment.IsDevelopment())
+// ── Environment tiers (the money/keys security boundary, §10) ─────────────────
+// Development and Staging are TESTNET tiers: they may run the real signer over a THROWAWAY testnet key and
+// use the dev seed/custody conveniences, so local and EC2 staging behave identically. Production is the hard
+// wall — it registers NO key-loading signer and NONE of the dev seeding. Changing ASPNETCORE_ENVIRONMENT to
+// Production therefore disables the throwaway signer automatically (fail-safe): a real KMS-backed signer must
+// be added before Production can move any money. See docs/ec2-staging.md.
+var isTestnetTier = builder.Environment.IsDevelopment() || builder.Environment.IsStaging();
+
+// ── Chain source + signing: swap tier↔prod by DI, not code (§8, §10) ──────────
+if (isTestnetTier)
 {
     // Live money-out on TRON Nile testnet (Level 3): opt in with Withdrawal:LiveTron=true plus a THROWAWAY
-    // testnet key + endpoint in the git-ignored appsettings.Local.json (see docs/withdrawal-testnet.md). It
-    // implies the real chain source too, because confirming a broadcast withdrawal needs the real tip/finality.
+    // testnet key + endpoint in the git-ignored appsettings.Local.json (see docs/withdrawal-testnet.md /
+    // docs/ec2-staging.md). It implies the real chain source too, because confirming a broadcast withdrawal
+    // needs the real tip/finality.
     var liveTron = config.GetValue<bool>("Withdrawal:LiveTron");
 
     // Deposits: real mainnet/testnet detection when opted in (Chains:Tron:Live, or implied by LiveTron, + a
@@ -108,8 +117,9 @@ if (builder.Environment.IsDevelopment())
     if (liveTron)
     {
         // Real TRON build → broadcast → status over the node, and a real secp256k1 signer over the throwaway
-        // testnet key. The key never leaves the signer (§10); this branch is Development-only and gated, so a
-        // real key-holding signer can never be wired in production.
+        // testnet key. The key never leaves the signer (§10); this runs only in the testnet tier (Development /
+        // Staging), so a real key-holding signer can never be wired in production — Production takes the else
+        // branch below, which registers no signer at all.
         builder.Services.AddTronTransactionEngine(config);
         builder.Services.AddTronSigner();
     }
@@ -130,14 +140,14 @@ if (builder.Environment.IsDevelopment())
     // piece for a full deposit round-trip in dev. Config in Merchant:DevSeed; never runs in production (§10).
     builder.Services.AddDevelopmentMerchantSeed(config);
 }
-else
+else // Production (the hard §10 boundary)
 {
     builder.Services.AddJsonRpcChainSources();
     builder.Services.AddTronChainAdapter(config);
-    // NOT built yet: real per-chain ITransactionBuilder/ITransactionBroadcaster and the KMS-backed ISigner.
-    // Withdrawal processing stays inert in prod until these land — by design, never a fake signer.
-    // Also NOT built: the real TRON getaccountresource adapter (IAccountResourceReader) — the Energy monitor
-    // stays inert in prod until it lands (deferred to staging like the other JSON-RPC adapters, §8).
+    // Deliberately NOT registered in Production: any ISigner (no fake, no throwaway — a KMS-backed signer must
+    // land first), the real ITransactionBuilder/ITransactionBroadcaster, the in-memory secret provider + dev
+    // wallet/merchant seeding, and the in-memory account-resource reader. Withdrawal processing and address
+    // provisioning therefore stay inert in Production until their KMS/real implementations exist — by design.
 }
 
 // ── Background processing ─────────────────────────────────────────────────────
@@ -177,8 +187,11 @@ builder.Services.AddOutboxDispatcher<PaymentIntentDbContext>(); // relays Paymen
 
 var app = builder.Build();
 
-// Dev-only Swagger UI at /swagger (developer testing). Absent in production.
-if (app.Environment.IsDevelopment())
+// Testnet-tier Swagger UI at /swagger (Development + Staging testing). Absent in production.
+// NOTE: with the dev seed on, the interceptor embeds the DEV TEST merchant's signing secret in the page — a
+// documented test credential, never a real one (§10). Lock down the staging security group accordingly, or
+// set Merchant:DevSeed:Enabled=false there and sign with tools/dev/Invoke-MerchantRequest.ps1 instead.
+if (isTestnetTier)
 {
     app.UseSwagger();
     app.UseSwaggerUI(c =>
@@ -210,8 +223,8 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 app.MapMerchantApi();   // POST /api/v1/{deposit,withdraw,balance}
 app.MapPayApi();        // GET  /pay/{ref}  (page) + /pay/{ref}/info (data)
 
-// Dev-only: the in-host callback sink so a human can watch the merchant callback fire on deposit detection.
-if (app.Environment.IsDevelopment())
+// Testnet-tier only: the in-host callback sink + scan-cursor helper for manual testing. Absent in production.
+if (isTestnetTier)
     app.MapDevEndpoints();
 
 app.Run();
