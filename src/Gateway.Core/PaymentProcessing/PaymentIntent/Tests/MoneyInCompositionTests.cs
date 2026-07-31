@@ -15,7 +15,9 @@ using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Domain;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Events;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infrastructure.Persistence;
 using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Application;
+using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Application.Handlers;
+using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Infrastructure.Persistence;
 using CryptoPaymentEngine.Infrastructure.Events;
 using CryptoPaymentEngine.Infrastructure.Locking;
 using CryptoPaymentEngine.Infrastructure.Outbox;
@@ -64,6 +66,7 @@ public sealed class MoneyInCompositionTests : IAsyncLifetime
 
         services.AddDbContext<LedgerDbContext>(o => o.UseSqlServer(ConnectionString).UseBigIntegerMoney());
         services.AddDbContext<PaymentIntentDbContext>(o => o.UseSqlServer(ConnectionString).UseBigIntegerMoney());
+        services.AddDbContext<NotificationDbContext>(o => o.UseSqlServer(ConnectionString));
 
         services.AddScoped<IEventBus, InProcessEventBus>();
 
@@ -82,10 +85,15 @@ public sealed class MoneyInCompositionTests : IAsyncLifetime
         services.AddScoped<IPaymentIntentRepository, PaymentIntentRepository>();
         services.AddScoped<IIntegrationEventHandler<DepositConfirmed>, PaymentIntentMatchHandler>();
 
-        // Notification: consumes PaymentIntentMatched → signed callback (captured).
+        // Notification: consumes PaymentIntentMatched → signed callback, scheduled (real repository) then
+        // actually sent (real processing service) — proving the full split, not just the handler in isolation.
         services.AddSingleton<IWebhookSender>(_sender);
         services.AddSingleton<IMerchantCallbackSigner>(new StubSigner());
         services.AddSingleton<IAssetCatalog>(new StubCatalog());
+        services.AddScoped<CallbackDeliveryRepository>();
+        services.AddScoped<ICallbackDeliveryScheduler>(sp => sp.GetRequiredService<CallbackDeliveryRepository>());
+        services.AddScoped<ICallbackDeliveryRepository>(sp => sp.GetRequiredService<CallbackDeliveryRepository>());
+        services.AddScoped<CallbackDeliveryProcessingService>();
         services.AddScoped<IIntegrationEventHandler<PaymentIntentMatched>, DepositCallbackHandler>();
 
         _provider = services.BuildServiceProvider();
@@ -95,6 +103,8 @@ public sealed class MoneyInCompositionTests : IAsyncLifetime
         await ledger.Database.EnsureDeletedAsync(Ct);
         await ledger.Database.EnsureCreatedAsync(Ct);
         await scope.ServiceProvider.GetRequiredService<PaymentIntentDbContext>().Database
+            .GetService<IRelationalDatabaseCreator>().CreateTablesAsync(Ct);
+        await scope.ServiceProvider.GetRequiredService<NotificationDbContext>().Database
             .GetService<IRelationalDatabaseCreator>().CreateTablesAsync(Ct);
     }
 
@@ -142,8 +152,12 @@ public sealed class MoneyInCompositionTests : IAsyncLifetime
             matched.AmountMatched.ShouldBe(true);
         }
 
-        // The outbox relays PaymentIntentMatched → the Notification callback.
+        // The outbox relays PaymentIntentMatched → DepositCallbackHandler, which schedules (not sends) it.
         await DispatchPaymentIntentOutboxAsync();
+
+        // The delivery worker's job: pick up the just-scheduled (immediately-due) callback and actually send it.
+        await using (var scope = _provider.CreateAsyncScope())
+            await scope.ServiceProvider.GetRequiredService<CallbackDeliveryProcessingService>().ProcessOnceAsync(Ct);
 
         _sender.Body.ShouldNotBeNull();
         _sender.Url.ShouldBe("https://merchant.test/cb");

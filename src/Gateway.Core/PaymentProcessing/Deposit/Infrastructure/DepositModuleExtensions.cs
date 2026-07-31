@@ -1,4 +1,3 @@
-using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Application;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Infrastructure.Configuration;
@@ -12,14 +11,11 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Infrastructure;
 
 /// <summary>
-/// The Deposit module's composition. It owns detection, confirmation, dedup, and the scan cursor.
-/// It depends on two capabilities the composition root must also register, so this module never binds
-/// a concrete chain provider or reaches into another module (§4.5, §8):
-/// <list type="bullet">
-///   <item>the read-only chain source — <c>IDepositScanner</c>/<c>IChainStatusReader</c> (Blockchain;
-///   dev/test via <c>AddInMemoryChainSource()</c>, prod via the JSON-RPC adapters);</item>
-///   <item>the wallet directory — <c>IWalletDirectory</c> (Wallet), to answer whose address a transfer hit.</item>
-/// </list>
+/// The Deposit module's read-only/repository composition: dedup, scan cursor, and <c>IDepositLookup</c> —
+/// safe for any host to compose (e.g. Ops, for its transaction search). The heavier detection/confirmation
+/// services (which need the chain-source ports <c>IDepositScanner</c>/<c>IChainStatusReader</c>, Blockchain)
+/// live behind <c>AddDepositWorkers</c> instead, so a read-only composer never has to satisfy a chain
+/// adapter it will never use (§4.5, §4.7, §8).
 /// </summary>
 public static class DepositModuleExtensions
 {
@@ -42,8 +38,10 @@ public static class DepositModuleExtensions
         services.AddScoped<IScanCursorStore, ScanCursorStore>();
         services.AddScoped<IDepositLookup, DepositLookup>();
 
-        services.AddScoped<DepositDetectionService>();
-        services.AddScoped<DepositConfirmationService>();
+        // DepositDetectionService/DepositConfirmationService are NOT registered here — they need the
+        // chain-source ports (IDepositScanner/IChainStatusReader), which only a host running the scanner
+        // actually registers. They live behind AddDepositWorkers instead, so a read-only composer (Ops,
+        // via IDepositLookup) never has to satisfy a chain adapter it will never use (§4.7).
 
         return services;
     }

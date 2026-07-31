@@ -7,7 +7,10 @@
 
   <ItemGroup>
     <ProjectReference Include="../Application/CryptoPaymentEngine.Gateway.Core.Platform.Notification.Application.csproj" />
+    <ProjectReference Include="../Infrastructure/CryptoPaymentEngine.Gateway.Core.Platform.Notification.Infrastructure.csproj" />
+    <ProjectReference Include="../../../../Infrastructure/CryptoPaymentEngine.Infrastructure/CryptoPaymentEngine.Infrastructure.csproj" />
     <ProjectReference Include="../../../PaymentProcessing/PaymentIntent/Events/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Events.csproj" />
+    <ProjectReference Include="../../../PaymentProcessing/Withdrawal/Events/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Events.csproj" />
     <ProjectReference Include="../../../Merchant/Contracts/CryptoPaymentEngine.Gateway.Core.Merchant.Contracts.csproj" />
     <ProjectReference Include="../../../Blockchain/Contracts/CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.csproj" />
   </ItemGroup>
@@ -19,6 +22,7 @@
     <PackageReference Include="coverlet.collector" />
     <PackageReference Include="NSubstitute" />
     <PackageReference Include="Shouldly" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
   </ItemGroup>
 
 </Project>

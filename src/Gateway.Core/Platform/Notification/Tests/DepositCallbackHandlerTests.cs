@@ -3,7 +3,9 @@ using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Events;
 using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Application;
+using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Application.Handlers;
+using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Domain;
 using CryptoPaymentEngine.SharedKernel;
 using Microsoft.Extensions.Logging.Abstractions;
 using NSubstitute;
@@ -23,10 +25,17 @@ public sealed class DepositCallbackHandlerTests
         Chain.Tron, Asset, "TDepositAddress", ExpectedAmountBaseUnits: "1000000", ActualAmountBaseUnits: "1000000",
         AmountMatched: true, DepositId: Guid.CreateVersion7(), TransactionHash: "0xdeadbeef", MatchedAt: DateTimeOffset.UtcNow);
 
-    private sealed class Captured { public string? SignedBody; public string? SentBody; public string? SentUrl; }
+    private sealed class Captured
+    {
+        public string? SignedBody;
+        public string? ScheduledUrl;
+        public string? ScheduledBody;
+        public CallbackReferenceType? ScheduledReferenceType;
+        public Guid? ScheduledReferenceId;
+    }
 
-    private static (DepositCallbackHandler Handler, IWebhookSender Sender) Build(
-        Captured captured, bool delivered = true, bool canSign = true)
+    private static (DepositCallbackHandler Handler, ICallbackDeliveryScheduler Scheduler) Build(
+        Captured captured, bool canSign = true)
     {
         var signer = Substitute.For<IMerchantCallbackSigner>();
         signer.SignAsync(Arg.Any<Guid>(), Arg.Do<string>(b => captured.SignedBody = b), Arg.Any<CancellationToken>())
@@ -38,29 +47,34 @@ public sealed class DepositCallbackHandlerTests
         assets.FindByIdAsync(Asset, Arg.Any<CancellationToken>())
             .Returns(new AssetDto(Asset, Chain.Tron, "USDT", "TContract", Decimals: 6, IsNative: false));
 
-        var sender = Substitute.For<IWebhookSender>();
-        sender.SendAsync(
-                Arg.Do<string>(u => captured.SentUrl = u),
-                Arg.Do<string>(b => captured.SentBody = b),
+        var scheduler = Substitute.For<ICallbackDeliveryScheduler>();
+        scheduler.ScheduleAsync(
+                Arg.Do<CallbackReferenceType>(t => captured.ScheduledReferenceType = t),
+                Arg.Do<Guid>(id => captured.ScheduledReferenceId = id),
+                Arg.Do<string>(u => captured.ScheduledUrl = u),
+                Arg.Do<string>(b => captured.ScheduledBody = b),
                 Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
-            .Returns(delivered);
+            .Returns(Task.CompletedTask);
 
-        return (new DepositCallbackHandler(signer, assets, sender, NullLogger<DepositCallbackHandler>.Instance), sender);
+        return (new DepositCallbackHandler(signer, assets, scheduler, NullLogger<DepositCallbackHandler>.Instance), scheduler);
     }
 
     [Fact]
-    public async Task It_posts_the_frozen_deposit_payload_and_the_signed_bytes_are_exactly_what_is_sent()
+    public async Task It_schedules_the_frozen_deposit_payload_and_the_signed_bytes_are_exactly_what_is_scheduled()
     {
         var captured = new Captured();
         var (handler, _) = Build(captured);
+        var @event = Matched();
 
-        await handler.HandleAsync(Matched(), Ct);
+        await handler.HandleAsync(@event, Ct);
 
-        captured.SentUrl.ShouldBe("https://merchant.test/callback");
-        captured.SentBody.ShouldNotBeNull();
-        captured.SignedBody.ShouldBe(captured.SentBody); // HMAC is over the exact body we send
+        captured.ScheduledReferenceType.ShouldBe(CallbackReferenceType.Deposit);
+        captured.ScheduledReferenceId.ShouldBe(@event.PublicReference);
+        captured.ScheduledUrl.ShouldBe("https://merchant.test/callback");
+        captured.ScheduledBody.ShouldNotBeNull();
+        captured.SignedBody.ShouldBe(captured.ScheduledBody); // HMAC is over the exact body scheduled
 
-        using var doc = JsonDocument.Parse(captured.SentBody!);
+        using var doc = JsonDocument.Parse(captured.ScheduledBody!);
         doc.RootElement.GetProperty("transactionId").GetString().ShouldBe("tx-1");
         var data = doc.RootElement.GetProperty("data");
         data.GetProperty("type").GetString().ShouldBe("deposit");
@@ -74,36 +88,29 @@ public sealed class DepositCallbackHandlerTests
     }
 
     [Fact]
-    public async Task It_does_not_send_when_the_merchant_has_no_callback_url()
+    public async Task It_does_not_schedule_when_the_merchant_has_no_callback_url()
     {
         var captured = new Captured();
-        var (handler, sender) = Build(captured);
+        var (handler, scheduler) = Build(captured);
 
         await handler.HandleAsync(Matched(callbackUrl: null), Ct);
 
-        await sender.DidNotReceive().SendAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await scheduler.DidNotReceive().ScheduleAsync(
+            Arg.Any<CallbackReferenceType>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(),
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]
-    public async Task A_non_2xx_delivery_throws_so_the_outbox_retries()
+    public async Task It_does_not_schedule_an_unsigned_callback_when_there_is_no_credential()
     {
         var captured = new Captured();
-        var (handler, _) = Build(captured, delivered: false);
+        var (handler, scheduler) = Build(captured, canSign: false);
 
-        await Should.ThrowAsync<DomainException>(() => handler.HandleAsync(Matched(), Ct));
-    }
+        await handler.HandleAsync(Matched(), Ct); // logs and drops — never throws, never schedules unsigned
 
-    [Fact]
-    public async Task It_does_not_send_an_unsigned_callback_when_there_is_no_credential()
-    {
-        var captured = new Captured();
-        var (handler, sender) = Build(captured, canSign: false);
-
-        await handler.HandleAsync(Matched(), Ct); // logs and drops — never throws, never sends unsigned
-
-        await sender.DidNotReceive().SendAsync(
-            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
+        await scheduler.DidNotReceive().ScheduleAsync(
+            Arg.Any<CallbackReferenceType>(), Arg.Any<Guid>(), Arg.Any<string>(), Arg.Any<string>(),
+            Arg.Any<string>(), Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>());
     }
 
     /// <summary>A stand-in error so the test does not depend on the Merchant module's internal error catalog.</summary>

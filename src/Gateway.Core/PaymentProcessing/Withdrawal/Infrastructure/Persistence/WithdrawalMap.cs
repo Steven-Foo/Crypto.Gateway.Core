@@ -24,6 +24,7 @@ public sealed class WithdrawalMap : IEntityTypeConfiguration<WithdrawalEntity>
         builder.Property(w => w.Fee).IsRequired();
 
         builder.Property(w => w.IdempotencyKey).IsUnicode(false).HasMaxLength(128).IsRequired();
+        builder.Property(w => w.CallbackUrl).HasMaxLength(512);
         builder.Property(w => w.Status).HasConversion<string>().HasMaxLength(16).IsRequired();
         builder.Property(w => w.ApprovedBy).HasMaxLength(128);
         builder.Property(w => w.SigningRequestId);
@@ -33,6 +34,7 @@ public sealed class WithdrawalMap : IEntityTypeConfiguration<WithdrawalEntity>
 
         builder.Property(w => w.TransactionHash).IsUnicode(false).HasMaxLength(128);
         builder.Property(w => w.FailureReason).HasMaxLength(512);
+        builder.Property(w => w.Confirmations);
 
         builder.Property<byte[]>("RowVersion").IsRowVersion();
 

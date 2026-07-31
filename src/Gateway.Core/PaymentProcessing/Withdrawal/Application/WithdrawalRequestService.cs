@@ -9,7 +9,8 @@ using WithdrawalEntity = CryptoPaymentEngine.Gateway.Core.PaymentProcessing.With
 namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application;
 
 public sealed record RequestWithdrawalCommand(
-    Guid MerchantId, Guid AssetId, Chain Chain, string DestinationAddress, BigInteger Amount, string IdempotencyKey);
+    Guid MerchantId, Guid AssetId, Chain Chain, string DestinationAddress, BigInteger Amount, string IdempotencyKey,
+    string? CallbackUrl = null);
 
 public sealed record WithdrawalResult(Guid WithdrawalId, string Status);
 
@@ -55,7 +56,7 @@ public sealed class WithdrawalRequestService(
 
             var created = WithdrawalEntity.Request(
                 command.MerchantId, command.AssetId, command.Chain, command.DestinationAddress,
-                command.Amount, fee, command.IdempotencyKey, timeProvider.GetUtcNow());
+                command.Amount, fee, command.IdempotencyKey, command.CallbackUrl, timeProvider.GetUtcNow());
             if (created.IsFailure)
                 return Result.Failure<WithdrawalResult>(created.Error!);
 

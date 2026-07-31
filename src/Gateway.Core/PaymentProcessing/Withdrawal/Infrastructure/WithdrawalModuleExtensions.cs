@@ -12,10 +12,13 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure;
 
 /// <summary>
-/// The Withdrawal module's composition. It depends on capabilities the composition root also registers:
-/// the Ledger's <c>IWithdrawalLedger</c> (synchronous reserve), the Blockchain
-/// <c>ITransactionBuilder</c>/<c>ITransactionBroadcaster</c> + <c>IChainStatusReader</c>, KeyManagement's
-/// <c>ISigner</c>, and Merchant's <c>IMerchantDirectory</c> — none reached into directly (§4.5).
+/// The Withdrawal module's request/approval/repository composition — safe for any host to compose (e.g.
+/// Ops, for its transaction search via <c>IWithdrawalDirectory</c>). It depends on the Ledger's
+/// <c>IWithdrawalLedger</c> (synchronous reserve) and Merchant's <c>IMerchantDirectory</c>/fee schedule, none
+/// reached into directly (§4.5). The heavier processing/confirmation services (which need
+/// <c>ITransactionBuilder</c>/<c>ITransactionBroadcaster</c>/<c>IChainStatusReader</c>/<c>ISigner</c>) live
+/// behind <c>AddWithdrawalWorkers</c> instead, so a read-only composer never has to satisfy a signer or
+/// broadcaster it will never use (§10).
 /// </summary>
 public static class WithdrawalModuleExtensions
 {
@@ -38,8 +41,12 @@ public static class WithdrawalModuleExtensions
         services.AddScoped<IWithdrawalDirectory, WithdrawalDirectory>();
         services.AddScoped<IWithdrawalRequestService, WithdrawalRequestService>();
         services.AddScoped<IWithdrawalApprovalService, WithdrawalApprovalService>();
-        services.AddScoped<WithdrawalProcessingService>();
-        services.AddScoped<WithdrawalConfirmationService>();
+
+        // WithdrawalProcessingService/WithdrawalConfirmationService are NOT registered here — they need the
+        // chain-processing ports (ITransactionBuilder/ISigner/ITransactionBroadcaster/IHotWalletProvider/
+        // IChainStatusReader), which only a host running the processing workers actually registers. They
+        // live behind AddWithdrawalWorkers instead, so a read-only composer (Ops, via IWithdrawalDirectory)
+        // never has to satisfy a signer/broadcaster it will never use (§4.7, §10).
 
         return services;
     }

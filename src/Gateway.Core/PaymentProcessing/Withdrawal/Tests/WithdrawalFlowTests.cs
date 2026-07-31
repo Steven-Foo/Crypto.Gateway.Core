@@ -12,6 +12,7 @@ using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Signing;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application.Abstractions;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Domain;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Events;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure.Persistence;
@@ -78,6 +79,7 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
 
         // Withdrawal + fakes
         services.AddScoped<IWithdrawalRepository, WithdrawalRepository>();
+        services.AddScoped<IWithdrawalDirectory, WithdrawalDirectory>();
         services.AddScoped<IWithdrawalRequestService, WithdrawalRequestService>();
         services.AddScoped<IWithdrawalApprovalService, WithdrawalApprovalService>();
         services.AddScoped<WithdrawalProcessingService>();
@@ -161,6 +163,10 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
         var request = await RequestAsync(amount, "idem-reject");
         request.Value.Status.ShouldBe(nameof(WithdrawalStatus.PendingApproval));
         (await BalanceAsync(AccountType.MerchantLiability, Merchant)).ShouldBe(BigInteger.Parse("3900000")); // reserved
+
+        // The Ops search screen must show this distinctly from "still processing" — it needs a human, the
+        // worker can't move it forward on its own (§ OpsWithdrawalApprovalEndpoints).
+        (await SearchStatusAsync(request.Value.WithdrawalId)).ShouldBe("pending_approval");
 
         await using (var scope = _provider.CreateAsyncScope())
         {
@@ -315,6 +321,15 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
         await using var scope = _provider.CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<IWithdrawalRequestService>()
             .RequestAsync(new RequestWithdrawalCommand(Merchant, Asset, Chain.Tron, "TDestination", amount, idempotencyKey), Ct);
+    }
+
+    private async Task<string?> SearchStatusAsync(Guid withdrawalId)
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        var filter = new WithdrawalAdminFilter(Merchant, withdrawalId, null, null, null, null, null, null);
+        var (items, _) = await scope.ServiceProvider.GetRequiredService<IWithdrawalDirectory>()
+            .SearchAsync(filter, page: 1, pageSize: 10, Ct);
+        return items.SingleOrDefault()?.Status;
     }
 
     private async Task ProcessAsync()

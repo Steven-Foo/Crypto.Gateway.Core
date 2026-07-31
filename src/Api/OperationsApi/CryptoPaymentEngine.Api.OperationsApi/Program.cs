@@ -7,8 +7,11 @@ using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infrastructure;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Platform.Identity.Infrastructure;
+using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Infrastructure;
 using CryptoPaymentEngine.Infrastructure.Locking;
 using Microsoft.OpenApi;
 using Serilog;
@@ -46,17 +49,22 @@ builder.Services.AddHttpClient<CloudflareService>(c =>
 });
 
 // ── Business modules this host composes — merchant/custody setup, staff identity, read-only ledger
-// history, plus enough of PaymentIntent for staff to cancel a still-unpaid invoice. No Deposit/Withdrawal
-// here, and Ledger is composed read-only (ILedgerQuery only) — this host still never posts a ledger entry
-// or moves money itself (§4.7 — a host is composition only, no business logic of its own). PaymentIntent
-// never touches the ledger either way (§ PaymentIntent design) — a manual fail is only reachable
-// pre-match, before any deposit has been credited.
+// history, plus enough of PaymentIntent/Deposit/Withdrawal/Notification for the Ops transaction-search
+// screens. Deposit/Withdrawal/Notification are composed for their read Contracts ONLY (IDepositLookup,
+// IWithdrawalDirectory.SearchAsync, ICallbackDeliveryQuery) — this host registers no workers/dispatchers for
+// them, so it never scans/processes/broadcasts/dispatches money-moving background work (§4.7 — a host is
+// composition only, no business logic of its own). Ledger is likewise read-only (ILedgerQuery only).
+// PaymentIntent never touches the ledger either way (§ PaymentIntent design) — a manual fail is only
+// reachable pre-match, before any deposit has been credited.
 builder.Services.AddMerchantModule(config, dbConnection);
 builder.Services.AddKeyManagementModule(dbConnection);
 builder.Services.AddBlockchainAddressEncoding();
 builder.Services.AddConfigurationAssetCatalog();
 builder.Services.AddWalletModule(dbConnection);
 builder.Services.AddPaymentIntentModule(config, dbConnection);
+builder.Services.AddDepositModule(config, dbConnection);       // read-only use here: IDepositLookup for /transactions/deposits
+builder.Services.AddWithdrawalModule(config, dbConnection);    // read-only use here: IWithdrawalDirectory for /transactions/withdrawals
+builder.Services.AddNotificationModule(dbConnection);          // read-only use here: ICallbackDeliveryQuery for both transaction screens
 builder.Services.AddLedgerModule(dbConnection); // read-only use here: ILedgerQuery for /transactions
 builder.Services.AddIdentityModule(config, dbConnection); // staff login/logout/session validation
 
@@ -85,5 +93,9 @@ app.MapOpsAuthApi();
 app.MapOpsMerchantApi();
 app.MapOpsPaymentIntentApi();
 app.MapOpsTransactionApi();
+app.MapOpsDepositTransactionApi();
+app.MapOpsWithdrawalTransactionApi();
+app.MapOpsCallbackApi();
+app.MapOpsWithdrawalApprovalApi();
 
 app.Run();

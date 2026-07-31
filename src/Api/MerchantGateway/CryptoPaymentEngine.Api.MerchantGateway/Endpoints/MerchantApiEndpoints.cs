@@ -68,7 +68,8 @@ public static class MerchantApiEndpoints
             return Fail(StatusCodes.Status400BadRequest, "Invalid amount for this asset's precision.");
 
         var result = await withdrawals.RequestAsync(
-            new RequestWithdrawalCommand(MerchantId(http), asset.AssetId, asset.Chain, request.ToAddress, amount, request.TransactionId),
+            new RequestWithdrawalCommand(
+                MerchantId(http), asset.AssetId, asset.Chain, request.ToAddress, amount, request.TransactionId, request.CallbackUrl),
             http.RequestAborted);
         if (result.IsFailure)
             return Fail(StatusCodes.Status400BadRequest, result.Error!.Message);

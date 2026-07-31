@@ -361,6 +361,16 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Tests", "Tests", "{DC929D13
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CryptoPaymentEngine.Gateway.Core.Platform.Identity.Tests", "src\Gateway.Core\Platform\Identity\Tests\CryptoPaymentEngine.Gateway.Core.Platform.Identity.Tests.csproj", "{5FE577E2-C984-40C2-861B-BA1FA0C3F1AD}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Gateway.Core", "Gateway.Core", "{B4AF9606-C68D-0DAE-FFF0-E69452E0C5CF}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Platform", "Platform", "{A057EC15-F5A9-A98E-7C51-00814F4F1079}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Notification", "Notification", "{40B76A9B-1ED4-9CE4-2497-40E7823BB0F7}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CryptoPaymentEngine.Gateway.Core.Platform.Notification.Domain", "src\Gateway.Core\Platform\Notification\Domain\CryptoPaymentEngine.Gateway.Core.Platform.Notification.Domain.csproj", "{B810D4A7-6333-4881-8DFA-37733DF25C98}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CryptoPaymentEngine.Gateway.Core.Platform.Notification.Workers", "src\Gateway.Core\Platform\Notification\Workers\CryptoPaymentEngine.Gateway.Core.Platform.Notification.Workers.csproj", "{B95DC97F-9759-43CA-A2EC-D8598386914E}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -1343,6 +1353,30 @@ Global
 		{5FE577E2-C984-40C2-861B-BA1FA0C3F1AD}.Release|x64.Build.0 = Release|Any CPU
 		{5FE577E2-C984-40C2-861B-BA1FA0C3F1AD}.Release|x86.ActiveCfg = Release|Any CPU
 		{5FE577E2-C984-40C2-861B-BA1FA0C3F1AD}.Release|x86.Build.0 = Release|Any CPU
+		{B810D4A7-6333-4881-8DFA-37733DF25C98}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B810D4A7-6333-4881-8DFA-37733DF25C98}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B810D4A7-6333-4881-8DFA-37733DF25C98}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{B810D4A7-6333-4881-8DFA-37733DF25C98}.Debug|x64.Build.0 = Debug|Any CPU
+		{B810D4A7-6333-4881-8DFA-37733DF25C98}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{B810D4A7-6333-4881-8DFA-37733DF25C98}.Debug|x86.Build.0 = Debug|Any CPU
+		{B810D4A7-6333-4881-8DFA-37733DF25C98}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B810D4A7-6333-4881-8DFA-37733DF25C98}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B810D4A7-6333-4881-8DFA-37733DF25C98}.Release|x64.ActiveCfg = Release|Any CPU
+		{B810D4A7-6333-4881-8DFA-37733DF25C98}.Release|x64.Build.0 = Release|Any CPU
+		{B810D4A7-6333-4881-8DFA-37733DF25C98}.Release|x86.ActiveCfg = Release|Any CPU
+		{B810D4A7-6333-4881-8DFA-37733DF25C98}.Release|x86.Build.0 = Release|Any CPU
+		{B95DC97F-9759-43CA-A2EC-D8598386914E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B95DC97F-9759-43CA-A2EC-D8598386914E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B95DC97F-9759-43CA-A2EC-D8598386914E}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{B95DC97F-9759-43CA-A2EC-D8598386914E}.Debug|x64.Build.0 = Debug|Any CPU
+		{B95DC97F-9759-43CA-A2EC-D8598386914E}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{B95DC97F-9759-43CA-A2EC-D8598386914E}.Debug|x86.Build.0 = Debug|Any CPU
+		{B95DC97F-9759-43CA-A2EC-D8598386914E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B95DC97F-9759-43CA-A2EC-D8598386914E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B95DC97F-9759-43CA-A2EC-D8598386914E}.Release|x64.ActiveCfg = Release|Any CPU
+		{B95DC97F-9759-43CA-A2EC-D8598386914E}.Release|x64.Build.0 = Release|Any CPU
+		{B95DC97F-9759-43CA-A2EC-D8598386914E}.Release|x86.ActiveCfg = Release|Any CPU
+		{B95DC97F-9759-43CA-A2EC-D8598386914E}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -1526,5 +1560,9 @@ Global
 		{BAC55AC4-FE6C-42A9-9C47-6C2DAE56F0AB} = {A8F63BBF-B5DF-7D52-7DC4-B5194A4F5865}
 		{DC929D13-2497-FFBB-E3DA-08CC60691B57} = {3A12DFB9-E76C-866F-50F4-7EC53961308A}
 		{5FE577E2-C984-40C2-861B-BA1FA0C3F1AD} = {DC929D13-2497-FFBB-E3DA-08CC60691B57}
+		{A057EC15-F5A9-A98E-7C51-00814F4F1079} = {B4AF9606-C68D-0DAE-FFF0-E69452E0C5CF}
+		{40B76A9B-1ED4-9CE4-2497-40E7823BB0F7} = {A057EC15-F5A9-A98E-7C51-00814F4F1079}
+		{B810D4A7-6333-4881-8DFA-37733DF25C98} = {40B76A9B-1ED4-9CE4-2497-40E7823BB0F7}
+		{B95DC97F-9759-43CA-A2EC-D8598386914E} = {40B76A9B-1ED4-9CE4-2497-40E7823BB0F7}
 	EndGlobalSection
 EndGlobal

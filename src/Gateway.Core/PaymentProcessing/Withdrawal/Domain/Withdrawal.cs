@@ -28,6 +28,7 @@ public sealed class Withdrawal : Entity<Guid>
         BigInteger amount,
         BigInteger fee,
         string idempotencyKey,
+        string? callbackUrl,
         WithdrawalStatus status,
         DateTimeOffset now) : base(id)
     {
@@ -38,6 +39,7 @@ public sealed class Withdrawal : Entity<Guid>
         Amount = amount;
         Fee = fee;
         IdempotencyKey = idempotencyKey;
+        CallbackUrl = callbackUrl;
         Status = status;
         CreatedAt = now;
         UpdatedAt = now;
@@ -58,6 +60,10 @@ public sealed class Withdrawal : Entity<Guid>
     public string? ApprovedBy { get; private set; }
     public Guid? SigningRequestId { get; private set; }
 
+    /// <summary>Merchant's own callback endpoint for this withdrawal, carried on the confirmation/failure
+    /// events so Notification never has to look it up (§4.5, mirrors PaymentIntent's own CallbackUrl).</summary>
+    public string? CallbackUrl { get; private set; }
+
     /// <summary>
     /// The signed, broadcast-ready transaction blob, persisted the moment it is signed (see
     /// <see cref="RecordSigned"/>). Opaque bytes — public, broadcastable, never key material. Retained so a
@@ -69,6 +75,14 @@ public sealed class Withdrawal : Entity<Guid>
 
     public string? TransactionHash { get; private set; }
     public string? FailureReason { get; private set; }
+
+    /// <summary>
+    /// On-chain confirmation depth for the broadcast transaction, refreshed every confirmation-worker pass.
+    /// Null until broadcast; a tracking/observability number only — <see cref="Confirm"/> (not this) is what
+    /// actually settles the ledger, once <see cref="Status"/> crosses the policy's required depth.
+    /// </summary>
+    public int? Confirmations { get; private set; }
+
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
 
@@ -87,6 +101,7 @@ public sealed class Withdrawal : Entity<Guid>
         BigInteger amount,
         BigInteger fee,
         string idempotencyKey,
+        string? callbackUrl,
         DateTimeOffset now)
     {
         if (merchantId == Guid.Empty || assetId == Guid.Empty)
@@ -103,7 +118,8 @@ public sealed class Withdrawal : Entity<Guid>
 
         return Result.Success(new Withdrawal(
             Guid.CreateVersion7(), merchantId, assetId, chain, destinationAddress.Trim(), amount, fee,
-            idempotencyKey.Trim(), WithdrawalStatus.Reserving, now));
+            idempotencyKey.Trim(), string.IsNullOrWhiteSpace(callbackUrl) ? null : callbackUrl.Trim(),
+            WithdrawalStatus.Reserving, now));
     }
 
     /// <summary>Funds are locked. Moves to PendingApproval above the threshold, otherwise Approved.</summary>
@@ -203,6 +219,21 @@ public sealed class Withdrawal : Entity<Guid>
         return Result.Success();
     }
 
+    /// <summary>
+    /// Refreshes the observed confirmation depth. Only meaningful once broadcast; a no-op otherwise (the
+    /// confirmation worker only ever calls this for <see cref="WithdrawalStatus.Broadcast"/> rows anyway, but
+    /// the guard keeps a stray call from confusing a state it doesn't apply to).
+    /// </summary>
+    public Result RecordConfirmations(int confirmations, DateTimeOffset now)
+    {
+        if (Status != WithdrawalStatus.Broadcast)
+            return Result.Failure(WithdrawalErrors.InvalidStateTransition);
+
+        Confirmations = confirmations < 0 ? 0 : confirmations;
+        UpdatedAt = now;
+        return Result.Success();
+    }
+
     public Result Confirm(DateTimeOffset now)
     {
         if (Status != WithdrawalStatus.Broadcast)
@@ -211,7 +242,8 @@ public sealed class Withdrawal : Entity<Guid>
         Status = WithdrawalStatus.Confirmed;
         UpdatedAt = now;
         Raise(new WithdrawalConfirmed(
-            Guid.CreateVersion7(), now, Id, MerchantId, AssetId, ToBaseUnits(Amount), ToBaseUnits(Fee), TransactionHash!, now));
+            Guid.CreateVersion7(), now, Id, MerchantId, AssetId, ToBaseUnits(Amount), ToBaseUnits(Fee), TransactionHash!, now,
+            IdempotencyKey, DestinationAddress, CallbackUrl));
         return Result.Success();
     }
 
@@ -233,7 +265,8 @@ public sealed class Withdrawal : Entity<Guid>
 
     private void RaiseReleased(string reason, DateTimeOffset now) =>
         Raise(new WithdrawalFailed(
-            Guid.CreateVersion7(), now, Id, MerchantId, AssetId, ToBaseUnits(Amount), ToBaseUnits(Fee), reason, now));
+            Guid.CreateVersion7(), now, Id, MerchantId, AssetId, ToBaseUnits(Amount), ToBaseUnits(Fee), reason, now,
+            IdempotencyKey, CallbackUrl));
 
     private static string ToBaseUnits(BigInteger value) => value.ToString(CultureInfo.InvariantCulture);
 }

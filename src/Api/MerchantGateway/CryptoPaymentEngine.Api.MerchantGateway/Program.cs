@@ -15,6 +15,7 @@ using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infrastru
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infrastructure.Persistence;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Workers;
 using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Infrastructure;
+using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Workers;
 using CryptoPaymentEngine.Api.MerchantGateway.Endpoints;
 using CryptoPaymentEngine.Api.MerchantGateway.Security;
 using CryptoPaymentEngine.Infrastructure.Events;
@@ -83,7 +84,7 @@ builder.Services.AddDepositModule(config, dbConnection);
 builder.Services.AddWithdrawalModule(config, dbConnection);
 builder.Services.AddConfigurationAssetCatalog();        // canonical AssetId shared by edge, scanner, ledger
 builder.Services.AddPaymentIntentModule(config, dbConnection); // deposit invoices + address pool; matches DepositConfirmed
-builder.Services.AddNotificationModule();               // consumes PaymentIntentMatched → signed merchant callback
+builder.Services.AddNotificationModule(dbConnection);    // consumes PaymentIntentMatched → signed merchant callback; owns callback-delivery tracking
 
 // ── Environment tiers (the money/keys security boundary, §10) ─────────────────
 // Development and Staging are TESTNET tiers: they may run the real signer over a THROWAWAY testnet key and
@@ -166,6 +167,12 @@ builder.Services.AddWithdrawalWorkers(new WithdrawalWorkerOptions
 
 // Frees lapsed deposit-invoice addresses back to the pool (§9).
 builder.Services.AddPaymentIntentWorkers();
+
+// Drives due merchant callbacks through the bounded backoff schedule (30s/1m/2m/4m/10m, then Abandoned — §9).
+builder.Services.AddNotificationWorkers(new CallbackDeliveryWorkerOptions
+{
+    ProcessInterval = TimeSpan.FromSeconds(10),
+});
 
 // TRON resource monitor (Phase 5a): samples every platform wallet's energy, snapshots to Mongo, alerts on
 // Low/Critical. Read-only — no money, no keys. Inert until an IAccountResourceReader is registered (dev: in-memory).

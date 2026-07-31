@@ -27,7 +27,7 @@ public sealed class WithdrawalConfirmationService(
             return 0;
 
         var now = timeProvider.GetUtcNow();
-        var changed = 0;
+        var confirmedCount = 0;
 
         foreach (var withdrawal in broadcast)
         {
@@ -44,15 +44,18 @@ public sealed class WithdrawalConfirmationService(
             }
 
             var tip = await chainStatus.GetTipHeightAsync(withdrawal.Chain, cancellationToken);
-            var confirmations = tip - status.BlockNumber + 1;
+            var confirmations = (int)Math.Max(0, tip - status.BlockNumber + 1);
+
+            // Recorded every pass (ops visibility), independent of whether it already clears the policy depth.
+            withdrawal.RecordConfirmations(confirmations, now);
 
             if (confirmations >= policies.For(withdrawal.Chain).Confirmations && withdrawal.Confirm(now).IsSuccess)
-                changed++;
+                confirmedCount++;
         }
 
-        if (changed > 0)
-            await repository.SaveChangesAsync(cancellationToken); // raises WithdrawalConfirmed → Ledger settle
+        // Always save: confirmation-depth progress is worth persisting even before a withdrawal fully confirms.
+        await repository.SaveChangesAsync(cancellationToken); // Confirm() also raises WithdrawalConfirmed → Ledger settle
 
-        return changed;
+        return confirmedCount;
     }
 }

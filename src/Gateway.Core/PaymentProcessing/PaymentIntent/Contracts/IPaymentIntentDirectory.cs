@@ -1,3 +1,5 @@
+using CryptoPaymentEngine.SharedKernel;
+
 namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Contracts;
 
 /// <summary>
@@ -13,6 +15,36 @@ public sealed record PaymentIntentView(
     string ExpectedAmountBaseUnits,
     string Status,
     DateTimeOffset ExpiresAt);
+
+/// <summary>Ops search filters — every field optional and AND-combined. <see cref="ReceivingAddress"/> is the
+/// invoice's assigned deposit address; <see cref="AssetId"/> is resolved from a "coin" symbol by the caller
+/// (the host owns <c>IAssetCatalog</c>, PaymentIntent does not — §4.5).</summary>
+public sealed record PaymentIntentAdminFilter(
+    Guid? MerchantId,
+    Guid? SystemOrderNumber,
+    string? MerchantOrderNumber,
+    string? ReceivingAddress,
+    Chain? Network,
+    Guid? AssetId,
+    DateTimeOffset? FromDate,
+    DateTimeOffset? ToDate);
+
+/// <summary>The Ops transaction-search read model for one deposit invoice. <see cref="Status"/> is the
+/// effective, already-collapsed vocabulary ("pending" | "confirmed" | "expired" | "failed") — the same one
+/// <see cref="PaymentIntentView"/> exposes to the pay page. <see cref="MatchedDepositId"/> lets the caller
+/// batch-resolve the matched deposit's amount/confirmations via Deposit's own Contract, without PaymentIntent
+/// needing to know Deposit's schema (§4.5).</summary>
+public sealed record PaymentIntentAdminRow(
+    Guid MerchantId,
+    Guid PublicReference,
+    string MerchantTransactionId,
+    Chain Chain,
+    Guid AssetId,
+    string Address,
+    string ExpectedAmountBaseUnits,
+    string Status,
+    Guid? MatchedDepositId,
+    DateTimeOffset CreatedAt);
 
 public interface IPaymentIntentDirectory
 {
@@ -31,4 +63,8 @@ public interface IPaymentIntentDirectory
     /// intent exists for that reference, or it exists but hasn't matched a deposit yet.
     /// </summary>
     Task<Guid?> FindMatchedDepositIdAsync(Guid merchantId, string merchantTransactionId, CancellationToken cancellationToken = default);
+
+    /// <summary>Paged, filtered search behind the Ops deposit-transactions screen — newest first.</summary>
+    Task<(IReadOnlyList<PaymentIntentAdminRow> Items, int TotalCount)> SearchAsync(
+        PaymentIntentAdminFilter filter, int page, int pageSize, CancellationToken cancellationToken = default);
 }

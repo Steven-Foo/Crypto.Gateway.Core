@@ -38,22 +38,57 @@ public sealed class PaymentIntentDirectory(PaymentIntentDbContext context, TimeP
             .Select(i => i.MatchedDepositId)
             .SingleOrDefaultAsync(cancellationToken);
 
-    private PaymentIntentView ToView(PaymentIntentEntity intent)
+    public async Task<(IReadOnlyList<PaymentIntentAdminRow> Items, int TotalCount)> SearchAsync(
+        PaymentIntentAdminFilter filter, int page, int pageSize, CancellationToken cancellationToken = default)
     {
-        var status = intent.Status switch
-        {
-            PaymentIntentStatus.Matched => "confirmed",
-            PaymentIntentStatus.Expired => "expired",
-            PaymentIntentStatus.Failed => "failed",
-            _ => timeProvider.GetUtcNow() >= intent.ExpiresAt ? "expired" : "pending",
-        };
+        var query = context.PaymentIntents.AsNoTracking()
+            .Where(i => filter.MerchantId == null || i.MerchantId == filter.MerchantId)
+            .Where(i => filter.SystemOrderNumber == null || i.PublicReference == filter.SystemOrderNumber)
+            .Where(i => filter.MerchantOrderNumber == null || i.MerchantTransactionId == filter.MerchantOrderNumber)
+            .Where(i => filter.ReceivingAddress == null || i.Address == filter.ReceivingAddress)
+            .Where(i => filter.Network == null || i.Chain == filter.Network)
+            .Where(i => filter.AssetId == null || i.AssetId == filter.AssetId)
+            .Where(i => filter.FromDate == null || i.CreatedAt >= filter.FromDate)
+            .Where(i => filter.ToDate == null || i.CreatedAt <= filter.ToDate);
 
-        return new PaymentIntentView(
-            intent.PublicReference,
-            intent.AssetId,
-            intent.Address,
-            intent.ExpectedAmount.ToString(CultureInfo.InvariantCulture),
-            status,
-            intent.ExpiresAt);
+        var totalCount = await query.CountAsync(cancellationToken);
+
+        var items = await query
+            .OrderByDescending(i => i.CreatedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        return (items.Select(ToAdminRow).ToList(), totalCount);
     }
+
+    private PaymentIntentView ToView(PaymentIntentEntity intent) => new(
+        intent.PublicReference,
+        intent.AssetId,
+        intent.Address,
+        intent.ExpectedAmount.ToString(CultureInfo.InvariantCulture),
+        EffectiveStatus(intent),
+        intent.ExpiresAt);
+
+    private PaymentIntentAdminRow ToAdminRow(PaymentIntentEntity intent) => new(
+        intent.MerchantId,
+        intent.PublicReference,
+        intent.MerchantTransactionId,
+        intent.Chain,
+        intent.AssetId,
+        intent.Address,
+        intent.ExpectedAmount.ToString(CultureInfo.InvariantCulture),
+        EffectiveStatus(intent),
+        intent.MatchedDepositId,
+        intent.CreatedAt);
+
+    /// <summary>"pending" | "confirmed" | "expired" | "failed" — a lapsed-but-not-yet-swept invoice already
+    /// reads as expired, matching what a payer/merchant/Ops should all see.</summary>
+    private string EffectiveStatus(PaymentIntentEntity intent) => intent.Status switch
+    {
+        PaymentIntentStatus.Matched => "confirmed",
+        PaymentIntentStatus.Expired => "expired",
+        PaymentIntentStatus.Failed => "failed",
+        _ => timeProvider.GetUtcNow() >= intent.ExpiresAt ? "expired" : "pending",
+    };
 }

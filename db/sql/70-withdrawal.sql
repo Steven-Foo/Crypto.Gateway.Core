@@ -149,3 +149,45 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260729091105_AddWithdrawalConfirmations'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [Confirmations] int NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260729091105_AddWithdrawalConfirmations'
+)
+BEGIN
+    INSERT INTO [withdrawal].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260729091105_AddWithdrawalConfirmations', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260729105913_AddWithdrawalCallbackUrl'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [CallbackUrl] nvarchar(512) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260729105913_AddWithdrawalCallbackUrl'
+)
+BEGIN
+    INSERT INTO [withdrawal].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260729105913_AddWithdrawalCallbackUrl', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

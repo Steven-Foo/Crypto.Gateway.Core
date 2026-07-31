@@ -2,11 +2,16 @@
 
   <ItemGroup>
     <ProjectReference Include="../Application/CryptoPaymentEngine.Gateway.Core.Platform.Notification.Application.csproj" />
+    <ProjectReference Include="../Domain/CryptoPaymentEngine.Gateway.Core.Platform.Notification.Domain.csproj" />
     <ProjectReference Include="../../../../SharedKernel/CryptoPaymentEngine.SharedKernel/CryptoPaymentEngine.SharedKernel.csproj" />
+    <ProjectReference Include="../../../../Infrastructure/CryptoPaymentEngine.Infrastructure/CryptoPaymentEngine.Infrastructure.csproj" />
     <ProjectReference Include="../../../PaymentProcessing/PaymentIntent/Events/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Events.csproj" />
+    <ProjectReference Include="../../../PaymentProcessing/Withdrawal/Events/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Events.csproj" />
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
     <PackageReference Include="Microsoft.Extensions.Http" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>

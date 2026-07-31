@@ -39,10 +39,17 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastr
                     b.Property<Guid>("AssetId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<string>("CallbackUrl")
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
+
                     b.Property<string>("Chain")
                         .IsRequired()
                         .HasMaxLength(16)
                         .HasColumnType("nvarchar(16)");
+
+                    b.Property<int?>("Confirmations")
+                        .HasColumnType("int");
 
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("datetimeoffset");

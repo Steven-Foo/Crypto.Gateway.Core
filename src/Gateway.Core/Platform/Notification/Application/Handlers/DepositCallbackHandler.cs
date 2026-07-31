@@ -4,17 +4,19 @@ using System.Text.Json;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Events;
+using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Application.Abstractions;
+using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Domain;
 using CryptoPaymentEngine.SharedKernel;
 using Microsoft.Extensions.Logging;
 
 namespace CryptoPaymentEngine.Gateway.Core.Platform.Notification.Application.Handlers;
 
 /// <summary>
-/// Delivers the merchant's deposit callback when an invoice is matched. Builds the frozen payload, signs it
-/// with the merchant's key (via <see cref="IMerchantCallbackSigner"/> — the secret never leaves the Merchant
-/// module), and POSTs it. Delivered off the PaymentIntent outbox, so it is durable and at-least-once: a
-/// non-2xx response throws, leaving the message for the dispatcher to retry. Idempotent for the merchant
-/// because the payload carries their transaction reference.
+/// Builds and signs the merchant's deposit callback when an invoice is matched, then hands it to
+/// <see cref="ICallbackDeliveryScheduler"/> — it never sends and never retries itself. Actual delivery
+/// (with a bounded backoff schedule, not the Outbox's retry-forever) is
+/// <c>CallbackDeliveryProcessingService</c>'s job. Scheduling is idempotent, so a redelivered
+/// <c>PaymentIntentMatched</c> (the outbox is at-least-once) is a no-op if already scheduled.
 ///
 /// <para>Amounts are converted to display decimals at this boundary (§14). Deposit chain details the event
 /// does not carry yet (fromAddress, block, confirmations, gas) are omitted — a documented enrichment.</para>
@@ -22,7 +24,7 @@ namespace CryptoPaymentEngine.Gateway.Core.Platform.Notification.Application.Han
 public sealed class DepositCallbackHandler(
     IMerchantCallbackSigner signer,
     IAssetCatalog assets,
-    IWebhookSender sender,
+    ICallbackDeliveryScheduler scheduler,
     ILogger<DepositCallbackHandler> logger) : IIntegrationEventHandler<PaymentIntentMatched>
 {
     private const string CallbackType = "crypto-transaction";
@@ -38,19 +40,16 @@ public sealed class DepositCallbackHandler(
         var signature = await signer.SignAsync(@event.MerchantId, body, cancellationToken);
         if (signature.IsFailure)
         {
-            // No active signing credential — we cannot authenticate the callback, so we do not send an
+            // No active signing credential — we cannot authenticate the callback, so we do not schedule an
             // unsigned one. Not retryable; log and drop.
             logger.LogWarning("No signing credential for merchant {MerchantId}; deposit callback skipped.", @event.MerchantId);
             return;
         }
 
-        var delivered = await sender.SendAsync(
-            @event.CallbackUrl!, body, CallbackType, signature.Value.Timestamp, signature.Value.SignatureHex, cancellationToken);
-
-        if (!delivered)
-            throw new DomainException($"Deposit callback to the merchant endpoint was not accepted; will retry (ref {@event.PublicReference}).");
-
-        logger.LogInformation("Deposit callback delivered for {Reference}.", @event.PublicReference);
+        await scheduler.ScheduleAsync(
+            CallbackReferenceType.Deposit, @event.PublicReference,
+            @event.CallbackUrl!, body, CallbackType, signature.Value.Timestamp, signature.Value.SignatureHex,
+            cancellationToken);
     }
 
     private static string BuildPayload(PaymentIntentMatched e, string currencyCode, int decimals) =>

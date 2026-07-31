@@ -29,6 +29,23 @@
     <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/PaymentIntent/Events/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Events.csproj" />
     <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/PaymentIntent/Infrastructure/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infrastructure.csproj" />
 
+    <!-- Deposit/Withdrawal: Contracts-only consumption (IDepositLookup, IWithdrawalDirectory.SearchAsync) for
+         the Ops transaction-search screens — this host registers no workers/dispatchers for either (§4.7). -->
+    <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/Deposit/Application/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Application.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/Deposit/Contracts/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Contracts.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/Deposit/Events/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Events.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/Deposit/Infrastructure/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Infrastructure.csproj" />
+
+    <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/Withdrawal/Application/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/Withdrawal/Contracts/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Contracts.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/Withdrawal/Events/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Events.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/Withdrawal/Infrastructure/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure.csproj" />
+
+    <!-- Notification: ICallbackDeliveryQuery for both transaction screens. -->
+    <ProjectReference Include="../../../Gateway.Core/Platform/Notification/Application/CryptoPaymentEngine.Gateway.Core.Platform.Notification.Application.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/Platform/Notification/Domain/CryptoPaymentEngine.Gateway.Core.Platform.Notification.Domain.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/Platform/Notification/Infrastructure/CryptoPaymentEngine.Gateway.Core.Platform.Notification.Infrastructure.csproj" />
+
     <ProjectReference Include="../../../Gateway.Core/Platform/Identity/Application/CryptoPaymentEngine.Gateway.Core.Platform.Identity.Application.csproj" />
     <ProjectReference Include="../../../Gateway.Core/Platform/Identity/Domain/CryptoPaymentEngine.Gateway.Core.Platform.Identity.Domain.csproj" />
     <ProjectReference Include="../../../Gateway.Core/Platform/Identity/Infrastructure/CryptoPaymentEngine.Gateway.Core.Platform.Identity.Infrastructure.csproj" />

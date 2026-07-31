@@ -13,7 +13,8 @@ public sealed class WithdrawalWorkerOptions
     public TimeSpan ConfirmationInterval { get; init; } = TimeSpan.FromSeconds(10);
 }
 
-/// <summary>Drives approved withdrawals through build → sign → broadcast (§9). Idempotent per pass; a failure is logged and retried.</summary>
+/// <summary>Drives approved withdrawals through build → sign → broadcast (§9). Idempotent per pass; a failure is logged and retried.
+/// Registered by <c>AddWithdrawalWorkers</c>, alongside the <see cref="WithdrawalProcessingService"/> it resolves.</summary>
 public sealed class WithdrawalProcessingWorker(
     IServiceScopeFactory scopeFactory,
     WithdrawalWorkerOptions options,

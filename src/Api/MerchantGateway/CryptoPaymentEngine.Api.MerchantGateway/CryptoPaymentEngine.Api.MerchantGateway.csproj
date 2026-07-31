@@ -39,6 +39,7 @@
     <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/PaymentIntent/Workers/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Workers.csproj" />
     <ProjectReference Include="../../../Gateway.Core/Platform/Notification/Application/CryptoPaymentEngine.Gateway.Core.Platform.Notification.Application.csproj" />
     <ProjectReference Include="../../../Gateway.Core/Platform/Notification/Infrastructure/CryptoPaymentEngine.Gateway.Core.Platform.Notification.Infrastructure.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/Platform/Notification/Workers/CryptoPaymentEngine.Gateway.Core.Platform.Notification.Workers.csproj" />
     <ProjectReference Include="../../../Gateway.Core/Financial/Ledger/Api/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Api.csproj" />
     <ProjectReference Include="../../../Gateway.Core/Financial/Ledger/Application/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application.csproj" />
     <ProjectReference Include="../../../Gateway.Core/Financial/Ledger/Contracts/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Contracts.csproj" />
