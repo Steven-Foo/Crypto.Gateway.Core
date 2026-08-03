@@ -82,8 +82,10 @@ public sealed class CallbackDelivery : Entity<Guid>
 
     public CallbackDeliveryStatus Status { get; private set; }
 
-    /// <summary>Automatic attempts made so far (the immediate first one counts as 1). Manual resends
-    /// (<see cref="RecordManualResendOutcome"/>) do not increment this — they are outside the backoff schedule.</summary>
+    /// <summary>Automatic <see cref="RecordFailure"/> calls made so far — a successful delivery never
+    /// increments this, even on the first attempt, since it's used both to index the backoff schedule and
+    /// to report to Ops as the failed-attempt count. Manual resends (<see cref="RecordManualResendOutcome"/>)
+    /// do not increment it either — they are outside the backoff schedule.</summary>
     public int AttemptCount { get; private set; }
 
     /// <summary>When the worker should try next. Null once terminal (<see cref="CallbackDeliveryStatus.Notified"/>
