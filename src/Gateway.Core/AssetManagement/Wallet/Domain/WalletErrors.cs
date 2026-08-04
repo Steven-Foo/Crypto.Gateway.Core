@@ -36,4 +36,7 @@ public static class WalletErrors
 
     public static readonly Error DerivedChainMismatch =
         Error.Validation("wallet.derived_chain_mismatch", "The derived key's chain does not match the requested chain.");
+
+    public static readonly Error UnknownWalletType =
+        Error.Validation("wallet.unknown_wallet_type", "The wallet type is not a recognised platform wallet type.");
 }

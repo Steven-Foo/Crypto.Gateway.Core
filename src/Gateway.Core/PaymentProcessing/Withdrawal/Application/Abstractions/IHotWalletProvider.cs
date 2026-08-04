@@ -6,10 +6,11 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Applicat
 public sealed record HotWallet(string Address, string KeyReference);
 
 /// <summary>
-/// Resolves the hot wallet for a chain. For P1 this is a configured wallet per chain; proper hot-wallet
-/// selection/rebalancing across multiple wallets is the Treasury module's job (a future refinement).
+/// Resolves the hot wallet a withdrawal is paid from, for a chain. Backed by the Treasury module, which
+/// owns hot-wallet registration and selection; multi-wallet rebalancing remains a future refinement.
+/// Throws if no hot wallet is registered — a withdrawal must never be built without a known source.
 /// </summary>
 public interface IHotWalletProvider
 {
-    HotWallet For(Chain chain);
+    Task<HotWallet> ForAsync(Chain chain, CancellationToken cancellationToken = default);
 }

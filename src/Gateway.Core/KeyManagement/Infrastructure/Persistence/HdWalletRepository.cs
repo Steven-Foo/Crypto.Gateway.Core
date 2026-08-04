@@ -32,6 +32,11 @@ public sealed class HdWalletRepository(KeyManagementDbContext context) : IHdWall
     public Task<DerivedKey?> FindDerivedKeyAsync(Guid derivedKeyId, CancellationToken cancellationToken = default) =>
         context.DerivedKeys.AsNoTracking().SingleOrDefaultAsync(k => k.Id == derivedKeyId, cancellationToken);
 
+    public Task<DerivedKey?> FindDerivedKeyForWalletAsync(
+        Guid hdWalletId, long index, CancellationToken cancellationToken = default) =>
+        context.DerivedKeys.AsNoTracking().SingleOrDefaultAsync(
+            k => k.HdWalletId == hdWalletId && k.DerivationIndex == index, cancellationToken);
+
     public void Add(HdWallet hdWallet) => context.HdWallets.Add(hdWallet);
 
     public async Task<HdWalletAddOutcome> TryAddActiveAsync(HdWallet hdWallet, CancellationToken cancellationToken = default)
@@ -47,6 +52,26 @@ public sealed class HdWalletRepository(KeyManagementDbContext context) : IHdWall
             // The only unique index on HdWallet is (MerchantId, Chain, Purpose) filtered on Active — a
             // concurrent first deposit for this merchant beat us to it. Detach so the context is reusable.
             context.Entry(hdWallet).State = EntityState.Detached;
+            return HdWalletAddOutcome.DuplicateActive;
+        }
+    }
+
+    public async Task<HdWalletAddOutcome> TryAddImportedPlatformKeyAsync(
+        HdWallet wallet, DerivedKey derivedKey, CancellationToken cancellationToken = default)
+    {
+        context.HdWallets.Add(wallet);
+        context.DerivedKeys.Add(derivedKey);
+        try
+        {
+            await context.SaveChangesAsync(cancellationToken);
+            return HdWalletAddOutcome.Added;
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is Microsoft.Data.SqlClient.SqlException { Number: 2601 or 2627 })
+        {
+            // Unique (MerchantId, Chain, Purpose) filtered-Active index rejected it — a concurrent
+            // registration won. Detach both so the context stays reusable, then let the caller adopt.
+            context.Entry(wallet).State = EntityState.Detached;
+            context.Entry(derivedKey).State = EntityState.Detached;
             return HdWalletAddOutcome.DuplicateActive;
         }
     }

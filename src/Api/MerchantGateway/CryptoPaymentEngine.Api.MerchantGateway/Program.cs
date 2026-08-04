@@ -1,4 +1,5 @@
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Infrastructure;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Workers;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure;
@@ -78,6 +79,7 @@ builder.Services.AddMerchantModule(config, dbConnection);
 builder.Services.AddKeyManagementModule(dbConnection);
 builder.Services.AddBlockchainAddressEncoding();
 builder.Services.AddWalletModule(dbConnection);
+builder.Services.AddTreasuryModule();                   // platform hot-wallet registry (composes Wallet + KeyManagement Contracts); backs Withdrawal's IHotWalletProvider
 builder.Services.AddEnergyModule(config, dbConnection);  // TRON resource monitoring (Phase 5a): SQL policy + Mongo snapshots
 builder.Services.AddLedgerModule(dbConnection);         // consumes Deposit + Withdrawal events (credit/settle/release)
 builder.Services.AddDepositModule(config, dbConnection);
@@ -140,6 +142,12 @@ if (isTestnetTier)
     // A fixed, documented test merchant (active) so a signed /api/v1 request works out of the box — the last
     // piece for a full deposit round-trip in dev. Config in Merchant:DevSeed; never runs in production (§10).
     builder.Services.AddDevelopmentMerchantSeed(config);
+
+    // Registers the platform hot withdrawal wallet in the DB on boot (idempotent), so a signed /withdraw
+    // sources its hot wallet from Treasury (not raw config). Config in Treasury:DevHotWallets + the private
+    // key under KeyManagement:DevSecrets. Testnet tier only — a production hot wallet is registered via a
+    // KMS-backed ops action, never seeded from config (§10).
+    builder.Services.AddDevelopmentTreasuryHotWalletSeed(config);
 }
 else // Production (the hard §10 boundary)
 {

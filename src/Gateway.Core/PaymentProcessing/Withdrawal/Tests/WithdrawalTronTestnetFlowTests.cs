@@ -323,7 +323,8 @@ public sealed class WithdrawalTronTestnetFlowTests : IAsyncLifetime
 
     private sealed class StubHotWallet(string address) : IHotWalletProvider
     {
-        public HotWallet For(Chain chain) => new(address, KeyReference);
+        public Task<HotWallet> ForAsync(Chain chain, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new HotWallet(address, KeyReference));
     }
 
     private sealed class FakeMerchants : IMerchantDirectory

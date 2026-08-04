@@ -50,7 +50,7 @@ public sealed class WithdrawalProcessingService(
                 return await BroadcastAsync(withdrawal, withdrawal.SignedTransaction!, cancellationToken);
 
             // Fresh (Approved): build → sign → persist the signed blob (→ Signing) → broadcast.
-            var hotWallet = hotWallets.For(withdrawal.Chain);
+            var hotWallet = await hotWallets.ForAsync(withdrawal.Chain, cancellationToken);
 
             var unsigned = await transactionBuilder.BuildTransferAsync(
                 new BuildWithdrawalRequest(withdrawal.Chain, withdrawal.AssetId, hotWallet.Address, withdrawal.DestinationAddress, withdrawal.Amount),

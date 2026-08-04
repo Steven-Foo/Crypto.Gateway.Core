@@ -25,6 +25,23 @@ public sealed class WalletRepository(WalletDbContext context) : IWalletRepositor
 
     public void Add(WalletEntity wallet) => context.Wallets.Add(wallet);
 
+    public async Task<bool> TryAddAsync(WalletEntity wallet, CancellationToken cancellationToken = default)
+    {
+        context.Wallets.Add(wallet);
+        try
+        {
+            await context.SaveChangesAsync(cancellationToken);
+            return true;
+        }
+        catch (DbUpdateException ex) when (ex.InnerException is Microsoft.Data.SqlClient.SqlException { Number: 2601 or 2627 })
+        {
+            // The unique (Chain, Address) index rejected it — a concurrent registration for the same
+            // address won. Detach so the context stays reusable, then let the caller adopt the winner.
+            context.Entry(wallet).State = EntityState.Detached;
+            return false;
+        }
+    }
+
     public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) =>
         context.SaveChangesAsync(cancellationToken);
 }

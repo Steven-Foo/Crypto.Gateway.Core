@@ -3,6 +3,7 @@ using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application.
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure.Configuration;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure.Persistence;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure.Treasury;
 using CryptoPaymentEngine.Infrastructure.Persistence.Money;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -35,7 +36,11 @@ public static class WithdrawalModuleExtensions
         services.TryAddSingleton(TimeProvider.System);
 
         services.AddSingleton<IWithdrawalPolicyProvider>(_ => new ConfigurationWithdrawalPolicyProvider(configuration));
-        services.AddSingleton<IHotWalletProvider>(_ => new ConfigurationHotWalletProvider(configuration));
+
+        // The hot wallet now comes from the Treasury module's DB-backed registration, not raw config.
+        // Scoped because it reads scoped DbContext-backed Contracts; the processing service already runs
+        // inside a per-pass DI scope. The host must register the Treasury module (AddTreasuryModule).
+        services.AddScoped<IHotWalletProvider, TreasuryHotWalletProvider>();
 
         services.AddScoped<IWithdrawalRepository, WithdrawalRepository>();
         services.AddScoped<IWithdrawalDirectory, WithdrawalDirectory>();

@@ -4,6 +4,8 @@
     <ProjectReference Include="../Application/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application.csproj" />
     <ProjectReference Include="../Domain/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Domain.csproj" />
     <ProjectReference Include="../Contracts/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Contracts.csproj" />
+    <!-- Depends on Treasury's Contracts only (§4.5) — for the DB-backed hot-wallet lookup. -->
+    <ProjectReference Include="../../../AssetManagement/Treasury/Contracts/CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Contracts.csproj" />
     <ProjectReference Include="../../../../SharedKernel/CryptoPaymentEngine.SharedKernel/CryptoPaymentEngine.SharedKernel.csproj" />
     <ProjectReference Include="../../../../Infrastructure/CryptoPaymentEngine.Infrastructure/CryptoPaymentEngine.Infrastructure.csproj" />
   </ItemGroup>

@@ -109,6 +109,12 @@ public sealed class WalletDerivationService(
     private async Task<Result<DerivedAddress>> AllocateFromAsync(
         HdWallet hdWallet, Chain chain, CancellationToken cancellationToken)
     {
+        // An imported wallet (§10: e.g. a fixed dev/testnet throwaway key) has no real xpub or derivation
+        // lineage. Without this guard the missing-PublicKeyReference check below would still catch it, but
+        // with a misleading error ("needs an xpub") that invites exactly the wrong fix — fabricating one.
+        if (hdWallet.IsImported)
+            return Result.Failure<DerivedAddress>(KeyManagementErrors.ImportedKeyCannotDerive);
+
         if (!addressEncoderFactory.Supports(chain))
             return Result.Failure<DerivedAddress>(KeyManagementErrors.ChainNotSupported);
 

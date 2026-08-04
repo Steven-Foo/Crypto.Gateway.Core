@@ -34,6 +34,7 @@ public sealed class HdWalletMap : IEntityTypeConfiguration<HdWallet>
             .IsRequired();
 
         builder.Property(w => w.NextDerivationIndex).IsRequired();
+        builder.Property(w => w.IsImported).IsRequired();
         builder.Property(w => w.Status).HasConversion<string>().HasMaxLength(16).IsRequired();
         builder.Property(w => w.Description).HasMaxLength(256);
         builder.Property<byte[]>("RowVersion").IsRowVersion();
@@ -56,10 +57,12 @@ public sealed class HdWalletMap : IEntityTypeConfiguration<HdWallet>
             "CK_HdWallet_DerivationIndex_Range",
             $"[NextDerivationIndex] >= 0 AND [NextDerivationIndex] <= {DerivationPath.MaxIndex + 1}"));
 
-        // A watch-only (secp256k1) wallet must carry an xpub reference; an ed25519 wallet must not.
+        // A watch-only (secp256k1) wallet must carry an xpub reference; an ed25519 wallet must not; an
+        // imported wallet (no real xpub, see HdWallet.IsImported) never carries one either way.
         builder.ToTable(t => t.HasCheckConstraint(
             "CK_HdWallet_PublicKeyReference_MatchesScheme",
-            "([Scheme] = 'Bip32Secp256k1' AND [PublicKeyReference] IS NOT NULL) OR " +
-            "([Scheme] = 'Slip10Ed25519' AND [PublicKeyReference] IS NULL)"));
+            "([IsImported] = 1 AND [PublicKeyReference] IS NULL) OR " +
+            "([IsImported] = 0 AND [Scheme] = 'Bip32Secp256k1' AND [PublicKeyReference] IS NOT NULL) OR " +
+            "([IsImported] = 0 AND [Scheme] = 'Slip10Ed25519' AND [PublicKeyReference] IS NULL)"));
     }
 }

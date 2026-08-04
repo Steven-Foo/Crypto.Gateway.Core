@@ -44,6 +44,10 @@ public static class KeyManagementModuleExtensions
         services.AddScoped<IHdWalletRepository, HdWalletRepository>();
         services.AddScoped<IWalletDerivation, WalletDerivationService>();
 
+        // Read port over the existing HD-wallet query — safe everywhere (returns null when nothing is
+        // registered), so it can be always-on. It exposes only a key reference, never material (§10).
+        services.AddScoped<IPlatformSigningKeyDirectory, PlatformSigningKeyDirectory>();
+
         return services;
     }
 
@@ -103,6 +107,11 @@ public static class KeyManagementModuleExtensions
         // Per-merchant wallets are created on first deposit, each with its own seed. Production replaces this
         // with a KMS-backed IHdWalletProvisioner behind the same port — never an in-memory seed in prod (§10).
         services.AddSingleton<IHdWalletProvisioner, DevHdWalletProvisioner>();
+
+        // Registers a directly-imported platform key (e.g. the dev/testnet hot wallet). It depends on the
+        // in-memory ISecretProvider registered just above, so it is genuinely absent in production — where a
+        // KMS-backed registrar would take its place behind the same Contract (§10 seam).
+        services.AddScoped<IPlatformKeyRegistrar, PlatformKeyRegistrationService>();
 
         // Retained for any platform-wallet dev seeding described in config; per-merchant deposit wallets no
         // longer rely on it (they are provisioned lazily above).

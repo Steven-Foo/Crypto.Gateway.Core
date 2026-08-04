@@ -25,6 +25,11 @@ public interface IHdWalletRepository
 
     Task<DerivedKey?> FindDerivedKeyAsync(Guid derivedKeyId, CancellationToken cancellationToken = default);
 
+    /// <summary>The derived key at <paramref name="index"/> of the given HD wallet, or null. Used by the
+    /// platform-key registrar to resolve an already-registered imported wallet's address idempotently.</summary>
+    Task<DerivedKey?> FindDerivedKeyForWalletAsync(
+        Guid hdWalletId, long index, CancellationToken cancellationToken = default);
+
     void Add(HdWallet hdWallet);
 
     /// <summary>
@@ -34,6 +39,16 @@ public interface IHdWalletRepository
     /// of minting a second seed. Keeps the EF-specific race translation inside Infrastructure (§4.4).
     /// </summary>
     Task<HdWalletAddOutcome> TryAddActiveAsync(HdWallet hdWallet, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Inserts an imported platform wallet together with its single recorded key, saving immediately.
+    /// Returns <see cref="HdWalletAddOutcome.DuplicateActive"/> when the unique
+    /// <c>(MerchantId, Chain, Purpose)</c> index rejects it — a concurrent registration won — so the caller
+    /// adopts the winner instead of registering a second. Keeps the EF-specific race translation inside
+    /// Infrastructure (§4.4).
+    /// </summary>
+    Task<HdWalletAddOutcome> TryAddImportedPlatformKeyAsync(
+        HdWallet wallet, DerivedKey derivedKey, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Consumes exactly one derivation index, atomically, and returns it.

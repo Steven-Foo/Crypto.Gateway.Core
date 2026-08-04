@@ -1,4 +1,4 @@
-SET QUOTED_IDENTIFIER ON;
+﻿SET QUOTED_IDENTIFIER ON;
 SET ANSI_NULLS ON;
 GO
 
@@ -180,6 +180,43 @@ IF NOT EXISTS (
 BEGIN
     INSERT INTO [keymgmt].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
     VALUES (N'20260716052313_HdWalletPerMerchant', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [keymgmt].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260804024816_AddHdWalletIsImported'
+)
+BEGIN
+    ALTER TABLE [keymgmt].[HdWallet] DROP CONSTRAINT [CK_HdWallet_PublicKeyReference_MatchesScheme];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [keymgmt].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260804024816_AddHdWalletIsImported'
+)
+BEGIN
+    ALTER TABLE [keymgmt].[HdWallet] ADD [IsImported] bit NOT NULL DEFAULT CAST(0 AS bit);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [keymgmt].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260804024816_AddHdWalletIsImported'
+)
+BEGIN
+    EXEC(N'ALTER TABLE [keymgmt].[HdWallet] ADD CONSTRAINT [CK_HdWallet_PublicKeyReference_MatchesScheme] CHECK (([IsImported] = 1 AND [PublicKeyReference] IS NULL) OR ([IsImported] = 0 AND [Scheme] = ''Bip32Secp256k1'' AND [PublicKeyReference] IS NOT NULL) OR ([IsImported] = 0 AND [Scheme] = ''Slip10Ed25519'' AND [PublicKeyReference] IS NULL))');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [keymgmt].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260804024816_AddHdWalletIsImported'
+)
+BEGIN
+    INSERT INTO [keymgmt].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260804024816_AddHdWalletIsImported', N'10.0.9');
 END;
 
 COMMIT;

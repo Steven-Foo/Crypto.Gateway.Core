@@ -26,6 +26,7 @@ public sealed class HdWallet : Entity<Guid>
         string secretReference,
         string? publicKeyReference,
         DerivationPath derivationPath,
+        bool isImported,
         string? description,
         DateTimeOffset createdAt) : base(id)
     {
@@ -40,6 +41,7 @@ public sealed class HdWallet : Entity<Guid>
         DerivationPathValue = derivationPath.Value;
         _derivationPath = derivationPath;
         NextDerivationIndex = 0;
+        IsImported = isImported;
         Status = HdWalletStatus.Active;
         Description = description;
         CreatedAt = createdAt;
@@ -81,6 +83,16 @@ public sealed class HdWallet : Entity<Guid>
 
     /// <summary>The next index to hand out. Allocated atomically by the database, never here.</summary>
     public long NextDerivationIndex { get; private set; }
+
+    /// <summary>
+    /// True when this wallet's key was imported directly (e.g. a fixed dev/testnet throwaway key, or a
+    /// production key imported into a KMS) rather than produced by real BIP-32/SLIP-10 derivation from a
+    /// seed. <see cref="PublicKeyReference"/> is always null for an imported wallet — there is no genuine
+    /// xpub, so nothing may ever attempt to derive a child key from it (see
+    /// <see cref="KeyManagementErrors.ImportedKeyCannotDerive"/>). <see cref="DerivationPathValue"/> is
+    /// still populated for an imported wallet, but only as a documentary label, never a real lineage.
+    /// </summary>
+    public bool IsImported { get; private set; }
 
     public HdWalletStatus Status { get; private set; }
     public string? Description { get; private set; }
@@ -132,7 +144,46 @@ public sealed class HdWallet : Entity<Guid>
             Guid.CreateVersion7(), merchantId: null, name.Trim(), chain, purpose, path.Scheme,
             secretProvider, secretReference.Trim(),
             string.IsNullOrWhiteSpace(publicKeyReference) ? null : publicKeyReference.Trim(),
-            path, description, now));
+            path, isImported: false, description, now));
+    }
+
+    /// <summary>
+    /// A platform HD wallet whose key was imported directly — not produced by BIP-32/SLIP-10 derivation
+    /// from a seed. This is the path for a fixed, already-funded dev/testnet throwaway key (or, later, a
+    /// production key imported into a KMS): there is no real xpub to carry, so
+    /// <see cref="PublicKeyReference"/> is always null and <see cref="IsImported"/> is set — which
+    /// <see cref="Application.WalletDerivationService"/> checks before ever attempting to derive a child
+    /// key, so an imported wallet can never silently produce a bogus, unfunded "derived" address (§14).
+    /// <paramref name="derivationPath"/> is still validated for shape/coin-type coherence, but is stored
+    /// only as a documentary label, never a real lineage.
+    /// </summary>
+    public static Result<HdWallet> CreateImportedPlatformKey(
+        string name,
+        Chain chain,
+        HdWalletPurpose purpose,
+        SecretProviderKind secretProvider,
+        string secretReference,
+        string derivationPath,
+        string? description = null,
+        TimeProvider? timeProvider = null)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return Result.Failure<HdWallet>(KeyManagementErrors.NameRequired);
+
+        if (string.IsNullOrWhiteSpace(secretReference))
+            return Result.Failure<HdWallet>(KeyManagementErrors.SecretReferenceRequired);
+
+        var pathResult = Domain.DerivationPath.Create(derivationPath, chain);
+        if (pathResult.IsFailure)
+            return Result.Failure<HdWallet>(pathResult.Error!);
+
+        var path = pathResult.Value;
+        var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
+
+        return Result.Success(new HdWallet(
+            Guid.CreateVersion7(), merchantId: null, name.Trim(), chain, purpose, path.Scheme,
+            secretProvider, secretReference.Trim(), publicKeyReference: null,
+            path, isImported: true, description, now));
     }
 
     /// <summary>
@@ -179,7 +230,7 @@ public sealed class HdWallet : Entity<Guid>
 
         return Result.Success(new HdWallet(
             Guid.CreateVersion7(), merchantId, name.Trim(), chain, HdWalletPurpose.Deposit, path.Scheme,
-            secretProvider, secretReference.Trim(), publicKeyReference.Trim(), path, description, now));
+            secretProvider, secretReference.Trim(), publicKeyReference.Trim(), path, isImported: false, description, now));
     }
 
     public void Archive(DateTimeOffset now)

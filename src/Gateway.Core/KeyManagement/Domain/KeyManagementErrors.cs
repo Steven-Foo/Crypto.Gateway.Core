@@ -62,4 +62,26 @@ public static class KeyManagementErrors
 
     public static readonly Error AddressAlreadyDerived =
         Error.Conflict("keymgmt.address_already_derived", "That address has already been derived.");
+
+    /// <summary>
+    /// An imported HD wallet (§10: e.g. a fixed dev/testnet throwaway key) has no real xpub and no real
+    /// derivation lineage — deriving a "child" from it would silently produce a bogus, unfunded address
+    /// that looks legitimate. Refuse outright rather than let that ever happen (§14).
+    /// </summary>
+    public static readonly Error ImportedKeyCannotDerive =
+        Error.Conflict(
+            "keymgmt.imported_key_cannot_derive",
+            "This HD wallet's key was imported directly; it has no derivable child keys.");
+
+    public static readonly Error AddressRequired =
+        Error.Validation("keymgmt.address_required", "An address is required.");
+
+    /// <summary>
+    /// A platform key with a <em>different</em> address is already registered for this chain and purpose.
+    /// A signing key is never silently reassigned — resolve the conflict deliberately.
+    /// </summary>
+    public static readonly Error PlatformKeyAddressConflict =
+        Error.Conflict(
+            "keymgmt.platform_key_address_conflict",
+            "A platform key with a different address is already registered for this chain and purpose.");
 }
