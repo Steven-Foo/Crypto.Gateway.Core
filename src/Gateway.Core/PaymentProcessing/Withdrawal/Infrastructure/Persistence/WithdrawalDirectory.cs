@@ -63,18 +63,23 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
         withdrawal.DestinationAddress,
         withdrawal.Amount.ToString(CultureInfo.InvariantCulture),
         EffectiveStatus(withdrawal.Status),
+        withdrawal.StatusReason,
         withdrawal.Confirmations,
         withdrawal.CreatedAt);
 
-    /// <summary>"pending" | "pending_approval" | "confirmed" | "failed" — withdrawals have no "expired" state.
-    /// <c>PendingApproval</c> is called out distinctly from the rest of the pre-confirm pipeline
-    /// (Reserving/Approved/Signing/Broadcast, still just "pending") because it needs a human, not the
-    /// worker, to move it forward — see <c>OpsWithdrawalApprovalEndpoints</c>.</summary>
+    /// <summary>"pending" | "pending_approval" | "insufficient_balance" | "awaiting_release" | "confirmed" |
+    /// "failed" — withdrawals have no "expired" state. The states that need a human, not the worker, to move
+    /// forward are each surfaced distinctly: <c>PendingApproval</c> (approve/reject), <c>AwaitingFunds</c>
+    /// (reload the hot wallet, then it self-resumes), <c>AwaitingRelease</c> (operator release) — see
+    /// <c>OpsWithdrawalApprovalEndpoints</c>/<c>OpsWithdrawalFundingEndpoints</c>. The rest of the pre-confirm
+    /// pipeline (Reserving/Approved/Signing/Broadcast) collapses to "pending".</summary>
     private static string EffectiveStatus(WithdrawalStatus status) => status switch
     {
         WithdrawalStatus.Confirmed => "confirmed",
         WithdrawalStatus.Rejected or WithdrawalStatus.Failed => "failed",
         WithdrawalStatus.PendingApproval => "pending_approval",
+        WithdrawalStatus.AwaitingFunds => "insufficient_balance",
+        WithdrawalStatus.AwaitingRelease => "awaiting_release",
         _ => "pending",
     };
 }

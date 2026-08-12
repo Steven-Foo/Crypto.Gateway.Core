@@ -20,10 +20,11 @@ public static class TreasuryModuleExtensions
     }
 
     /// <summary>
-    /// DEV/TESTNET-tier ONLY. Binds <c>Treasury:DevHotWallets</c> and registers the boot-time seeder that
-    /// idempotently registers the platform hot withdrawal wallet(s). Call this only in the testnet tier,
-    /// alongside <c>AddDevelopmentKeyCustody</c> (whose in-memory secret provider holds the referenced key).
-    /// Never in production — a production hot wallet is registered through an ops action backed by a KMS (§10).
+    /// DEV/TESTNET-tier ONLY. Binds <c>Treasury:HotWalletPool</c> and registers the boot-time seeder that
+    /// idempotently derives+registers the platform hot withdrawal pool (children of the one withdrawal HD
+    /// wallet). Call this only in the testnet tier, alongside <c>AddDevelopmentKeyCustody</c> (whose in-memory
+    /// provisioner mints the withdrawal seed). Never in production — the pool is provisioned through an ops
+    /// action backed by a KMS, not seeded from config (§10).
     /// </summary>
     public static IServiceCollection AddDevelopmentTreasuryHotWalletSeed(
         this IServiceCollection services, IConfiguration configuration)

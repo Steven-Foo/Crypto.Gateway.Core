@@ -2,6 +2,8 @@ using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Workers;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Reconciliation.Infrastructure;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Reconciliation.Workers;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure;
@@ -12,11 +14,14 @@ using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Workers;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure.Persistence;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Workers;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Infrastructure;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Workers;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infrastructure.Persistence;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Workers;
 using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Workers;
+using CryptoPaymentEngine.Api.MerchantGateway.Development;
 using CryptoPaymentEngine.Api.MerchantGateway.Endpoints;
 using CryptoPaymentEngine.Api.MerchantGateway.Security;
 using CryptoPaymentEngine.Infrastructure.Events;
@@ -84,9 +89,11 @@ builder.Services.AddEnergyModule(config, dbConnection);  // TRON resource monito
 builder.Services.AddLedgerModule(dbConnection);         // consumes Deposit + Withdrawal events (credit/settle/release)
 builder.Services.AddDepositModule(config, dbConnection);
 builder.Services.AddWithdrawalModule(config, dbConnection);
+builder.Services.AddSweepModule(config, dbConnection);   // concentrate deposit balances → hot wallet (schema sweep); composes Wallet/Blockchain/KeyManagement/Treasury Contracts
 builder.Services.AddConfigurationAssetCatalog();        // canonical AssetId shared by edge, scanner, ledger
 builder.Services.AddPaymentIntentModule(config, dbConnection); // deposit invoices + address pool; matches DepositConfirmed
 builder.Services.AddNotificationModule(dbConnection);    // consumes PaymentIntentMatched → signed merchant callback; owns callback-delivery tracking
+builder.Services.AddReconciliationModule(config);        // ledger-vs-on-chain custody audit (log-only, Mongo snapshots); reads IBalanceReader/ILedgerQuery/Wallet directories
 
 // ── Environment tiers (the money/keys security boundary, §10) ─────────────────
 // Development and Staging are TESTNET tiers: they may run the real signer over a THROWAWAY testnet key and
@@ -148,6 +155,11 @@ if (isTestnetTier)
     // key under KeyManagement:DevSecrets. Testnet tier only — a production hot wallet is registered via a
     // KMS-backed ops action, never seeded from config (§10).
     builder.Services.AddDevelopmentTreasuryHotWalletSeed(config);
+
+    // Seeds the in-memory hot-pool float AFTER the pool seeder above, so the withdrawal happy-path allocates
+    // and sends in dev (the in-memory reader reads zero, which the allocator treats as underfunded). No-op
+    // under live TRON. Set Withdrawal:DevHotWalletFloatBaseUnits low to demo the no-wallet-available park path.
+    builder.Services.AddDevelopmentHotWalletFloatSeed();
 }
 else // Production (the hard §10 boundary)
 {
@@ -173,6 +185,19 @@ builder.Services.AddWithdrawalWorkers(new WithdrawalWorkerOptions
     ConfirmationInterval = TimeSpan.FromSeconds(10),
 });
 
+// Concentrates funded deposit addresses into the hot wallet (§9): scan (balance ≥ threshold) → build/sign/
+// broadcast → confirm. Posts NO ledger entry (custody unchanged); gas accounting is the deferred Energy 5b
+// path. Signs FROM deposit addresses via the same ISigner boundary as withdrawal, so it is inert in prod
+// until a real signer lands (in-memory in dev/testnet, never a fake signer in prod, §10). On TRON a real
+// mainnet sweep also needs energy delegated to the deposit address (Energy 5b) or a TRX top-up.
+builder.Services.AddSweepWorkers(new SweepWorkerOptions
+{
+    Chains = [Chain.Tron],
+    ScanInterval = TimeSpan.FromMinutes(2),
+    ProcessInterval = TimeSpan.FromSeconds(15),
+    ConfirmationInterval = TimeSpan.FromSeconds(15),
+});
+
 // Frees lapsed deposit-invoice addresses back to the pool (§9).
 builder.Services.AddPaymentIntentWorkers();
 
@@ -188,6 +213,16 @@ builder.Services.AddEnergyWorkers(new EnergyWorkerOptions
 {
     Chains = [Chain.Tron],
     MonitorInterval = TimeSpan.FromSeconds(30),
+});
+
+// Reconciliation audit backstop: every interval, compares the ledger's TreasuryAsset holding against the
+// summed on-chain balance across the hot wallet + funded deposit addresses, snapshots to Mongo, logs drift.
+// Read-only — no money, no keys. In dev the in-memory IBalanceReader reads zero, so it just reports the
+// ledger holding as drift until a real TRON adapter (Chains:Tron:Live=true / Withdrawal:LiveTron=true) is wired.
+builder.Services.AddReconciliationWorkers(new ReconciliationWorkerOptions
+{
+    Chains = [Chain.Tron],
+    ReconcileInterval = TimeSpan.FromMinutes(5),
 });
 
 // Relays each module's outbox → IEventBus → the Ledger handlers: Deposit credit, Withdrawal

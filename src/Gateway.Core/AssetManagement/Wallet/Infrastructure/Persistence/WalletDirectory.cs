@@ -28,6 +28,15 @@ public sealed class WalletDirectory(WalletDbContext context) : IWalletDirectory
             .Select(w => new AvailableWallet(w.Id, w.Address))
             .ToListAsync(cancellationToken);
 
+    public async Task<IReadOnlyList<ReceivingDepositAddress>> ListReceivingDepositAddressesAsync(
+        Chain chain, CancellationToken cancellationToken = default) =>
+        await context.Wallets.AsNoTracking()
+            .Where(w => w.Chain == chain && w.WalletType == WalletType.Deposit
+                        && w.Status == WalletStatus.Active && w.DepositsReceivedCount > 0)
+            .OrderBy(w => w.CreatedAt)
+            .Select(w => new ReceivingDepositAddress(w.Id, w.Address))
+            .ToListAsync(cancellationToken);
+
     private static IQueryable<WalletOwnership> Project(IQueryable<WalletEntity> query) =>
         query.Select(w => new WalletOwnership(
             w.Id,

@@ -13,6 +13,9 @@ public enum PostingOutcome
     /// second credit was made; the ledger was already correct. Treated as success (§7.3).
     /// </summary>
     AlreadyPosted = 2,
+
+    /// <summary>Nothing needed posting (e.g. a zero-fee gas cost). No journal was written; success.</summary>
+    NoChange = 3,
 }
 
 /// <summary>

@@ -1,4 +1,5 @@
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application;
+using CryptoPaymentEngine.Infrastructure.Locking;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -24,9 +25,16 @@ public sealed class WithdrawalProcessingWorker(
         WorkerLoop.RunAsync(options.ProcessInterval, stoppingToken, logger, "withdrawal processing", async ct =>
         {
             await using var scope = scopeFactory.CreateAsyncScope();
-            var processed = await scope.ServiceProvider.GetRequiredService<WithdrawalProcessingService>().ProcessOnceAsync(ct);
-            if (processed > 0)
-                logger.LogInformation("Processed {Count} withdrawal(s).", processed);
+            // Single-flight across host instances so two workers don't redundantly build/sign the same
+            // withdrawals or contend on the pool (the DB unique index + rowversion stay the correctness guard
+            // regardless, §7.4). Skipped this tick if another instance holds the lock.
+            await WorkerLoop.SingleFlightAsync(
+                scope.ServiceProvider.GetRequiredService<IDistributedLockFactory>(), "withdrawal:processing", ct, async () =>
+                {
+                    var processed = await scope.ServiceProvider.GetRequiredService<WithdrawalProcessingService>().ProcessOnceAsync(ct);
+                    if (processed > 0)
+                        logger.LogInformation("Processed {Count} withdrawal(s).", processed);
+                });
         });
 }
 
@@ -40,14 +48,43 @@ public sealed class WithdrawalConfirmationWorker(
         WorkerLoop.RunAsync(options.ConfirmationInterval, stoppingToken, logger, "withdrawal confirmation", async ct =>
         {
             await using var scope = scopeFactory.CreateAsyncScope();
-            var changed = await scope.ServiceProvider.GetRequiredService<WithdrawalConfirmationService>().TrackOnceAsync(ct);
-            if (changed > 0)
-                logger.LogInformation("{Count} withdrawal(s) confirmed.", changed);
+            // Single-flight confirmation too, so two instances don't both re-read the same broadcast txs
+            // (rowversion already prevents a double-settle; this just avoids the wasted work).
+            await WorkerLoop.SingleFlightAsync(
+                scope.ServiceProvider.GetRequiredService<IDistributedLockFactory>(), "withdrawal:confirmation", ct, async () =>
+                {
+                    var changed = await scope.ServiceProvider.GetRequiredService<WithdrawalConfirmationService>().TrackOnceAsync(ct);
+                    if (changed > 0)
+                        logger.LogInformation("{Count} withdrawal(s) confirmed.", changed);
+                });
         });
 }
 
 internal static class WorkerLoop
 {
+    /// <summary>
+    /// Runs <paramref name="action"/> only if the named distributed lock can be acquired immediately; otherwise
+    /// skips quietly (another host instance holds it, or the lock backend is unavailable). The lock is a
+    /// single-flight optimisation, never the correctness guard — that stays in the database (§7.4) — so skipping
+    /// is always safe: the work is simply retried on the next tick.
+    /// </summary>
+    public static async Task SingleFlightAsync(
+        IDistributedLockFactory lockFactory, string key, CancellationToken cancellationToken, Func<Task> action)
+    {
+        IAsyncDisposable handle;
+        try
+        {
+            handle = await lockFactory.AcquireAsync(key, TimeSpan.Zero, cancellationToken);
+        }
+        catch (Exception ex) when (ex is not OperationCanceledException)
+        {
+            return; // contended or lock backend unavailable — skip this tick
+        }
+
+        await using (handle)
+            await action();
+    }
+
     public static async Task RunAsync(
         TimeSpan interval, CancellationToken stoppingToken, ILogger logger, string name, Func<CancellationToken, Task> pass)
     {

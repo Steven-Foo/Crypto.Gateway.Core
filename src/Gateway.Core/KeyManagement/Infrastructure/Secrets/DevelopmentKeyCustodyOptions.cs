@@ -31,6 +31,15 @@ public sealed class DevelopmentKeyCustodyOptions
     /// Single-test-merchant only: two merchants sharing one xpub would derive colliding addresses.
     /// </summary>
     public string? DevMerchantXpub { get; init; }
+
+    /// <summary>
+    /// OPTIONAL. A real TRON account xpub at <c>m/44'/195'/0'/0</c> for the <b>platform withdrawal pool</b>.
+    /// When set, the pool's hot wallet addresses derive from THIS (public) key instead of the throwaway
+    /// public-salt seed — so the pool lives in the operator's own recoverable wallet tree. REQUIRED before
+    /// sending real mainnet withdrawals (the fallback salt is public in this repo). Public xpub only — never a
+    /// seed/mnemonic (§10). One xpub backs the whole pool: its children are the pool wallets.
+    /// </summary>
+    public string? DevWithdrawalXpub { get; init; }
 }
 
 /// <summary>One HD wallet the dev seeder will materialise. Mirrors the arguments of <c>HdWallet.Create</c>.</summary>

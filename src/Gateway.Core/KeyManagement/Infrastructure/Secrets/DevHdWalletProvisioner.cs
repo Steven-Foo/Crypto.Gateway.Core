@@ -61,9 +61,45 @@ public sealed class DevHdWalletProvisioner(
         return Task.FromResult(wallet);
     }
 
+    public Task<Result<HdWallet>> ProvisionPlatformWithdrawalWalletAsync(
+        Chain chain, CancellationToken cancellationToken = default)
+    {
+        // Only secp256k1 chains derive addresses watch-only from an xpub; ed25519 (Solana) can't (§8).
+        if (DerivationPath.SchemeFor(chain) != DerivationScheme.Bip32Secp256k1)
+            return Task.FromResult(Result.Failure<HdWallet>(KeyManagementErrors.SchemeNotSupported));
+
+        var coin = DerivationPath.CoinTypeFor(chain);
+        var accountPath = $"m/44'/{coin}'/0'/0"; // change-level xpub → CKDpub derives the pool's child addresses
+
+        // Prefer a configured real xpub (recoverable, private — the operator's own withdrawal tree) over the
+        // throwaway public-salt seed. REQUIRED before sending real mainnet funds (the salt is public here).
+        var configuredXpub = options.Value.DevWithdrawalXpub;
+        var accountXpub = !string.IsNullOrWhiteSpace(configuredXpub)
+            ? configuredXpub.Trim()
+            : new ExtKey(Encoders.Hex.EncodeData(DerivePlatformSeed(chain)))
+                .Derive(KeyPath.Parse($"44'/{coin}'/0'/0")).Neuter().ToString(Network.Main);
+
+        var xpubReference = $"dev:hdwallet:platform:withdrawal:{chain}:xpub";
+        var seedReference = $"dev:hdwallet:platform:withdrawal:{chain}:seed"; // a label only; no seed is stored (§10)
+        secrets.Put(xpubReference, accountXpub);
+
+        var wallet = HdWallet.Create(
+            $"platform-{chain}-withdrawal", chain, HdWalletPurpose.Withdrawal,
+            SecretProviderKind.InMemoryDevelopment, seedReference, xpubReference, accountPath,
+            description: "Platform withdrawal HD wallet (hot pool seed)", timeProvider: timeProvider);
+
+        return Task.FromResult(wallet);
+    }
+
     private static byte[] DeriveSeed(Guid merchantId)
     {
         using var hmac = new HMACSHA512(Encoding.UTF8.GetBytes(DevMasterSalt));
         return hmac.ComputeHash(merchantId.ToByteArray()); // 64 bytes → a valid BIP-32 master seed
+    }
+
+    private static byte[] DerivePlatformSeed(Chain chain)
+    {
+        using var hmac = new HMACSHA512(Encoding.UTF8.GetBytes(DevMasterSalt));
+        return hmac.ComputeHash(Encoding.UTF8.GetBytes($"platform:withdrawal:{chain}")); // deterministic dev seed, distinct from any merchant's
     }
 }

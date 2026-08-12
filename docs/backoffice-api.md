@@ -415,11 +415,16 @@ Same auth, same pagination, same filter set as the deposit endpoint above (`merc
 ```
 
 **Field notes**: no `payerAddress`, no `receivedAmount` on this endpoint at all (not `null` — the keys
-are simply absent). `status` is one of `pending` | `pending_approval` | `confirmed` | `failed`
-(withdrawals never expire). `pending_approval` means this withdrawal is above the config approval
-threshold and is **waiting on a human** — build an "Approve"/"Reject" action for exactly these rows (see
-"Withdrawal approval" below); plain `pending` means it's already approved and processing automatically
-(building/signing/broadcasting) — no action needed, it resolves itself. `callback`/`callbackFailedCount`/
+are simply absent). `status` is one of `pending` | `pending_approval` | `insufficient_balance` |
+`awaiting_release` | `confirmed` | `failed` (withdrawals never expire). `pending_approval` means this
+withdrawal is above the config approval threshold and is **waiting on a human** — build an "Approve"/"Reject"
+action for exactly these rows (see "Withdrawal approval" below); plain `pending` means it's already approved
+and processing automatically (building/signing/broadcasting) — no action needed, it resolves itself.
+`insufficient_balance` means the **hot wallet can't physically cover it** — the merchant's funds are still
+reserved (not lost), and the payout **auto-resumes** the moment the hot wallet is reloaded from treasury;
+`statusReason` on the row carries the detail ("needs X, has Y"). `awaiting_release` means the payout is
+funded but **above the auto-send threshold**, so it needs an operator to release it (see "Withdrawal funding
+holds" below). No action is strictly required for `insufficient_balance` beyond reloading the wallet. `callback`/`callbackFailedCount`/
 `callbackNextAttemptAt` follow the exact same vocabulary and retry/abandon/resend rules as the deposit
 endpoint above (see "Callback delivery" below) — a withdrawal callback fires on both `Confirmed` (payload
 `status: "confirmed"`) and `Rejected`/`Failed` (payload `status: "failed"`, includes `reason`), same as
@@ -458,6 +463,40 @@ their balance immediately.
 Rejecting also fires the merchant's withdrawal-failed callback (`status: "failed"`, `reason` = what you
 typed here) through the same retry/abandon/resend machinery as everything else on this page — you don't
 need to separately notify the merchant.
+
+## Withdrawal funding holds
+
+Separate from approval: these act on a withdrawal the **hot wallet couldn't cover** (or one that's funded
+but above the auto-send threshold). The reserve stays held throughout — a hold is a deferral, never a
+release.
+
+### `POST /api/v1/ops/withdrawals/{withdrawalId}/release` 🔒 Admin
+Releases a withdrawal sitting in `awaiting_release` (funded, but above the threshold, so it waited for a
+human). No request body; who released is taken from your session. It sends on the next processing pass.
+
+**Response 200**
+```json
+{ "isSuccess": true, "data": { "withdrawalId": "guid", "status": "Released" }, "error": null }
+```
+**Response 409**: not currently on a fundable hold (e.g. already sent, or still `insufficient_balance`).
+
+A withdrawal in `insufficient_balance` needs **no** endpoint to resume — reload the hot wallet from
+treasury and the worker resumes it automatically once the float is sufficient.
+
+### `POST /api/v1/ops/withdrawals/{withdrawalId}/cancel` 🔒 Admin
+Abandons a parked withdrawal (`insufficient_balance` or `awaiting_release`) that won't be funded, releasing
+the merchant's reserved funds — the one path that releases the reserve from a hold.
+
+**Request**
+```json
+{ "reason": "string, required, max 512" }
+```
+**Response 200**
+```json
+{ "isSuccess": true, "data": { "withdrawalId": "guid", "status": "Cancelled" }, "error": null }
+```
+**Response 404**/**409**: not found / not currently on a hold. Cancelling fires the merchant's
+withdrawal-failed callback the same way a reject does.
 
 ---
 
@@ -543,6 +582,7 @@ flag it back rather than guessing an API shape:
 - `src/Api/OperationsApi/CryptoPaymentEngine.Api.OperationsApi/Endpoints/OpsWithdrawalTransactionEndpoints.cs`
 - `src/Api/OperationsApi/CryptoPaymentEngine.Api.OperationsApi/Endpoints/OpsCallbackEndpoints.cs` (manual resend)
 - `src/Api/OperationsApi/CryptoPaymentEngine.Api.OperationsApi/Endpoints/OpsWithdrawalApprovalEndpoints.cs` (approve/reject)
+- `src/Api/OperationsApi/CryptoPaymentEngine.Api.OperationsApi/Endpoints/OpsWithdrawalFundingEndpoints.cs` (release/cancel — funding holds)
 - `src/Api/OperationsApi/CryptoPaymentEngine.Api.OperationsApi/Models/OpsAuthRequests.cs`
 - `src/Api/OperationsApi/CryptoPaymentEngine.Api.OperationsApi/Models/OpsMerchantRequests.cs`
 - `src/Api/OperationsApi/CryptoPaymentEngine.Api.OperationsApi/Security/StaffAuthorization.cs`

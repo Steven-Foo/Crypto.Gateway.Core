@@ -51,6 +51,11 @@ public static class BlockchainInfrastructureExtensions
         services.TryAddSingleton<InMemoryChainSource>();
         services.TryAddSingleton<IDepositScanner>(sp => sp.GetRequiredService<InMemoryChainSource>());
         services.TryAddSingleton<IChainStatusReader>(sp => sp.GetRequiredService<InMemoryChainSource>());
+
+        // The in-memory balance reader is the dev/test counterpart to the real TRON eth_call balanceOf
+        // adapter — the Reconciliation monitor reads on-chain balances through this same §8 seam.
+        services.TryAddSingleton<InMemoryBalanceReader>();
+        services.TryAddSingleton<IBalanceReader>(sp => sp.GetRequiredService<InMemoryBalanceReader>());
         return services;
     }
 
@@ -92,6 +97,10 @@ public static class BlockchainInfrastructureExtensions
         services.TryAddSingleton(new InMemoryTransactionEngine { MinedAtBlock = 0 });
         services.TryAddSingleton<ITransactionBuilder>(sp => sp.GetRequiredService<InMemoryTransactionEngine>());
         services.TryAddSingleton<ITransactionBroadcaster>(sp => sp.GetRequiredService<InMemoryTransactionEngine>());
+
+        // Energy 5b builds stake/delegate txs through the same signer/broadcaster. In-memory here (dev/test);
+        // the real TRON FreezeBalanceV2/DelegateResource adapter is deferred to staging like the other adapters.
+        services.TryAddSingleton<IResourceOperationBuilder, InMemoryResourceOperationBuilder>();
         return services;
     }
 
@@ -105,6 +114,10 @@ public static class BlockchainInfrastructureExtensions
 
         services.AddHttpClient<ITronRpc, TronRpc>(ConfigureTronClient(options)).AddStandardResilienceHandler();
         services.AddScoped<IChainAdapter, TronChainAdapter>();
+
+        // On-chain balance reads (Reconciliation) go through the same read-only TRON RPC — eth_call
+        // balanceOf for TRC-20, eth_getBalance for native TRX. Read-only, keyless (§10).
+        services.TryAddScoped<IBalanceReader, TronBalanceReader>();
         return services;
     }
 

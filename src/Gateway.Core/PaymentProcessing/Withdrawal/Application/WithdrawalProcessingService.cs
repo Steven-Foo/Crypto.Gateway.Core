@@ -1,3 +1,4 @@
+using System.Numerics;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application.Abstractions;
@@ -14,17 +15,29 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Applicat
 /// re-processing a withdrawal stuck in <see cref="WithdrawalStatus.Signing"/> cannot double-send.
 /// (The real transaction builder must pin the nonce per withdrawal to preserve that — a deferred note.)
 /// A pre-broadcast failure releases the reserved funds; a broadcast failure likewise (nothing left the chain).
+///
+/// <para><b>Pool allocation + physical gate.</b> Before signing, it allocates a hot wallet from the platform
+/// pool via <see cref="IHotWalletAllocator"/> — one that is not already leased (one tx at a time per wallet,
+/// held until confirmed) and holds enough on-chain, chosen least-recently-used. If none is available (all
+/// leased or underfunded) the withdrawal is <em>parked</em> (<see cref="WithdrawalStatus.AwaitingFunds"/>) with
+/// the reserve HELD — the merchant is still owed it — and auto-resumes on a later pass. A payout above the
+/// approval threshold that is otherwise ready is held for a human to release
+/// (<see cref="WithdrawalStatus.AwaitingRelease"/>): the "large = manual" rule. Ledger sufficiency and physical
+/// availability are independent; this gate is the physical one.</para>
 /// </summary>
 public sealed class WithdrawalProcessingService(
     IWithdrawalRepository repository,
     ITransactionBuilder transactionBuilder,
     ISigner signer,
     ITransactionBroadcaster broadcaster,
-    IHotWalletProvider hotWallets,
+    IHotWalletAllocator allocator,
+    IWithdrawalPolicyProvider policies,
     TimeProvider timeProvider,
     ILogger<WithdrawalProcessingService> logger)
 {
-    private static readonly WithdrawalStatus[] Processable = [WithdrawalStatus.Approved, WithdrawalStatus.Signing];
+    // Both funding holds are re-scanned so a parked withdrawal auto-re-evaluates and resumes when the float recovers.
+    private static readonly WithdrawalStatus[] Processable =
+        [WithdrawalStatus.Approved, WithdrawalStatus.Signing, WithdrawalStatus.AwaitingFunds, WithdrawalStatus.AwaitingRelease];
 
     public async Task<int> ProcessOnceAsync(CancellationToken cancellationToken = default)
     {
@@ -49,25 +62,59 @@ public sealed class WithdrawalProcessingService(
             if (withdrawal.Status == WithdrawalStatus.Signing && withdrawal.HasSignedTransaction)
                 return await BroadcastAsync(withdrawal, withdrawal.SignedTransaction!, cancellationToken);
 
-            // Fresh (Approved): build → sign → persist the signed blob (→ Signing) → broadcast.
-            var hotWallet = await hotWallets.ForAsync(withdrawal.Chain, cancellationToken);
+            // Allocate a hot wallet from the pool: not currently leased (one tx at a time, held until confirmed),
+            // holding at least the amount on-chain, least-recently-used. None available ⇒ park (reserve held).
+            var lease = await allocator.AllocateAsync(withdrawal.Chain, withdrawal.AssetId, withdrawal.Amount, cancellationToken);
+            if (lease is null)
+                return await HoldForFundsAsync(withdrawal, cancellationToken);
 
+            // A payout above the approval threshold needs a human release before it sends (the "large = manual"
+            // rule); a release already granted (ReleasedAt set) clears it for good, so a later re-park never
+            // demands a second release. Small ones send automatically.
+            var threshold = policies.For(withdrawal.Chain).ApprovalThreshold;
+            if (withdrawal.Amount > threshold && withdrawal.ReleasedAt is null)
+                return await HoldForReleaseAsync(withdrawal, threshold, cancellationToken);
+
+            // Cleared to send. Return a parked withdrawal to Approved and persist that BEFORE the send attempt,
+            // so a build/sign fault can't leave an unsaved in-memory transition to be flushed by another entity.
+            if (withdrawal.Status is WithdrawalStatus.AwaitingFunds or WithdrawalStatus.AwaitingRelease)
+            {
+                if (withdrawal.ResumeToApproved(timeProvider.GetUtcNow()).IsFailure)
+                    return false; // state moved under us — leave for the next pass
+                await repository.SaveChangesAsync(cancellationToken);
+            }
+
+            // Approved: build → sign FROM the leased wallet → persist the signed blob (→ Signing, stamping the
+            // SourceWalletId that leases the wallet) → broadcast.
             var unsigned = await transactionBuilder.BuildTransferAsync(
-                new BuildWithdrawalRequest(withdrawal.Chain, withdrawal.AssetId, hotWallet.Address, withdrawal.DestinationAddress, withdrawal.Amount),
+                new BuildWithdrawalRequest(withdrawal.Chain, withdrawal.AssetId, lease.Address, withdrawal.DestinationAddress, withdrawal.Amount),
                 cancellationToken);
 
             var signed = await signer.SignAsync(
-                new SigningRequest(withdrawal.Id, withdrawal.Chain, unsigned.Payload, hotWallet.KeyReference), cancellationToken);
+                new SigningRequest(withdrawal.Id, withdrawal.Chain, unsigned.Payload, lease.KeyReference), cancellationToken);
             if (signed.IsFailure)
                 return await FailAsync(withdrawal, $"sign: {signed.Error!.Message}", cancellationToken); // pre-broadcast → safe to release
 
-            // Persist the signed blob atomically with the → Signing transition. If we crash after this, the
-            // next pass re-broadcasts this exact blob (above); if we crash before it, we are still Approved and
-            // rebuild safely (nothing signed or broadcast yet).
-            var recorded = withdrawal.RecordSigned(Guid.CreateVersion7(), signed.Value.SignedPayload, timeProvider.GetUtcNow());
+            // Persist the signed blob + SourceWalletId atomically with the → Signing transition. A crash after
+            // this re-broadcasts this exact blob (above); a crash before it leaves us Approved to rebuild
+            // safely. The filtered unique index on SourceWalletId is the DB backstop should two workers ever
+            // race for the same wallet — the loser's SaveChanges throws and it retries with another wallet next
+            // pass (handled by the outer catch). Today a single worker + per-withdrawal busy re-query in the
+            // allocator already makes that race impossible.
+            var recorded = withdrawal.RecordSigned(Guid.CreateVersion7(), lease.WalletId, signed.Value.SignedPayload, timeProvider.GetUtcNow());
             if (recorded.IsFailure)
                 return false; // state moved under us — leave for the next pass
-            await repository.SaveChangesAsync(cancellationToken);
+
+            // Persist under the concurrency guards: the unique index rejects a wallet another withdrawal just
+            // leased, rowversion rejects a withdrawal another worker just advanced. Either ⇒ re-allocate next
+            // pass; nothing was broadcast, so no double-send (§7.4 — the DB is the correctness guard).
+            if (!await repository.TrySaveSignedAsync(withdrawal, cancellationToken))
+            {
+                logger.LogInformation(
+                    "Withdrawal {WithdrawalId} lost hot wallet {WalletId} to a concurrent lease; will re-allocate next pass.",
+                    withdrawal.Id, lease.WalletId);
+                return false;
+            }
 
             return await BroadcastAsync(withdrawal, signed.Value.SignedPayload, cancellationToken);
         }
@@ -107,6 +154,45 @@ public sealed class WithdrawalProcessingService(
             return true;
         }
 
+        return false;
+    }
+
+    /// <summary>
+    /// Parks a withdrawal for which no pool wallet is available (all leased, or none holds the amount) — reserve
+    /// HELD, ops-traceable reason recorded. Only writes (and logs) on the transition INTO the hold, not on every
+    /// pass it stays parked, so a chronically busy/empty pool doesn't spam the log or the DB. Returns false.
+    /// </summary>
+    private async Task<bool> HoldForFundsAsync(WithdrawalEntity withdrawal, CancellationToken cancellationToken)
+    {
+        if (withdrawal.Status == WithdrawalStatus.AwaitingFunds)
+            return false; // already parked — no write, no log
+
+        var reason = $"No hot wallet available: every pool wallet is busy or holds less than {withdrawal.Amount} (base units).";
+        if (withdrawal.Park(reason, timeProvider.GetUtcNow()).IsFailure)
+            return false;
+
+        await repository.SaveChangesAsync(cancellationToken);
+        logger.LogWarning(
+            "Withdrawal {WithdrawalId} on {Chain} awaiting funds — {Reason} Reload a hot wallet from treasury to resume.",
+            withdrawal.Id, withdrawal.Chain, reason);
+        return false;
+    }
+
+    /// <summary>
+    /// Holds an above-threshold payout that is funded but needs a human release (the "large = manual" rule).
+    /// Transition-only write/log, same as <see cref="HoldForFundsAsync"/>. Returns false: nothing was sent.
+    /// </summary>
+    private async Task<bool> HoldForReleaseAsync(WithdrawalEntity withdrawal, BigInteger threshold, CancellationToken cancellationToken)
+    {
+        if (withdrawal.Status == WithdrawalStatus.AwaitingRelease)
+            return false;
+
+        var reason = $"Amount {withdrawal.Amount} exceeds the auto-send threshold {threshold} (base units) — awaiting operator release.";
+        if (withdrawal.MarkAwaitingRelease(reason, timeProvider.GetUtcNow()).IsFailure)
+            return false;
+
+        await repository.SaveChangesAsync(cancellationToken);
+        logger.LogInformation("Withdrawal {WithdrawalId} on {Chain} awaiting operator release — {Reason}", withdrawal.Id, withdrawal.Chain, reason);
         return false;
     }
 }

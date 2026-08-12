@@ -61,6 +61,10 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
         public Task<IReadOnlyList<AvailableWallet>> ListAssignedWalletsAsync(
             Guid merchantId, Chain chain, CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<AvailableWallet>>(_wallets.AsReadOnly());
+
+        public Task<IReadOnlyList<ReceivingDepositAddress>> ListReceivingDepositAddressesAsync(
+            Chain chain, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ReceivingDepositAddress>>([]);
     }
 
     /// <summary>

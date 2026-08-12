@@ -33,4 +33,20 @@ public static class TronAbi
 
         return toWord + Convert.ToHexString(amountWord).ToLowerInvariant();
     }
+
+    /// <summary>The 4-byte selector of <c>balanceOf(address)</c> = keccak256("balanceOf(address)")[..4].</summary>
+    public const string BalanceOfSelector = "70a08231";
+
+    /// <summary>
+    /// Encodes a full <c>eth_call</c> data payload for <c>balanceOf(address)</c>: the 4-byte selector
+    /// followed by the owner address right-aligned in a 32-byte word, as a <c>0x</c>-hex string. Unlike
+    /// the native <c>triggersmartcontract</c> path (where the node prepends the selector), an
+    /// <c>eth_call</c> supplies the complete calldata, so the selector is included here.
+    /// </summary>
+    /// <param name="ownerBase58Address">Account whose token balance to read (Base58Check, <c>T…</c>).</param>
+    public static string EncodeBalanceOf(string ownerBase58Address)
+    {
+        var ownerWord = new string('0', 24) + TronAddress.ToEvmHex(ownerBase58Address); // 24 + 40 = 64 hex chars
+        return "0x" + BalanceOfSelector + ownerWord;
+    }
 }

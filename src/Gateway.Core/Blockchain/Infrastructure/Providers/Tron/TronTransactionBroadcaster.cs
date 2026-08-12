@@ -68,6 +68,6 @@ public sealed class TronTransactionBroadcaster(
         // For a smart-contract call, success is receipt.result == SUCCESS; a mined-but-reverted tx
         // returns a block with Succeeded=false, so the withdrawal is held for ops, never settled.
         var succeeded = string.Equals(info.Receipt?.Result, TronConstants.ContractRetSuccess, StringComparison.Ordinal);
-        return new TransactionStatus(block, succeeded);
+        return new TransactionStatus(block, succeeded, new System.Numerics.BigInteger(info.Fee)); // fee in sun, for gas accounting
     }
 }

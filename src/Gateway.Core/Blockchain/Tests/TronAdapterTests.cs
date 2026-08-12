@@ -57,6 +57,17 @@ public sealed class TronAdapterTests
     public void A_high_bit_hex_value_is_read_as_unsigned() =>
         HexNumber.ToBigInteger("0xffffffffffffffffffffffffffffffff").ShouldBe(BigInteger.Pow(2, 128) - 1);
 
+    // ── balanceOf(address) calldata (money-critical: a wrong contract read hides/invents custody drift) ──
+
+    [Fact]
+    public void BalanceOf_calldata_is_the_selector_plus_the_left_padded_address()
+    {
+        // 0x70a08231 selector, then the holder address right-aligned in a 32-byte word.
+        var expected = "0x70a08231" + new string('0', 24) + TronAddress.ToEvmHex(UsdtBase58);
+        TronAbi.EncodeBalanceOf(UsdtBase58).ShouldBe(expected);
+        TronAbi.EncodeBalanceOf(UsdtBase58).Length.ShouldBe(2 + 8 + 64); // 0x + 4-byte selector + one word
+    }
+
     // ── Transfer log → DetectedTransfer mapping ──
 
     private static readonly Guid UsdtAssetId = Guid.CreateVersion7();
@@ -297,6 +308,12 @@ public sealed class TronAdapterTests
 
         public Task<IReadOnlyList<TronNativeBlockDto>> GetBlockRangeAsync(long fromBlock, long toBlock, CancellationToken ct = default) =>
             Task.FromResult(nativeBlocks);
+
+        public Task<string> CallContractAsync(string contractHexAddress, string dataHex, CancellationToken ct = default) =>
+            Task.FromResult("0x");
+
+        public Task<BigInteger> GetNativeBalanceAsync(string evmHexAddress, CancellationToken ct = default) =>
+            Task.FromResult(BigInteger.Zero);
     }
 
     [Fact]

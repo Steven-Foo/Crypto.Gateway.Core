@@ -17,4 +17,14 @@ public interface IHdWalletProvisioner
 {
     Task<Result<HdWallet>> ProvisionMerchantDepositWalletAsync(
         Guid merchantId, Chain chain, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Mints the platform's single withdrawal HD wallet (MerchantId null, purpose Withdrawal): a fresh seed,
+    /// its account xpub exported to the store, returned <b>un-persisted</b> for the caller to save inside the
+    /// create-on-first-use transaction. The pool's hot wallets are watch-only children derived from this one
+    /// wallet's xpub (§8) — one seed for the whole pool, no key ever crossing this boundary (§10). Development
+    /// mints in-memory; production mints inside a KMS/HSM behind the same port (deferred).
+    /// </summary>
+    Task<Result<HdWallet>> ProvisionPlatformWithdrawalWalletAsync(
+        Chain chain, CancellationToken cancellationToken = default);
 }

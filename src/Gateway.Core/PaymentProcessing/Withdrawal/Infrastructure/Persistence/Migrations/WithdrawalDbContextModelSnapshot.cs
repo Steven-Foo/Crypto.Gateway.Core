@@ -76,6 +76,13 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastr
                     b.Property<Guid>("MerchantId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<DateTimeOffset?>("ReleasedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("ReleasedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
                         .ValueGeneratedOnAddOrUpdate()
@@ -93,10 +100,17 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastr
                     b.Property<Guid?>("SigningRequestId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<Guid?>("SourceWalletId")
+                        .HasColumnType("uniqueidentifier");
+
                     b.Property<string>("Status")
                         .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("nvarchar(16)");
+                        .HasMaxLength(24)
+                        .HasColumnType("nvarchar(24)");
+
+                    b.Property<string>("StatusReason")
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
 
                     b.Property<string>("TransactionHash")
                         .HasMaxLength(128)
@@ -117,6 +131,11 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastr
                         .IsUnique();
 
                     SqlServerIndexBuilderExtensions.IsClustered(b.HasIndex("Seq"));
+
+                    b.HasIndex("SourceWalletId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_Withdrawal_InFlight_SourceWallet")
+                        .HasFilter("[Status] IN ('Signing', 'Broadcast')");
 
                     b.HasIndex("Status")
                         .HasDatabaseName("IX_Withdrawal_Status");

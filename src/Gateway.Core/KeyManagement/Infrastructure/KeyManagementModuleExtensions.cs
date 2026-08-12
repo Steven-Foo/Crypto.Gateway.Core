@@ -48,6 +48,10 @@ public static class KeyManagementModuleExtensions
         // registered), so it can be always-on. It exposes only a key reference, never material (§10).
         services.AddScoped<IPlatformSigningKeyDirectory, PlatformSigningKeyDirectory>();
 
+        // Read port resolving a deposit address → its signing-key reference (for Sweep). Read-only, reference
+        // only, null when unknown — safe to be always-on (§10).
+        services.AddScoped<IDepositSigningKeyDirectory, DepositSigningKeyDirectory>();
+
         return services;
     }
 

@@ -1,5 +1,6 @@
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 
 namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Workers;
 
@@ -16,6 +17,11 @@ public static class WithdrawalWorkersExtensions
     {
         services.AddScoped<WithdrawalProcessingService>();
         services.AddScoped<WithdrawalConfirmationService>();
+
+        // The confirmation service needs GasAccountingOptions (5c). AddWithdrawalModule registers the
+        // config-bound map (and, running first, wins in the host); this default keeps a workers-only composer
+        // (e.g. a flow test) resolvable — an empty map means no gas journal, which is the safe default.
+        services.TryAddSingleton(new GasAccountingOptions());
 
         services.AddSingleton(options);
         services.AddHostedService<WithdrawalProcessingWorker>();

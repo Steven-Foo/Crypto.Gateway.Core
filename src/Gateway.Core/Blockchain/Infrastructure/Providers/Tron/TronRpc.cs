@@ -88,6 +88,22 @@ public sealed class TronRpc(HttpClient http) : ITronRpc, ITronTxRpc
         return blocks;
     }
 
+    public async Task<string> CallContractAsync(string contractHexAddress, string dataHex, CancellationToken cancellationToken = default)
+    {
+        var to = contractHexAddress.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? contractHexAddress : "0x" + contractHexAddress;
+        var data = dataHex.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? dataHex : "0x" + dataHex;
+
+        var result = await JsonRpc.InvokeAsync(http, "jsonrpc", "eth_call", [new { to, data }, "latest"], cancellationToken);
+        return result.GetString() ?? "0x";
+    }
+
+    public async Task<System.Numerics.BigInteger> GetNativeBalanceAsync(string evmHexAddress, CancellationToken cancellationToken = default)
+    {
+        var address = evmHexAddress.StartsWith("0x", StringComparison.OrdinalIgnoreCase) ? evmHexAddress : "0x" + evmHexAddress;
+        var result = await JsonRpc.InvokeAsync(http, "jsonrpc", "eth_getBalance", [address, "latest"], cancellationToken);
+        return HexNumber.ToBigInteger(result.GetString() ?? "0x0");
+    }
+
     // ── Write path (ITronTxRpc): native /wallet/* API, keyless (§10) ──
 
     public async Task<TronTriggerResultDto> TriggerSmartContractAsync(

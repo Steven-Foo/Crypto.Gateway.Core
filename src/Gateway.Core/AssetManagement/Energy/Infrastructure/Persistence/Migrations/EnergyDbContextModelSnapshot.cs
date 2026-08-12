@@ -24,6 +24,103 @@ namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Infrastructure
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
+            modelBuilder.Entity("CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Domain.EnergyOperation", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<BigInteger>("AmountSun")
+                        .HasColumnType("decimal(38,0)");
+
+                    b.Property<string>("Chain")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
+                    b.Property<int?>("Confirmations")
+                        .HasColumnType("int");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("FailureReason")
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
+
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
+                    b.Property<string>("OwnerAddress")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(128)");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<long>("Seq")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Seq"));
+
+                    b.Property<byte[]>("SignedTransaction")
+                        .HasColumnType("varbinary(max)");
+
+                    b.Property<Guid?>("SigningRequestId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<Guid>("StakingWalletId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
+                    b.Property<string>("TargetAddress")
+                        .HasMaxLength(128)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(128)");
+
+                    b.Property<string>("TransactionHash")
+                        .HasMaxLength(128)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(128)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("Id");
+
+                    SqlServerKeyBuilderExtensions.IsClustered(b.HasKey("Id"), false);
+
+                    b.HasIndex("Seq")
+                        .IsUnique();
+
+                    SqlServerIndexBuilderExtensions.IsClustered(b.HasIndex("Seq"));
+
+                    b.HasIndex("StakingWalletId")
+                        .IsUnique()
+                        .HasDatabaseName("UX_EnergyOp_InFlight_Stake")
+                        .HasFilter("[Kind] = 'Stake' AND [Status] IN ('Pending', 'Signing', 'Broadcast')");
+
+                    b.HasIndex("Status")
+                        .HasDatabaseName("IX_EnergyOp_Status");
+
+                    b.HasIndex("Chain", "TargetAddress")
+                        .IsUnique()
+                        .HasDatabaseName("UX_EnergyOp_InFlight_Delegate")
+                        .HasFilter("[Kind] = 'Delegate' AND [Status] IN ('Pending', 'Signing', 'Broadcast')");
+
+                    b.ToTable("EnergyOperation", "energy");
+                });
+
             modelBuilder.Entity("CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Domain.EnergyPolicy", b =>
                 {
                     b.Property<Guid>("Id")

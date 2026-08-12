@@ -30,7 +30,9 @@ public sealed record WithdrawalAdminFilter(
     DateTimeOffset? ToDate);
 
 /// <summary>The Ops transaction-search read model for one withdrawal. <see cref="Status"/> is the effective,
-/// already-collapsed vocabulary ("pending" | "confirmed" | "failed") — withdrawals have no "expired" state.</summary>
+/// already-collapsed vocabulary ("pending" | "pending_approval" | "insufficient_balance" | "awaiting_release" |
+/// "confirmed" | "failed"). <see cref="StatusReason"/> carries the parked-hold detail ("needs X, has Y") so ops
+/// can trace a stalled payout without opening the record; null unless the withdrawal is on a funding hold.</summary>
 public sealed record WithdrawalAdminRow(
     Guid MerchantId,
     Guid WithdrawalId,
@@ -40,6 +42,7 @@ public sealed record WithdrawalAdminRow(
     string DestinationAddress,
     string AmountBaseUnits,
     string Status,
+    string? StatusReason,
     int? Confirmations,
     DateTimeOffset CreatedAt);
 

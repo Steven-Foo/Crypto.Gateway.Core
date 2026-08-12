@@ -13,6 +13,13 @@ public enum HdWalletAddOutcome
     DuplicateActive = 2,
 }
 
+/// <summary>
+/// The pieces needed to resolve a deposit address's signing key: the derived key + its index, plus the owning
+/// HD wallet's secret reference — resolved in one join. The secret reference points at the seed; the index
+/// selects the child. Never key material (§10).
+/// </summary>
+public sealed record DepositSigningKeyInfo(Guid DerivedKeyId, Chain Chain, string SecretReference, long DerivationIndex);
+
 public interface IHdWalletRepository
 {
     /// <summary>The single active <em>platform</em> wallet for this chain and purpose (MerchantId is null).</summary>
@@ -24,6 +31,23 @@ public interface IHdWalletRepository
     Task<HdWallet?> FindByIdAsync(Guid hdWalletId, CancellationToken cancellationToken = default);
 
     Task<DerivedKey?> FindDerivedKeyAsync(Guid derivedKeyId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The active <em>deposit</em> signing key for an address (join of <c>DerivedKey</c> ↔ its active,
+    /// deposit-purpose <c>HdWallet</c>), or null when none matches. Used by Sweep to sign FROM a deposit
+    /// address — returns a reference + index, never key material (§10).
+    /// </summary>
+    Task<DepositSigningKeyInfo?> FindDepositSigningKeyByAddressAsync(
+        Chain chain, string address, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// The active <em>platform withdrawal</em> signing key for an address (join of <c>DerivedKey</c> ↔ its
+    /// active, withdrawal-purpose, platform (MerchantId null) <c>HdWallet</c>), or null when none matches. Used
+    /// to resolve which of the hot pool's child keys signs a payout — a reference + index, never key material
+    /// (§10). Reuses <see cref="DepositSigningKeyInfo"/> (a generic id/secret/index tuple).
+    /// </summary>
+    Task<DepositSigningKeyInfo?> FindPlatformWithdrawalSigningKeyByAddressAsync(
+        Chain chain, string address, CancellationToken cancellationToken = default);
 
     /// <summary>The derived key at <paramref name="index"/> of the given HD wallet, or null. Used by the
     /// platform-key registrar to resolve an already-registered imported wallet's address idempotently.</summary>

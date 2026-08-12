@@ -191,3 +191,85 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260811060644_AddWithdrawalFundingHold'
+)
+BEGIN
+    DROP INDEX [IX_Withdrawal_Status] ON [withdrawal].[Withdrawal];
+    DECLARE @var nvarchar(max);
+    SELECT @var = QUOTENAME([d].[name])
+    FROM [sys].[default_constraints] [d]
+    INNER JOIN [sys].[columns] [c] ON [d].[parent_column_id] = [c].[column_id] AND [d].[parent_object_id] = [c].[object_id]
+    WHERE ([d].[parent_object_id] = OBJECT_ID(N'[withdrawal].[Withdrawal]') AND [c].[name] = N'Status');
+    IF @var IS NOT NULL EXEC(N'ALTER TABLE [withdrawal].[Withdrawal] DROP CONSTRAINT ' + @var + ';');
+    ALTER TABLE [withdrawal].[Withdrawal] ALTER COLUMN [Status] nvarchar(24) NOT NULL;
+    CREATE INDEX [IX_Withdrawal_Status] ON [withdrawal].[Withdrawal] ([Status]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260811060644_AddWithdrawalFundingHold'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [ReleasedAt] datetimeoffset NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260811060644_AddWithdrawalFundingHold'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [ReleasedBy] nvarchar(128) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260811060644_AddWithdrawalFundingHold'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [StatusReason] nvarchar(512) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260811060644_AddWithdrawalFundingHold'
+)
+BEGIN
+    INSERT INTO [withdrawal].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260811060644_AddWithdrawalFundingHold', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260811094910_AddWithdrawalSourceWallet'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [SourceWalletId] uniqueidentifier NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260811094910_AddWithdrawalSourceWallet'
+)
+BEGIN
+    EXEC(N'CREATE UNIQUE INDEX [UX_Withdrawal_InFlight_SourceWallet] ON [withdrawal].[Withdrawal] ([SourceWalletId]) WHERE [Status] IN (''Signing'', ''Broadcast'')');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260811094910_AddWithdrawalSourceWallet'
+)
+BEGIN
+    INSERT INTO [withdrawal].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260811094910_AddWithdrawalSourceWallet', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

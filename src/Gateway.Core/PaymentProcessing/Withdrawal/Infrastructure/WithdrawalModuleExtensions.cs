@@ -5,6 +5,7 @@ using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructu
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure.Persistence;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure.Treasury;
 using CryptoPaymentEngine.Infrastructure.Persistence.Money;
+using CryptoPaymentEngine.SharedKernel;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -37,15 +38,20 @@ public static class WithdrawalModuleExtensions
 
         services.AddSingleton<IWithdrawalPolicyProvider>(_ => new ConfigurationWithdrawalPolicyProvider(configuration));
 
-        // The hot wallet now comes from the Treasury module's DB-backed registration, not raw config.
-        // Scoped because it reads scoped DbContext-backed Contracts; the processing service already runs
-        // inside a per-pass DI scope. The host must register the Treasury module (AddTreasuryModule).
-        services.AddScoped<IHotWalletProvider, TreasuryHotWalletProvider>();
+        // 5c gas accounting: maps each chain to the ledger asset its native gas coin is booked under, from
+        // config `Accounting:GasAssets:{Chain}` (a GUID). Absent ⇒ no gas journal for that chain's withdrawals.
+        services.AddSingleton(ReadGasAccountingOptions(configuration));
+
+        // The hot wallet is allocated from the Treasury-backed pool (one tx at a time per wallet, LRU). Scoped
+        // because it reads scoped DbContext-backed Contracts; the processing service already runs inside a
+        // per-pass DI scope. The host must register the Treasury module (AddTreasuryModule).
+        services.AddScoped<IHotWalletAllocator, HotWalletAllocator>();
 
         services.AddScoped<IWithdrawalRepository, WithdrawalRepository>();
         services.AddScoped<IWithdrawalDirectory, WithdrawalDirectory>();
         services.AddScoped<IWithdrawalRequestService, WithdrawalRequestService>();
         services.AddScoped<IWithdrawalApprovalService, WithdrawalApprovalService>();
+        services.AddScoped<IWithdrawalFundingService, WithdrawalFundingService>();
 
         // WithdrawalProcessingService/WithdrawalConfirmationService are NOT registered here — they need the
         // chain-processing ports (ITransactionBuilder/ISigner/ITransactionBroadcaster/IHotWalletProvider/
@@ -54,5 +60,18 @@ public static class WithdrawalModuleExtensions
         // never has to satisfy a signer/broadcaster it will never use (§4.7, §10).
 
         return services;
+    }
+
+    private static GasAccountingOptions ReadGasAccountingOptions(IConfiguration configuration)
+    {
+        var map = new Dictionary<Chain, Guid>();
+        foreach (var child in configuration.GetSection("Accounting:GasAssets").GetChildren())
+        {
+            if (Enum.TryParse<Chain>(child.Key, ignoreCase: true, out var chain)
+                && Guid.TryParse(child.Value, out var assetId))
+                map[chain] = assetId;
+        }
+
+        return new GasAccountingOptions { GasAssetByChain = map };
     }
 }

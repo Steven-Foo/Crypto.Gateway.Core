@@ -10,6 +10,12 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Events;
 /// (§4.5, mirrors <c>PaymentIntentMatched</c>). The publisher (Withdrawal) owns this contract; consumers
 /// reference this Events project.
 /// </summary>
+/// <remarks>
+/// <see cref="GasAssetId"/>/<see cref="GasFeeBaseUnits"/> carry the native-coin fee the platform paid on-chain
+/// so the Ledger can book it as a platform gas expense (5c) — the Ledger stays chain-agnostic (§4.6), receiving
+/// the fee as data. <see cref="GasAssetId"/> is null (and the fee zero) when no gas asset is configured or the
+/// engine charged no fee, in which case no gas journal is written.
+/// </remarks>
 public sealed record WithdrawalConfirmed(
     Guid EventId,
     DateTimeOffset OccurredOnUtc,
@@ -22,4 +28,6 @@ public sealed record WithdrawalConfirmed(
     DateTimeOffset ConfirmedAt,
     string IdempotencyKey,
     string DestinationAddress,
-    string? CallbackUrl) : IDomainEvent, IIntegrationEvent;
+    string? CallbackUrl,
+    string? GasAssetId = null,
+    string GasFeeBaseUnits = "0") : IDomainEvent, IIntegrationEvent;

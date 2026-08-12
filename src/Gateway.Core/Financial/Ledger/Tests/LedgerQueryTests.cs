@@ -63,6 +63,42 @@ public sealed class LedgerQueryTests : LedgerTestHost
     }
 
     [Fact]
+    public async Task Treasury_holding_is_zero_when_the_asset_has_never_been_custodied()
+    {
+        await using var ctx = Context();
+        (await new LedgerQuery(ctx).GetTreasuryHoldingAsync(Asset, Ct)).ShouldBe(BigInteger.Zero);
+    }
+
+    [Fact]
+    public async Task Treasury_holding_rises_by_the_gross_of_a_confirmed_deposit_independent_of_the_fee()
+    {
+        await using (var ctx = Context())
+            (await Poster(ctx).CreditDepositAsync(new CreditDepositCommand(Guid.CreateVersion7(), Merchant, Asset, Deposited, Fee), Ct))
+                .IsSuccess.ShouldBeTrue();
+
+        // TreasuryAsset is debited the GROSS received; the fee only changes the merchant/fee split, not custody.
+        await using var verify = Context();
+        (await new LedgerQuery(verify).GetTreasuryHoldingAsync(Asset, Ct)).ShouldBe(Deposited);
+    }
+
+    [Fact]
+    public async Task Treasury_holding_falls_by_a_settled_withdrawal_amount_not_its_fee()
+    {
+        var withdrawalId = Guid.CreateVersion7();
+        await using (var ctx = Context())
+            await Poster(ctx).CreditDepositAsync(new CreditDepositCommand(Guid.CreateVersion7(), Merchant, Asset, Deposited), Ct);
+        await using (var ctx = Context())
+            await ((IWithdrawalLedger)Poster(ctx)).ReserveAsync(new ReserveWithdrawalRequest(withdrawalId, Merchant, Asset, Amount, Fee), Ct);
+        await using (var ctx = Context())
+            (await Poster(ctx).SettleWithdrawalAsync(new SettleWithdrawalCommand(withdrawalId, Merchant, Asset, Amount, Fee), Ct))
+                .IsSuccess.ShouldBeTrue();
+
+        // Custody drops by what left the chain (the amount); the fee becomes revenue, still custodied.
+        await using var verify = Context();
+        (await new LedgerQuery(verify).GetTreasuryHoldingAsync(Asset, Ct)).ShouldBe(Deposited - Amount);
+    }
+
+    [Fact]
     public async Task Journal_history_shows_a_deposit_as_a_credit_on_the_merchant_liability_line()
     {
         var merchant = Guid.CreateVersion7();

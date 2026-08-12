@@ -33,9 +33,47 @@ public sealed class WalletDerivationService(
     {
         var hdWallet = await repository.FindActiveAsync(chain, (HdWalletPurpose)purpose, cancellationToken);
         if (hdWallet is null)
-            return Result.Failure<DerivedAddress>(KeyManagementErrors.NotFound);
+        {
+            var provisioned = await ProvisionPlatformWalletAsync(chain, purpose, cancellationToken);
+            if (provisioned.IsFailure)
+                return Result.Failure<DerivedAddress>(provisioned.Error!);
+
+            hdWallet = provisioned.Value;
+        }
 
         return await AllocateFromAsync(hdWallet, chain, cancellationToken);
+    }
+
+    /// <summary>
+    /// Creates the platform withdrawal HD wallet on first use — the seed the hot pool's addresses derive from.
+    /// Mirrors the merchant create-on-first-use: the unique <c>(MerchantId, Chain, Purpose)</c> index (one NULL
+    /// MerchantId ⇒ one active platform wallet per chain+purpose) is the race arbiter, so two concurrent first
+    /// derivations never mint two seeds. Only Withdrawal provisions a platform HD wallet today, and only when a
+    /// provisioner is registered (dev in-memory; production KMS-backed, deferred — otherwise inert, §10).
+    /// </summary>
+    private async Task<Result<HdWallet>> ProvisionPlatformWalletAsync(
+        Chain chain, DerivationPurpose purpose, CancellationToken cancellationToken)
+    {
+        if (purpose != DerivationPurpose.Withdrawal)
+            return Result.Failure<HdWallet>(KeyManagementErrors.NotFound);
+
+        if (_provisioner is null)
+            return Result.Failure<HdWallet>(KeyManagementErrors.NotFound);
+
+        var walletResult = await _provisioner.ProvisionPlatformWithdrawalWalletAsync(chain, cancellationToken);
+        if (walletResult.IsFailure)
+            return walletResult;
+
+        var wallet = walletResult.Value;
+        var outcome = await repository.TryAddActiveAsync(wallet, cancellationToken);
+        if (outcome == HdWalletAddOutcome.Added)
+            return Result.Success(wallet);
+
+        // Lost the create-on-first-use race — adopt the wallet the winner committed.
+        var winner = await repository.FindActiveAsync(chain, (HdWalletPurpose)purpose, cancellationToken);
+        return winner is not null
+            ? Result.Success(winner)
+            : Result.Failure<HdWallet>(KeyManagementErrors.NotFound);
     }
 
     public async Task<Result<DerivedAddress>> AllocateNextForMerchantAsync(

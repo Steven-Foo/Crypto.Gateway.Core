@@ -154,6 +154,10 @@ public sealed record TronTransactionInfoDto
     [JsonPropertyName("id")] public string? Id { get; init; }
     [JsonPropertyName("blockNumber")] public long? BlockNumber { get; init; }
     [JsonPropertyName("receipt")] public TronReceiptDto? Receipt { get; init; }
+
+    /// <summary>Total fee the sender paid for this transaction, in sun (energy_fee + net_fee + any burn).
+    /// Used by 5c platform gas accounting.</summary>
+    [JsonPropertyName("fee")] public long Fee { get; init; }
 }
 
 public sealed record TronReceiptDto

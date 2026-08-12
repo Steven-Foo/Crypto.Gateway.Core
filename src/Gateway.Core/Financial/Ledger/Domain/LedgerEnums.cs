@@ -21,6 +21,15 @@ public enum AccountType
 
     /// <summary>Holds a withdrawal's funds in-flight, between reserve and settlement. Credit-normal.</summary>
     WithdrawalClearing = 5,
+
+    /// <summary>
+    /// The platform's own operating funds that gas/energy costs are drawn against — an equity-like source,
+    /// credit-normal. It is <em>not</em> reconciled against any on-chain address (unlike TreasuryAsset); it
+    /// exists so the platform's network-fee expense has a balanced counterparty without pulling the native
+    /// gas coin (TRX) into custody reconciliation (§14, "no off-ledger money"). Its balance is the running
+    /// total of gas the platform has spent.
+    /// </summary>
+    PlatformFunding = 6,
 }
 
 /// <summary>The side on which an account's balance naturally increases.</summary>
@@ -63,6 +72,10 @@ public enum JournalReferenceType
 
     /// <summary>Reserved funds returned to the merchant when a withdrawal is rejected or fails.</summary>
     WithdrawalRelease = 9,
+
+    /// <summary>Native-coin (gas/energy) cost the platform bore for one on-chain operation — a platform
+    /// expense journal, never a merchant's. Keyed with the operation's id for idempotency.</summary>
+    GasCost = 10,
 }
 
 /// <summary>Which column a posting line lands in. A line is a debit XOR a credit — never both, never neither.</summary>

@@ -6,3 +6,8 @@ public sealed class RejectWithdrawalRequest
 {
     [Required, MaxLength(512)] public string Reason { get; init; } = null!;
 }
+
+public sealed class CancelWithdrawalRequest
+{
+    [Required, MaxLength(512)] public string Reason { get; init; } = null!;
+}

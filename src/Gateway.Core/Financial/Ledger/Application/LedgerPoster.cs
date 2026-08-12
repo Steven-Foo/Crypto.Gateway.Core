@@ -26,6 +26,14 @@ public sealed record SettleWithdrawalCommand(Guid WithdrawalId, Guid MerchantId,
 /// <summary>Release a rejected/failed withdrawal: reserved funds return to the merchant.</summary>
 public sealed record ReleaseWithdrawalCommand(Guid WithdrawalId, Guid MerchantId, Guid AssetId, BigInteger Amount, BigInteger Fee);
 
+/// <summary>
+/// Book the native-coin (gas/energy) cost the platform bore for one on-chain operation. <paramref name="ReferenceId"/>
+/// is the operation's id (e.g. the withdrawal id) — the idempotency key with <c>GasCost</c>. <paramref name="GasAssetId"/>
+/// denominates the fee (TRX for TRON); <paramref name="FeeSun"/> is the fee in that asset's base units.
+/// <paramref name="ReferenceType"/> is a human label for the journal description (e.g. "Withdrawal").
+/// </summary>
+public sealed record RecordGasSpentCommand(Guid ReferenceId, string ReferenceType, Guid GasAssetId, BigInteger FeeSun, string? Description = null);
+
 public interface ILedgerPoster
 {
     Task<Result<PostingOutcome>> CreditDepositAsync(CreditDepositCommand command, CancellationToken cancellationToken = default);
@@ -35,6 +43,8 @@ public interface ILedgerPoster
     Task<Result<PostingOutcome>> SettleWithdrawalAsync(SettleWithdrawalCommand command, CancellationToken cancellationToken = default);
 
     Task<Result<PostingOutcome>> ReleaseWithdrawalAsync(ReleaseWithdrawalCommand command, CancellationToken cancellationToken = default);
+
+    Task<Result<PostingOutcome>> RecordGasSpentAsync(RecordGasSpentCommand command, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -140,6 +150,34 @@ public sealed class LedgerPoster(
         ];
 
         return await PostAsync(JournalReferenceType.WithdrawalRelease, command.WithdrawalId, command.AssetId, command.MerchantId, "Withdrawal release", lines, cancellationToken);
+    }
+
+    /// <summary>
+    /// Book a platform gas cost: DEBIT NetworkFeeExpense (the expense grows), CREDIT PlatformFunding (the
+    /// equity-like source it's drawn from) by the fee — a platform journal with no merchant line. Both accounts
+    /// are System-owned and denominated in the gas asset. Idempotent, keyed <c>(GasCost, referenceId)</c>, so a
+    /// replayed confirmation event never double-books. A zero/negative fee is a no-op success (dev's in-memory
+    /// engine reports no fee, so no journal is written there).
+    /// </summary>
+    public async Task<Result<PostingOutcome>> RecordGasSpentAsync(RecordGasSpentCommand command, CancellationToken cancellationToken = default)
+    {
+        if (command.FeeSun <= BigInteger.Zero)
+            return Result.Success(PostingOutcome.NoChange);
+
+        if (!MoneyLimits.IsStorable(command.FeeSun))
+            return Result.Failure<PostingOutcome>(LedgerErrors.NonPositiveAmount);
+
+        var expense = await accounts.GetOrCreateAsync(AccountType.NetworkFeeExpense, OwnerType.System, null, command.GasAssetId, cancellationToken);
+        var funding = await accounts.GetOrCreateAsync(AccountType.PlatformFunding, OwnerType.System, null, command.GasAssetId, cancellationToken);
+
+        List<PostingLine> lines =
+        [
+            PostingLine.Debit(expense.Id, command.FeeSun),
+            PostingLine.Credit(funding.Id, command.FeeSun),
+        ];
+
+        var description = command.Description ?? $"Gas cost ({command.ReferenceType})";
+        return await PostAsync(JournalReferenceType.GasCost, command.ReferenceId, command.GasAssetId, merchantId: null, description, lines, cancellationToken);
     }
 
     private async Task<Result<PostingOutcome>> PostAsync(

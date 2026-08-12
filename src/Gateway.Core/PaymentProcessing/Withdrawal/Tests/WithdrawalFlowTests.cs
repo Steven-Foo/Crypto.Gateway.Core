@@ -1,6 +1,8 @@
 using System.Numerics;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure.Treasury;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application.Handlers;
@@ -56,6 +58,13 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
             : $@"Server=(localdb)\MSSQLLocalDB;Database={DbName};Trusted_Connection=True;TrustServerCertificate=True";
 
     private ServiceProvider _provider = null!;
+    private InMemoryBalanceReader _hotFloat = null!;
+
+    private const string HotWalletAddress = "THotWallet";
+    private static readonly Guid HotWalletId = Guid.CreateVersion7();
+    private static readonly BigInteger AmpleFloat = BigInteger.Parse("1000000000000");
+
+    private void SetHotFloat(BigInteger amount) => _hotFloat.Set(Chain.Tron, HotWalletAddress, Asset, amount);
 
     public async ValueTask InitializeAsync()
     {
@@ -82,10 +91,15 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
         services.AddScoped<IWithdrawalDirectory, WithdrawalDirectory>();
         services.AddScoped<IWithdrawalRequestService, WithdrawalRequestService>();
         services.AddScoped<IWithdrawalApprovalService, WithdrawalApprovalService>();
+        services.AddScoped<IWithdrawalFundingService, WithdrawalFundingService>();
         services.AddScoped<WithdrawalProcessingService>();
         services.AddScoped<WithdrawalConfirmationService>();
+        services.AddSingleton(new GasAccountingOptions()); // 5c: empty ⇒ no gas journal (in-memory engine charges no fee anyway)
         services.AddSingleton<IWithdrawalPolicyProvider>(new StubPolicy());
-        services.AddSingleton<IHotWalletProvider>(new StubHotWallet());
+        // Real pool allocator over a stub single-wallet pool: exercises allocation + lease-until-confirmed
+        // (a 1-wallet pool serializes exactly like the old single wallet). The balance reader below funds it.
+        services.AddSingleton<ITreasuryHotWalletDirectory>(new StubTreasuryPool(HotWalletId, HotWalletAddress));
+        services.AddScoped<IHotWalletAllocator, HotWalletAllocator>();
         services.AddSingleton<IMerchantDirectory>(new FakeMerchants());
         services.AddSingleton<IMerchantFeeSchedule>(new FakeFees(Fee));
         services.AddSingleton<InMemoryTransactionEngine>();
@@ -93,6 +107,12 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
         services.AddSingleton<ITransactionBroadcaster>(sp => sp.GetRequiredService<InMemoryTransactionEngine>());
         services.AddSingleton<IChainStatusReader>(new StubChainStatus());
         services.AddSingleton<ISigner, InMemorySigner>();
+
+        // The physical float gate reads the hot wallet's on-chain balance; default it amply so the money-path
+        // tests aren't gated, and let the funding-hold tests dial it down via SetHotFloat.
+        _hotFloat = new InMemoryBalanceReader();
+        _hotFloat.Set(Chain.Tron, HotWalletAddress, Asset, AmpleFloat);
+        services.AddSingleton<IBalanceReader>(_hotFloat);
 
         _provider = services.BuildServiceProvider();
 
@@ -296,6 +316,146 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
 
     private InMemoryTransactionEngine Engine => _provider.GetRequiredService<InMemoryTransactionEngine>();
 
+    [Fact]
+    public async Task An_underfunded_hot_wallet_parks_the_withdrawal_then_auto_resumes_when_reloaded()
+    {
+        await SeedMerchantBalanceAsync(BigInteger.Parse("10000000"));
+        var amount = BigInteger.Parse("3000000"); // below threshold → auto-approved
+
+        var request = await RequestAsync(amount, "idem-park");
+        request.Value.Status.ShouldBe(nameof(WithdrawalStatus.Approved));
+
+        // Hot wallet can't cover it → parked, reserve HELD (merchant stays debited), ops sees it distinctly.
+        SetHotFloat(BigInteger.Parse("1000000")); // less than the 3,000,000 payout
+        await ProcessAsync();
+
+        var parked = await SingleWithdrawalAsync();
+        parked.Status.ShouldBe(WithdrawalStatus.AwaitingFunds);
+        parked.StatusReason.ShouldNotBeNull();
+        (await SearchStatusAsync(parked.Id)).ShouldBe("insufficient_balance");
+        (await BalanceAsync(AccountType.MerchantLiability, Merchant)).ShouldBe(BigInteger.Parse("6900000")); // reserved, NOT released
+        (await BalanceAsync(AccountType.WithdrawalClearing, null)).ShouldBe(BigInteger.Parse("3100000"));
+
+        // Admin reloads the hot wallet from treasury → the withdrawal auto-resumes and completes.
+        SetHotFloat(AmpleFloat);
+        await ProcessAsync();  // AwaitingFunds → build → sign → broadcast
+        await ConfirmAsync();
+        await DispatchAsync();
+
+        (await SingleWithdrawalAsync()).Status.ShouldBe(WithdrawalStatus.Confirmed);
+        (await BalanceAsync(AccountType.WithdrawalClearing, null)).ShouldBe(BigInteger.Zero);
+        (await BalanceAsync(AccountType.TreasuryAsset, null)).ShouldBe(BigInteger.Parse("7000000")); // 3,000,000 left custody
+        (await BalanceAsync(AccountType.FeeRevenue, null)).ShouldBe(Fee);
+    }
+
+    [Fact]
+    public async Task An_above_threshold_withdrawal_is_held_for_operator_release_even_when_funded()
+    {
+        await SeedMerchantBalanceAsync(BigInteger.Parse("10000000"));
+        var amount = BigInteger.Parse("6000000"); // above the 5,000,000 threshold → PendingApproval
+
+        var request = await RequestAsync(amount, "idem-large");
+        request.Value.Status.ShouldBe(nameof(WithdrawalStatus.PendingApproval));
+
+        // Approve it (first human touch). The float is ample, but a large payout is held for an explicit
+        // release before it sends — the "large = manual" resume rule.
+        var w = await SingleWithdrawalAsync();
+        await ApproveAsync(w.Id);
+        await ProcessAsync();
+
+        (await SingleWithdrawalAsync()).Status.ShouldBe(WithdrawalStatus.AwaitingRelease);
+        (await SearchStatusAsync(w.Id)).ShouldBe("awaiting_release");
+
+        // Operator releases → it sends and settles on the next pass.
+        (await ReleaseAsync(w.Id)).IsSuccess.ShouldBeTrue();
+        await ProcessAsync();
+        await ConfirmAsync();
+        await DispatchAsync();
+
+        var settled = await SingleWithdrawalAsync();
+        settled.Status.ShouldBe(WithdrawalStatus.Confirmed);
+        settled.ReleasedBy.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task One_wallet_processes_one_withdrawal_at_a_time_leased_until_confirmed()
+    {
+        await SeedMerchantBalanceAsync(BigInteger.Parse("20000000"));
+
+        // A single-wallet pool (funded). Two payouts: the first leases the wallet; the second can't allocate it
+        // (leased until the first confirms — one tx at a time per wallet), so it parks.
+        (await RequestAsync(BigInteger.Parse("3000000"), "idem-a")).IsSuccess.ShouldBeTrue();
+        (await RequestAsync(BigInteger.Parse("3000000"), "idem-b")).IsSuccess.ShouldBeTrue();
+
+        await ProcessAsync(); // one broadcasts and leases the wallet; the other finds it busy → parked
+
+        var all = await AllWithdrawalsAsync();
+        var broadcast = all.Single(x => x.Status == WithdrawalStatus.Broadcast);
+        broadcast.SourceWalletId.ShouldBe(HotWalletId); // stamped with the leased wallet
+        all.Count(x => x.Status == WithdrawalStatus.AwaitingFunds).ShouldBe(1);
+
+        // Confirm the first → the wallet is freed → the parked one allocates it and sends on the next pass.
+        await ConfirmAsync();
+        await DispatchAsync();
+        await ProcessAsync();
+        (await AllWithdrawalsAsync()).Count(x => x.Status is WithdrawalStatus.Broadcast or WithdrawalStatus.Confirmed).ShouldBe(2);
+    }
+
+    [Fact]
+    public async Task Two_withdrawals_cannot_lease_the_same_wallet_the_second_save_reverts_cleanly()
+    {
+        await SeedMerchantBalanceAsync(BigInteger.Parse("20000000"));
+        var a = (await RequestAsync(BigInteger.Parse("3000000"), "idem-x")).Value.WithdrawalId;
+        var b = (await RequestAsync(BigInteger.Parse("3000000"), "idem-y")).Value.WithdrawalId;
+        var walletW = Guid.CreateVersion7();
+
+        // A leases wallet W (persisted → Signing).
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var repo = scope.ServiceProvider.GetRequiredService<IWithdrawalRepository>();
+            var wa = await repo.GetByIdAsync(a, Ct);
+            wa!.RecordSigned(Guid.CreateVersion7(), walletW, [1], DateTimeOffset.UtcNow).IsSuccess.ShouldBeTrue();
+            (await repo.TrySaveSignedAsync(wa, Ct)).ShouldBeTrue();
+        }
+
+        // B tries the SAME wallet — the filtered unique index refuses it; TrySaveSignedAsync reverts cleanly.
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var repo = scope.ServiceProvider.GetRequiredService<IWithdrawalRepository>();
+            var wb = await repo.GetByIdAsync(b, Ct);
+            wb!.RecordSigned(Guid.CreateVersion7(), walletW, [2], DateTimeOffset.UtcNow).IsSuccess.ShouldBeTrue();
+            (await repo.TrySaveSignedAsync(wb, Ct)).ShouldBeFalse();
+        }
+
+        // B is untouched in the DB — still Approved, no wallet stamped — so it re-allocates another wallet next pass.
+        await using (var verify = _provider.CreateAsyncScope())
+        {
+            var wb = await verify.ServiceProvider.GetRequiredService<WithdrawalDbContext>()
+                .Withdrawals.SingleAsync(w => w.Id == b, Ct);
+            wb.Status.ShouldBe(WithdrawalStatus.Approved);
+            wb.SourceWalletId.ShouldBeNull();
+        }
+    }
+
+    private async Task ApproveAsync(Guid id)
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        (await scope.ServiceProvider.GetRequiredService<IWithdrawalApprovalService>().ApproveAsync(id, "ops", Ct))
+            .IsSuccess.ShouldBeTrue();
+    }
+
+    private async Task<Result> ReleaseAsync(Guid id)
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<IWithdrawalFundingService>().ReleaseAsync(id, "ops", Ct);
+    }
+
+    private async Task<IReadOnlyList<WithdrawalEntity>> AllWithdrawalsAsync()
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<WithdrawalDbContext>().Withdrawals.ToListAsync(Ct);
+    }
+
     private async Task<WithdrawalEntity> SingleWithdrawalAsync()
     {
         await using var scope = _provider.CreateAsyncScope();
@@ -368,10 +528,15 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
         public WithdrawalPolicy For(Chain chain) => Policy;
     }
 
-    private sealed class StubHotWallet : IHotWalletProvider
+    private sealed class StubTreasuryPool(Guid walletId, string address) : ITreasuryHotWalletDirectory
     {
-        public Task<HotWallet> ForAsync(Chain chain, CancellationToken cancellationToken = default) =>
-            Task.FromResult(new HotWallet("THotWallet", "tron-hot-wallet-0"));
+        private TreasuryHotWallet Wallet => new(walletId, Chain.Tron, address, "tron-hot-wallet-0");
+
+        public Task<Result<TreasuryHotWallet>> GetHotWalletAsync(Chain chain, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Result.Success(Wallet));
+
+        public Task<IReadOnlyList<TreasuryHotWallet>> GetHotWalletPoolAsync(Chain chain, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<TreasuryHotWallet>>([Wallet]);
     }
 
     private sealed class FakeMerchants : IMerchantDirectory

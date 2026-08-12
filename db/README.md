@@ -63,8 +63,9 @@ the repo root; `-s` is always the host above.
 | `90-energy.sql` | `EnergyDbContext` | `src/Gateway.Core/AssetManagement/Energy/Infrastructure` |
 | `100-identity.sql` | `IdentityDbContext` | `src/Gateway.Core/Platform/Identity/Infrastructure` |
 | `110-notification.sql` | `NotificationDbContext` | `src/Gateway.Core/Platform/Notification/Infrastructure` |
+| `120-sweep.sql` | `SweepDbContext` | `src/Gateway.Core/AssetManagement/Sweep/Infrastructure` |
 
-Apply in that order (`10` → `100`) — later modules only ever reference earlier ones by opaque
+Apply in that order (`10` → `120`) — later modules only ever reference earlier ones by opaque
 `Guid`, never a cross-schema FK (§4.5), but keeping the numeric order matches how the modules
 were built and is a reasonable default.
 

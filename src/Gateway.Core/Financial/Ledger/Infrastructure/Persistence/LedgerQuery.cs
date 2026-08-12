@@ -29,6 +29,22 @@ public sealed class LedgerQuery(LedgerDbContext context) : ILedgerQuery
             .FirstOrDefaultAsync(cancellationToken);
     }
 
+    public async Task<BigInteger> GetTreasuryHoldingAsync(Guid assetId, CancellationToken cancellationToken = default)
+    {
+        // TreasuryAsset(asset) is the debit-normal custody account (OwnerType.Treasury, no owner id); its
+        // cached balance is the total we custody on-chain for the asset right now. No account/balance row yet
+        // ⇒ the asset has never been custodied ⇒ zero (FirstOrDefaultAsync yields default(BigInteger) = 0).
+        return await (
+            from account in context.Accounts.AsNoTracking()
+            where account.AccountType == AccountType.TreasuryAsset
+               && account.OwnerType == OwnerType.Treasury
+               && account.OwnerId == null
+               && account.AssetId == assetId
+            join balance in context.AccountBalances.AsNoTracking() on account.Id equals balance.Id
+            select balance.Balance)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
     public async Task<(IReadOnlyList<MerchantJournalView> Items, int TotalCount)> GetJournalsAsync(
         Guid? merchantId,
         Guid? referenceId,

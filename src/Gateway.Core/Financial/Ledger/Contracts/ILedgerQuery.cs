@@ -37,6 +37,17 @@ public interface ILedgerQuery
     Task<BigInteger> GetMerchantBalanceAsync(Guid merchantId, Guid assetId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The ledger's total on-chain holding for one asset, in base units — the balance of the platform's
+    /// <c>TreasuryAsset</c> account. This is the ledger's <em>claim</em> of how much of the asset it custodies
+    /// across every address it controls: it rises by the gross of every confirmed deposit and falls by every
+    /// settled withdrawal (§14, derived from the immutable journal, never a stored mutable number). The
+    /// Reconciliation module compares this against the summed on-chain balance of the controlled addresses to
+    /// detect custody drift — it is the only ledger-derivable custody figure, because the ledger tracks
+    /// accounting buckets, never addresses (§8). Returns zero when the asset has never been custodied.
+    /// </summary>
+    Task<BigInteger> GetTreasuryHoldingAsync(Guid assetId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Journal history, newest first — every event that touched a merchant's liability account (deposit
     /// credits, withdrawal reserve/settle/release, reversals). Read straight from the immutable ledger, not
     /// from Deposit/Withdrawal/PaymentIntent's own tables. All filters are optional and combine with AND:

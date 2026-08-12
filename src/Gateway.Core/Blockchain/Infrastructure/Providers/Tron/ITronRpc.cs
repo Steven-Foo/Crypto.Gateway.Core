@@ -28,4 +28,13 @@ public interface ITronRpc
     /// </summary>
     Task<IReadOnlyList<TronNativeBlockDto>> GetBlockRangeAsync(
         long fromBlock, long toBlock, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <c>eth_call</c> against the latest block — invokes a read-only contract method (e.g. <c>balanceOf</c>)
+    /// and returns the raw <c>0x</c>-hex return data. Read-only: it sends no key and signs nothing (§10).
+    /// </summary>
+    Task<string> CallContractAsync(string contractHexAddress, string dataHex, CancellationToken cancellationToken = default);
+
+    /// <summary><c>eth_getBalance</c> at the latest block — an address's native TRX balance in sun (base units).</summary>
+    Task<System.Numerics.BigInteger> GetNativeBalanceAsync(string evmHexAddress, CancellationToken cancellationToken = default);
 }

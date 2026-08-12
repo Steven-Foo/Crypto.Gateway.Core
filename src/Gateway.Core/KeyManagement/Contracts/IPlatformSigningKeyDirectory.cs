@@ -19,4 +19,14 @@ public interface IPlatformSigningKeyDirectory
 {
     Task<PlatformSigningKey?> FindActiveAsync(
         Chain chain, DerivationPurpose purpose, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Resolves the signing-key reference for a specific platform <em>withdrawal</em> address — a child of the
+    /// platform withdrawal HD wallet (the hot pool). Unlike <see cref="FindActiveAsync"/> (one key per
+    /// chain+purpose), the pool has many child addresses under one seed, so its key is resolved <em>per
+    /// address</em> — the reference conveys the seed reference and the child index (the signer parses it, no
+    /// caller does, §10). Returns null when no active withdrawal child matches the address.
+    /// </summary>
+    Task<PlatformSigningKey?> FindByAddressAsync(
+        Chain chain, string address, CancellationToken cancellationToken = default);
 }

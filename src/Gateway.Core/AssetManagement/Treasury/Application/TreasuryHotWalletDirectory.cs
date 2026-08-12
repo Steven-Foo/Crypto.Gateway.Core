@@ -6,11 +6,11 @@ using CryptoPaymentEngine.SharedKernel;
 namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Application;
 
 /// <summary>
-/// Resolves the platform hot withdrawal wallet by joining, on chain, the Wallet module's registered
-/// <c>HotWithdrawal</c> address with the KeyManagement module's <c>Withdrawal</c>-purpose signing key —
-/// each read through its own Contracts (§4.5). Refuses if zero or more than one hot wallet is registered
-/// (multi-wallet selection is out of scope for this cut): a withdrawal must never be signed from an
-/// arbitrary wallet.
+/// Resolves the platform hot withdrawal <b>pool</b> by joining, per chain, the Wallet module's registered
+/// <c>HotWithdrawal</c> addresses with each one's per-address KeyManagement signing key — each read through
+/// its own Contracts (§4.5). The pool wallets are watch-only children of one platform withdrawal HD wallet, so
+/// each resolves its own key <em>by address</em> (<see cref="IPlatformSigningKeyDirectory.FindByAddressAsync"/>).
+/// A wallet whose key can't be resolved is skipped (never signed from blindly, §10).
 /// </summary>
 public sealed class TreasuryHotWalletDirectory(
     IPlatformWalletDirectory wallets,
@@ -21,21 +21,27 @@ public sealed class TreasuryHotWalletDirectory(
     public async Task<Result<TreasuryHotWallet>> GetHotWalletAsync(
         Chain chain, CancellationToken cancellationToken = default)
     {
+        var pool = await GetHotWalletPoolAsync(chain, cancellationToken);
+        return pool.Count == 0
+            ? Result.Failure<TreasuryHotWallet>(TreasuryErrors.HotWalletNotConfigured)
+            : Result.Success(pool[0]);
+    }
+
+    public async Task<IReadOnlyList<TreasuryHotWallet>> GetHotWalletPoolAsync(
+        Chain chain, CancellationToken cancellationToken = default)
+    {
         var platformWallets = await wallets.GetPlatformWalletsAsync(chain, cancellationToken);
-        var hotWallets = platformWallets
-            .Where(w => string.Equals(w.WalletType, HotWithdrawalType, StringComparison.OrdinalIgnoreCase))
-            .ToList();
 
-        if (hotWallets.Count == 0)
-            return Result.Failure<TreasuryHotWallet>(TreasuryErrors.HotWalletNotConfigured);
+        var pool = new List<TreasuryHotWallet>();
+        foreach (var wallet in platformWallets
+                     .Where(w => string.Equals(w.WalletType, HotWithdrawalType, StringComparison.OrdinalIgnoreCase))
+                     .OrderBy(w => w.Address, StringComparer.Ordinal)) // stable order so GetHotWalletAsync is deterministic
+        {
+            var signingKey = await signingKeys.FindByAddressAsync(chain, wallet.Address, cancellationToken);
+            if (signingKey is not null)
+                pool.Add(new TreasuryHotWallet(wallet.WalletId, chain, wallet.Address, signingKey.KeyReference));
+        }
 
-        if (hotWallets.Count > 1)
-            return Result.Failure<TreasuryHotWallet>(TreasuryErrors.HotWalletAmbiguous);
-
-        var signingKey = await signingKeys.FindActiveAsync(chain, DerivationPurpose.Withdrawal, cancellationToken);
-        if (signingKey is null)
-            return Result.Failure<TreasuryHotWallet>(TreasuryErrors.SigningKeyMissing);
-
-        return Result.Success(new TreasuryHotWallet(chain, hotWallets[0].Address, signingKey.KeyReference));
+        return pool;
     }
 }

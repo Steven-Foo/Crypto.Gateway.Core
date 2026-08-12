@@ -11,7 +11,7 @@ namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Tests;
 public sealed class TreasuryHotWalletDirectoryTests
 {
     private const string Address = "TAueoxR1rwogpLDjYJzB7GGYYWgPbtajSs";
-    private const string KeyReference = "tron-hot-wallet-0";
+    private const string KeyReference = "tron-hot-wallet-0#0";
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -21,17 +21,19 @@ public sealed class TreasuryHotWalletDirectoryTests
     private TreasuryHotWalletDirectory NewDirectory() => new(_wallets, _signingKeys);
 
     private void WithWallets(params PlatformWallet[] wallets) =>
-        _wallets.GetPlatformWalletsAsync(Chain.Tron, Ct).Returns(wallets);
+        _wallets.GetPlatformWalletsAsync(Chain.Tron, Arg.Any<CancellationToken>()).Returns(wallets);
 
-    private void WithSigningKey(string? keyReference) =>
-        _signingKeys.FindActiveAsync(Chain.Tron, DerivationPurpose.Withdrawal, Ct)
+    private void WithKeyForAddress(string address, string? keyReference) =>
+        _signingKeys.FindByAddressAsync(Chain.Tron, address, Arg.Any<CancellationToken>())
             .Returns(keyReference is null ? null : new PlatformSigningKey(Guid.NewGuid(), Chain.Tron, keyReference));
 
+    private static PlatformWallet Hot(string address) => new(Guid.NewGuid(), Chain.Tron, address, "HotWithdrawal");
+
     [Fact]
-    public async Task Combines_the_single_hot_wallet_address_with_the_signing_key_reference()
+    public async Task Combines_a_hot_wallet_address_with_its_per_address_signing_key()
     {
-        WithWallets(new PlatformWallet(Guid.NewGuid(), Chain.Tron, Address, "HotWithdrawal"));
-        WithSigningKey(KeyReference);
+        WithWallets(Hot(Address));
+        WithKeyForAddress(Address, KeyReference);
 
         var result = await NewDirectory().GetHotWalletAsync(Chain.Tron, Ct);
 
@@ -41,22 +43,22 @@ public sealed class TreasuryHotWalletDirectoryTests
     }
 
     [Fact]
-    public async Task Ignores_non_hot_wallets_when_selecting()
+    public async Task Ignores_non_hot_wallets_when_building_the_pool()
     {
         WithWallets(
             new PlatformWallet(Guid.NewGuid(), Chain.Tron, "TColdAddr", "Cold"),
-            new PlatformWallet(Guid.NewGuid(), Chain.Tron, Address, "HotWithdrawal"),
+            Hot(Address),
             new PlatformWallet(Guid.NewGuid(), Chain.Tron, "TEnergyAddr", "Energy"));
-        WithSigningKey(KeyReference);
+        WithKeyForAddress(Address, KeyReference);
 
-        var result = await NewDirectory().GetHotWalletAsync(Chain.Tron, Ct);
+        var pool = await NewDirectory().GetHotWalletPoolAsync(Chain.Tron, Ct);
 
-        result.IsSuccess.ShouldBeTrue();
-        result.Value.Address.ShouldBe(Address);
+        pool.Count.ShouldBe(1);
+        pool[0].Address.ShouldBe(Address);
     }
 
     [Fact]
-    public async Task No_hot_wallet_registered_fails()
+    public async Task No_hot_wallet_registered_fails_the_single_lookup()
     {
         WithWallets(new PlatformWallet(Guid.NewGuid(), Chain.Tron, "TColdAddr", "Cold"));
 
@@ -67,27 +69,30 @@ public sealed class TreasuryHotWalletDirectoryTests
     }
 
     [Fact]
-    public async Task More_than_one_hot_wallet_is_ambiguous_and_refused()
+    public async Task The_pool_returns_every_hot_wallet_and_the_single_lookup_returns_the_first()
     {
-        WithWallets(
-            new PlatformWallet(Guid.NewGuid(), Chain.Tron, Address, "HotWithdrawal"),
-            new PlatformWallet(Guid.NewGuid(), Chain.Tron, "TSecondHot", "HotWithdrawal"));
+        WithWallets(Hot(Address), Hot("TSecondHot"));
+        WithKeyForAddress(Address, "refA#0");
+        WithKeyForAddress("TSecondHot", "refB#1");
 
-        var result = await NewDirectory().GetHotWalletAsync(Chain.Tron, Ct);
+        var pool = await NewDirectory().GetHotWalletPoolAsync(Chain.Tron, Ct);
+        pool.Count.ShouldBe(2);
 
-        result.IsFailure.ShouldBeTrue();
-        result.Error!.Code.ShouldBe(TreasuryErrors.HotWalletAmbiguous.Code);
+        // Deterministic by ordinal address: 'A' (Address) sorts before 'S' (TSecondHot).
+        var single = await NewDirectory().GetHotWalletAsync(Chain.Tron, Ct);
+        single.Value.Address.ShouldBe(Address);
     }
 
     [Fact]
-    public async Task A_hot_wallet_without_a_registered_signing_key_fails()
+    public async Task A_hot_wallet_without_a_resolvable_key_is_skipped()
     {
-        WithWallets(new PlatformWallet(Guid.NewGuid(), Chain.Tron, Address, "HotWithdrawal"));
-        WithSigningKey(null);
+        WithWallets(Hot(Address));
+        WithKeyForAddress(Address, null);
 
-        var result = await NewDirectory().GetHotWalletAsync(Chain.Tron, Ct);
+        (await NewDirectory().GetHotWalletPoolAsync(Chain.Tron, Ct)).ShouldBeEmpty();
 
-        result.IsFailure.ShouldBeTrue();
-        result.Error!.Code.ShouldBe(TreasuryErrors.SigningKeyMissing.Code);
+        var single = await NewDirectory().GetHotWalletAsync(Chain.Tron, Ct);
+        single.IsFailure.ShouldBeTrue();
+        single.Error!.Code.ShouldBe(TreasuryErrors.HotWalletNotConfigured.Code);
     }
 }

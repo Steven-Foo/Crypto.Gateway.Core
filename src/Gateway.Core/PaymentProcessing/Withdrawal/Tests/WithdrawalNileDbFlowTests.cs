@@ -1,7 +1,10 @@
 using System.Numerics;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
+using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers.Tron;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure.Treasury;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application.Handlers;
@@ -46,6 +49,7 @@ public sealed class WithdrawalNileDbFlowTests : IAsyncLifetime
 {
     private const string DbName = "CpeNileWithdrawalDemo";
     private const string KeyReference = "kms://tron/hot/nile";
+    private static readonly Guid HotWalletId = Guid.CreateVersion7();
 
     private static readonly Guid Merchant = Guid.CreateVersion7();
     private static readonly Guid Asset = Guid.CreateVersion7();
@@ -101,10 +105,18 @@ public sealed class WithdrawalNileDbFlowTests : IAsyncLifetime
         services.AddScoped<IWithdrawalRequestService, WithdrawalRequestService>();
         services.AddScoped<WithdrawalProcessingService>();
         services.AddScoped<WithdrawalConfirmationService>();
+        services.AddSingleton(new GasAccountingOptions()); // 5c gas accounting dependency
         services.AddSingleton<IWithdrawalPolicyProvider>(new StubPolicy());
-        services.AddSingleton<IHotWalletProvider>(new StubHotWallet(from!));
+        services.AddSingleton<ITreasuryHotWalletDirectory>(new StubTreasuryPool(HotWalletId, from!, KeyReference));
+        services.AddScoped<IHotWalletAllocator, HotWalletAllocator>();
         services.AddSingleton<IMerchantDirectory>(new FakeMerchants());
         services.AddSingleton<IMerchantFeeSchedule>(new FakeFees(Fee));
+
+        // Ample hot-wallet float so the physical gate always clears — this live test exercises the real RPC
+        // build/sign/broadcast, not the insufficient-balance park.
+        var hotFloat = new InMemoryBalanceReader();
+        hotFloat.Set(Chain.Tron, from!, Asset, BigInteger.Parse("1000000000000"));
+        services.AddSingleton<IBalanceReader>(hotFloat);
 
         // Real Nile stack: real builder + real signer + real broadcaster + real chain status (tip/finality).
         // TronRpc implements both node interfaces — register it under each.
@@ -258,10 +270,15 @@ public sealed class WithdrawalNileDbFlowTests : IAsyncLifetime
         public WithdrawalPolicy For(Chain chain) => Policy;
     }
 
-    private sealed class StubHotWallet(string address) : IHotWalletProvider
+    private sealed class StubTreasuryPool(Guid walletId, string address, string keyReference) : ITreasuryHotWalletDirectory
     {
-        public Task<HotWallet> ForAsync(Chain chain, CancellationToken cancellationToken = default) =>
-            Task.FromResult(new HotWallet(address, KeyReference));
+        private TreasuryHotWallet Wallet => new(walletId, Chain.Tron, address, keyReference);
+
+        public Task<Result<TreasuryHotWallet>> GetHotWalletAsync(Chain chain, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Result.Success(Wallet));
+
+        public Task<IReadOnlyList<TreasuryHotWallet>> GetHotWalletPoolAsync(Chain chain, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<TreasuryHotWallet>>([Wallet]);
     }
 
     private sealed class FakeMerchants : IMerchantDirectory

@@ -221,6 +221,10 @@ public sealed class DepositToLedgerTests : IAsyncLifetime
         public Task<IReadOnlyList<AvailableWallet>> ListAssignedWalletsAsync(
             Guid merchantId, Chain chain, CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<AvailableWallet>>([]);
+
+        public Task<IReadOnlyList<ReceivingDepositAddress>> ListReceivingDepositAddressesAsync(
+            Chain chain, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ReceivingDepositAddress>>([]);
     }
 
     private sealed class StubPolicy : Application.Abstractions.IDepositPolicyProvider

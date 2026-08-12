@@ -2,10 +2,13 @@ using System.Numerics;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Addresses;
+using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers.Tron;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure.Treasury;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application.Handlers;
@@ -52,6 +55,7 @@ public sealed class WithdrawalTronTestnetFlowTests : IAsyncLifetime
 {
     private const string DbName = "CpeWithdrawalTronTestnetFlowTests";
     private const string KeyReference = "kms://tron/hot/0";
+    private static readonly Guid HotWalletId = Guid.CreateVersion7();
     private const string Destination = "TUEZSdKsoDHQMeZwihtdoBiN46zxhGWYdH";   // a valid Base58Check TRON address
     private const string UsdtContract = "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t";  // published USDT-TRC20 contract
 
@@ -102,11 +106,19 @@ public sealed class WithdrawalTronTestnetFlowTests : IAsyncLifetime
         services.AddScoped<IWithdrawalRequestService, WithdrawalRequestService>();
         services.AddScoped<WithdrawalProcessingService>();
         services.AddScoped<WithdrawalConfirmationService>();
+        services.AddSingleton(new GasAccountingOptions()); // 5c gas accounting dependency
         services.AddSingleton<IWithdrawalPolicyProvider>(new StubPolicy());
-        services.AddSingleton<IHotWalletProvider>(new StubHotWallet(_hotWalletAddress));
+        services.AddSingleton<ITreasuryHotWalletDirectory>(new StubTreasuryPool(HotWalletId, _hotWalletAddress, KeyReference));
+        services.AddScoped<IHotWalletAllocator, HotWalletAllocator>();
         services.AddSingleton<IMerchantDirectory>(new FakeMerchants());
         services.AddSingleton<IMerchantFeeSchedule>(new FakeFees(Fee));
         services.AddSingleton<IChainStatusReader>(new StubChainStatus());
+
+        // Ample hot-wallet float so the physical gate always clears — this test exercises the real signer +
+        // build/broadcast stack, not the insufficient-balance park.
+        var hotFloat = new InMemoryBalanceReader();
+        hotFloat.Set(Chain.Tron, _hotWalletAddress, Asset, BigInteger.Parse("1000000000000"));
+        services.AddSingleton<IBalanceReader>(hotFloat);
 
         // The Level-3 stack under test: real builder + real broadcaster over a stub Nile node, and the REAL
         // secp256k1 signer over the throwaway key.
@@ -321,10 +333,15 @@ public sealed class WithdrawalTronTestnetFlowTests : IAsyncLifetime
         public WithdrawalPolicy For(Chain chain) => Policy;
     }
 
-    private sealed class StubHotWallet(string address) : IHotWalletProvider
+    private sealed class StubTreasuryPool(Guid walletId, string address, string keyReference) : ITreasuryHotWalletDirectory
     {
-        public Task<HotWallet> ForAsync(Chain chain, CancellationToken cancellationToken = default) =>
-            Task.FromResult(new HotWallet(address, KeyReference));
+        private TreasuryHotWallet Wallet => new(walletId, Chain.Tron, address, keyReference);
+
+        public Task<Result<TreasuryHotWallet>> GetHotWalletAsync(Chain chain, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Result.Success(Wallet));
+
+        public Task<IReadOnlyList<TreasuryHotWallet>> GetHotWalletPoolAsync(Chain chain, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<TreasuryHotWallet>>([Wallet]);
     }
 
     private sealed class FakeMerchants : IMerchantDirectory

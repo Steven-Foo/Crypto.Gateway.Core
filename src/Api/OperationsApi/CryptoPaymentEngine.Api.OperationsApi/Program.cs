@@ -97,5 +97,6 @@ app.MapOpsDepositTransactionApi();
 app.MapOpsWithdrawalTransactionApi();
 app.MapOpsCallbackApi();
 app.MapOpsWithdrawalApprovalApi();
+app.MapOpsWithdrawalFundingApi();
 
 app.Run();

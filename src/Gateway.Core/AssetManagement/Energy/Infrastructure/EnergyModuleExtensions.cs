@@ -1,5 +1,8 @@
+using System.Globalization;
+using System.Numerics;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Application;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Application.Abstractions;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Contracts;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Infrastructure.Mongo;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Infrastructure.Persistence;
 using CryptoPaymentEngine.Infrastructure.Persistence.Money;
@@ -33,8 +36,35 @@ public static class EnergyModuleExtensions
         services.AddScoped<IEnergyPolicyRepository, EnergyPolicyRepository>();
         services.AddScoped<ResourceMonitorService>();
 
+        // 5b — stake/delegate. Options + repo + the read/create-only services (no signer), so
+        // IEnergyDelegationService is always-on for Sweep to consume (§4.5). The signing processing/
+        // confirmation services live behind AddEnergyWorkers (they need ISigner/broadcaster, §4.7/§10).
+        services.TryAddSingleton(ReadOperationOptions(configuration));
+        services.AddScoped<IEnergyOperationRepository, EnergyOperationRepository>();
+        services.AddScoped<StakingWalletLocator>();
+        services.AddScoped<StakingService>();
+        services.AddScoped<IEnergyDelegationService, EnergyDelegationService>();
+
         services.AddEnergyMongo(configuration);
         return services;
+    }
+
+    private static EnergyOperationOptions ReadOperationOptions(IConfiguration configuration)
+    {
+        var section = configuration.GetSection("Energy:Operations");
+        BigInteger ParseOr(string key, BigInteger fallback) =>
+            string.IsNullOrWhiteSpace(section[key]) ? fallback : BigInteger.Parse(section[key]!, CultureInfo.InvariantCulture);
+
+        var defaults = new EnergyOperationOptions();
+        return new EnergyOperationOptions
+        {
+            RequiredEnergyPerTransfer = ParseOr("RequiredEnergyPerTransfer", defaults.RequiredEnergyPerTransfer),
+            DelegateTrxSun = ParseOr("DelegateTrxSun", defaults.DelegateTrxSun),
+            StakeIncrementTrxSun = ParseOr("StakeIncrementTrxSun", defaults.StakeIncrementTrxSun),
+            Confirmations = string.IsNullOrWhiteSpace(section["Confirmations"])
+                ? defaults.Confirmations
+                : int.Parse(section["Confirmations"]!, CultureInfo.InvariantCulture),
+        };
     }
 
     /// <summary>

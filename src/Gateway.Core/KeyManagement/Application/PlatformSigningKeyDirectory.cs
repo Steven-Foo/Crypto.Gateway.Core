@@ -21,4 +21,17 @@ public sealed class PlatformSigningKeyDirectory(IHdWalletRepository repository) 
             ? null
             : new PlatformSigningKey(hdWallet.Id, hdWallet.Chain, hdWallet.SecretReference);
     }
+
+    public async Task<PlatformSigningKey?> FindByAddressAsync(
+        Chain chain, string address, CancellationToken cancellationToken = default)
+    {
+        var info = await repository.FindPlatformWithdrawalSigningKeyByAddressAsync(chain, address, cancellationToken);
+        if (info is null)
+            return null;
+
+        // Same signer-resolution grammar as an HD deposit key: seed reference + child index. Opaque to
+        // callers — the (future) envelope/KMS signer parses it; the in-memory dev signer ignores it (§10).
+        var keyReference = $"{info.SecretReference}#{info.DerivationIndex}";
+        return new PlatformSigningKey(info.DerivedKeyId, info.Chain, keyReference);
+    }
 }

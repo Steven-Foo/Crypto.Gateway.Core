@@ -173,6 +173,44 @@ deposit-address energy (→5b, with Sweep coordination), bandwidth thresholds, a
 event → Notification (5a alert is a structured log). A live dev demo also needs a seeded platform wallet +
 policy (not built). `EnergyDelegation`/`StakePosition` tables come in 5b when first written.
 
+**`AssetManagement/Energy` Phase 5b (stake + delegate + auto-sweep coordination) — DONE, 528 tests green.** The
+action phase: it acquires and routes energy so sweeps/withdrawals don't burn TRX. **Ledger impact is NONE** (user
+chose *defer cost accounting to 5c*): staking/delegation lock *recoverable* TRX (freeze/delegate, not spend), so —
+like Sweep — 5b posts no ledger entry; real cost accounting (rented energy / burned TRX) waits for 5c. **One
+`EnergyOperation` aggregate** (schema `energy`, `Kind ∈ {Stake, Delegate}`), a single sign→broadcast→confirm state
+machine mirroring Sweep (DRY §12 — consolidated instead of separate StakePosition/EnergyDelegation tables); two
+filtered unique indexes enforce one in-flight Stake per staking wallet + one in-flight Delegate per (chain,target).
+Migration `EnergyOperations`; `90-energy.sql` regenerated (QUOTED_IDENTIFIER header re-added). **Staking = its own
+wallet+key** (`WalletType.Energy`/`DerivationPurpose.Energy`, resolved via the existing `IPlatformWalletDirectory`
++ `IPlatformSigningKeyDirectory` Treasury seam); **signing deferred like withdrawal/sweep** (in-memory dev, inert
+prod until KMS, §10). New Blockchain port **`IResourceOperationBuilder`** (freeze/delegate tx build; in-memory fake,
+real TRON `FreezeBalanceV2`/`DelegateResource` adapter deferred to staging). **Auto-sweep coordination:** new
+Energy Contract **`IEnergyDelegationService.EnsureEnergyForTransferAsync`** → `Ready/Provisioning/Unavailable`;
+`SweepProcessingService` calls it BEFORE building — not Ready ⇒ the sweep stays Pending and retries (never fails,
+funds safe), Sweep→Energy.Contracts only (§4.5). Dev stays green (in-memory resource reader reports healthy energy ⇒
+Ready immediately, no delegation). Workers: StakeReplenish (policy-driven auto-stake) + operation processing +
+confirmation. **Still deferred:** cost accounting (5c), undelegate/unstake reclaim, real TRON resource adapter,
+`EnergyLowAlert`→Notification (kept as 5a log), seeded dev staking wallet+policy, rental+forecasting (5c). Known
+interaction: when TRX becomes a *reconciled* asset, `eth_getBalance` returns only *available* TRX — frozen/delegated
+must be counted or Reconciliation sees false drift (TRX isn't reconciled today).
+
+**`AssetManagement/Energy` Phase 5c (cost-accounting spine, first cut) — DONE, 531 tests green.** The
+"no off-ledger money" completion that Sweep/5b deferred here — really a **cross-module ledger spine**, not just
+Energy. User chose **cost-accounting spine** + **expense-vs-PlatformFunding** model. Platform gas is booked
+`DEBIT NetworkFeeExpense / CREDIT PlatformFunding` — new **`AccountType.PlatformFunding`** (credit-normal, equity-like,
+**NOT chain-reconciled**, so TRX never enters custody reconciliation, respecting the 5b deferral). Both System-owned,
+denominated in a **gas `AssetId`** deliberately kept OUT of the deposit catalog (config `Accounting:GasAssets:{Chain}`,
+so a gas denomination never turns on native-coin deposit scanning). New `JournalReferenceType.GasCost`, idempotent
+per operation id; **AccountType/JournalReferenceType are strings ⇒ NO migration.** New `ILedgerPoster.RecordGasSpentAsync`
+(zero fee ⇒ `PostingOutcome.NoChange`). Fee source: **`TransactionStatus.FeeSun`** (Blockchain.Contracts, default 0;
+real TRON reads `fee` from `gettransactioninfobyid`, in-memory = 0 ⇒ **dev books no gas**). **Wired for withdrawals
+only (v1):** `WithdrawalConfirmationService` reads the fee + resolves the gas asset (`GasAccountingOptions`), carries
+them on `WithdrawalConfirmed` (new backward-compatible `GasAssetId`/`GasFeeBaseUnits` fields); the Ledger's
+`WithdrawalConfirmedHandler` books gas after settle — durable via the existing outbox, idempotent, a separate journal
+from settle, and the Ledger stays chain-agnostic (fee arrives as data). **Deferred:** Sweep + Energy-operation gas
+capture (need their own outbox/events, then reuse `RecordGasSpentAsync`), rental (3rd-party energy marketplace — needs
+an external provider port), forecasting (ResourceHistory analytics), undelegate/unstake reclaim.
+
 **Hybrid fee model (per-merchant pricing) — DONE, 369 tests green.** Fees are per-merchant `fixed + %`
 pricing, homed on `MerchantAssetPolicy` as a `FeeSchedule` value object (the fee math lives in the domain,
 floored, unit-tested) and exposed via **`Merchant.Contracts/IMerchantFeeSchedule`** — the one seam Deposit,
@@ -255,6 +293,123 @@ defects found by reviewing the deposit use case:
 `{referenceNo, address: T…, payUrl}`, `/pay/{ref}/info` returns the pay-page contract, and `/pay/{ref}` serves
 the page with its CSP. `Api.IntegrationTests` contains **zero tests** (builds, discovers none) — false comfort,
 worth filling.
+
+**`AssetManagement/Treasury` (single hot withdrawal wallet) — DONE, 495 tests green.** Withdrawal used to source
+its signing wallet from raw config (`Withdrawal:HotWallets`, read by a now-deleted `ConfigurationHotWalletProvider`);
+Treasury replaces that with a real, DB-backed, auditable registration. **Persistence-less module** (Application +
+Contracts + Infrastructure + Tests — no Domain/DbContext/schema; precedent: `Platform/Notification`): every fact
+lives in `Wallet.Wallet` + `KeyManagement.HdWallet`, composed via their Contracts (§4.5). The wallet it registers
+is `WalletType.HotWithdrawal` / `HdWalletPurpose.Withdrawal`; `WalletType.Treasury` stays reserved for a future
+cold reserve. **The real landmine (fixed):** the hot wallet's key was **imported flat** (a standalone throwaway
+private key, not BIP-32 derived), so it has no real xpub — `HdWallet.Create` requires a non-null
+`PublicKeyReference` for secp256k1, and a fabricated one would let `WalletDerivationService` silently derive bogus
+child addresses. Fix is structural: **`HdWallet.IsImported`** flag + **`CreateImportedPlatformKey`** factory
+(`PublicKeyReference=null`) + a **guard** in `AllocateFromAsync` returning `ImportedKeyCannotDerive` (migration
+`AddHdWalletIsImported`, constraint relaxed to allow `IsImported=1 AND PublicKeyReference IS NULL`). New Contracts:
+KeyManagement `IPlatformSigningKeyDirectory` (read a signing `KeyReference` by `(Chain,Purpose)`) +
+`IPlatformKeyRegistrar` (write, idempotent-adopt; registered only in `AddDevelopmentKeyCustody`, so a real
+production registrar stays absent-not-just-unused §10); Wallet `IPlatformWalletRegistrar`; Treasury
+`ITreasuryHotWalletDirectory` (combines both, fails loudly if 0 or >1 hot wallet for a chain). Withdrawal's
+`IHotWalletProvider` went sync→**`ForAsync`** and is now backed by `TreasuryHotWalletProvider`. Dev seeds via
+`AddDevelopmentTreasuryHotWalletSeed` (`Treasury:DevHotWallets` + a colon-free `KeyManagement:DevSecrets` ref —
+a colon in a DevSecrets key is silently truncated by config's `GetChildren()`). **Prod deferred:** no
+`IPlatformKeyRegistrar` registered ⇒ hot-wallet registration inert until a KMS-backed one lands; the real
+KMS-backed `ISigner` is still deferred (withdrawal stays inert in prod until it + the registrar arrive, §10).
+KMS custody plan agreed (customer-managed keys; two `ISigner` impls — KMS-asymmetric single-address for
+hot/treasury, envelope-encrypted HD seed for merchant deposit sweeps; staking gets its own wallet+key) — NOT built.
+
+**`PaymentProcessing/Reconciliation` (first cut — ledger-vs-on-chain custody audit) — DONE, 495 tests green.**
+Second in the confirmed Treasury → Reconciliation → Sweep order. **Persistence-less SQL, no migration** — every
+fact is a read; it persists only Mongo observability snapshots (§2), read-and-record like Energy 5a. **The
+invariant:** Ledger `TreasuryAsset(asset)` balance == Σ on-chain balance across every controlled address (platform
+wallets + every funded deposit address). `TreasuryAsset` is the only ledger-derivable custody figure — the ledger
+tracks accounting buckets, never addresses (§8). Drift = onChain − ledger. **Log-only**, moves no money, holds no
+keys. Classifies **Incomplete** (an address couldn't be read ⇒ partial total ⇒ never a false Balanced/Drift),
+**Balanced** (`|drift| ≤ Reconciliation:DriftTolerance`, config default 0 base units — absorbs known transients
+like unconfirmed deposits / in-flight withdrawals, but the exact drift is always recorded), else **Drift** (log
+Warning). Snapshot + history in Mongo collections `Reconciliation`/`ReconciliationHistory`; worker per chain,
+5-min interval, always-on. **Three new read-only ports (additive, migration-free):** `ILedgerQuery.GetTreasuryHoldingAsync`;
+Blockchain `IBalanceReader` (the §8-planned port — `InMemoryBalanceReader` for dev + real `TronBalanceReader`:
+TRC-20 via `eth_call balanceOf`/`TronAbi.EncodeBalanceOf`, native TRX via `eth_getBalance`; live round-trip
+deferred to staging); `IWalletDirectory.ListReceivingDepositAddressesAsync` (funded Deposit wallets, all merchants,
+`DepositsReceivedCount>0`). In dev the in-memory `IBalanceReader` reads 0, so drift == the ledger holding until the
+real TRON adapter is live. **Deferred:** ops read API, per-asset tolerance, sustained-vs-transient drift detection;
+reconciliation simplifies greatly post-Sweep (deposit addresses drain to ~0, custody concentrates in the hot wallet).
+
+**`AssetManagement/Sweep` (concentrate deposit balances → hot wallet) — DONE, 511 tests green.** Third in the
+Treasury → Reconciliation → Sweep order, and the ONE module that signs and physically moves funds (built strict-T3
+with design approval first). Schema `sweep`, full 8-layer shape. **Ledger impact is NONE** (the key correctness
+point): a sweep relocates funds between addresses the platform already controls, so total custody
+(`TreasuryAsset`) is unchanged ⇒ no ledger entry for the principal — exactly why Reconciliation sums deposit + hot
+addresses (invariant across a sweep). The only cost is gas, a platform expense on the deferred Energy 5b Accounting
+path. **State machine mirrors Withdrawal minus the reserve:** `Pending → Signing → Broadcast → Confirmed / Failed`;
+the signed blob is persisted before broadcast (crash-retry re-broadcasts the SAME tx, chain dedups); Fail only
+pre-broadcast; a filtered unique index `UX_Sweep_InFlight_Wallet_Asset` (WalletId, AssetId)
+`WHERE [Status] IN ('Pending','Signing','Broadcast')` enforces one in-flight sweep per (wallet, asset), `TryAddAsync`
+the create-race arbiter. **Scope (chosen):** threshold-triggered (`Sweep:Policies:{Chain}:MinSweepAmountBaseUnits`),
+gas deferred to Energy 5b. **Signing** is the KMS Tier-2 envelope path: signs FROM the deposit address via a new
+KeyManagement Contract **`IDepositSigningKeyDirectory`** (address → `DepositSigningKey.KeyReference`, the internal
+composite `"{secretReference}#{index}"` the future envelope signer parses), reusing the SAME
+`ITransactionBuilder`/`ISigner`/`ITransactionBroadcaster` ports as Withdrawal — **real signer deferred like
+withdrawal** (in-memory in dev/testnet, inert in prod until KMS lands, §10). A real TRON mainnet sweep also needs
+energy delegated to the deposit address (5b) or a TRX top-up. Three always-on workers (scan 2 min → process 15 s →
+confirm 15 s) consume Contracts only (§4.5): Wallet `ListReceivingDepositAddressesAsync`, Blockchain
+`IBalanceReader`/builder/broadcaster/`IChainStatusReader`, KeyManagement `IDepositSigningKeyDirectory`/`ISigner`,
+Treasury `ITreasuryHotWalletDirectory`. `db/sql/120-sweep.sql` regenerated (QUOTED_IDENTIFIER header re-added for
+the filtered index).
+
+**Withdrawal hot-wallet float gate + funding holds (three-tier hot/cold custody, Phase 1) — DONE, 540 tests green.**
+The target custody topology: deposit addresses (hot) → **treasury (cold, key NOT in system — a human signs a reload
+in the UI)** → **withdrawal hot wallet (a float that drains)** → merchant payout. **The correctness key: ledger
+sufficiency ≠ physical sufficiency.** The merchant's ledger reserve says they're *owed* the money; it says nothing
+about whether the hot wallet physically holds enough to broadcast. So before signing, `WithdrawalProcessingService`
+now reads the hot wallet's on-chain balance (`IBalanceReader`) minus in-flight committed outflows
+(`SumInFlightOutflowsAsync` over `Signing`/`Broadcast` — a batch can't each see the same funds and overspend), and:
+`available < amount` ⇒ **park `AwaitingFunds`** (reserve **HELD**, NOT released — a hold is a deferral, not a
+`Failed`), reason recorded for ops, **auto-resumes** next pass once the float is reloaded; `available ≥ amount` but
+`amount > ApprovalThreshold` (the user-chosen "preset") ⇒ **`AwaitingRelease`**, a large payout waits for an explicit
+operator release (the "large = manual" rule; `ReleasedAt` gates it so a later fund dip never demands a second
+release); else it sends. Two new statuses (`AwaitingFunds`/`AwaitingRelease`), `Withdrawal` transitions
+`Park`/`MarkAwaitingRelease`/`ResumeToApproved`/`ReleaseForSend`/`Cancel` (cancel is the one hold→`Failed` path that
+releases the reserve), new columns `StatusReason`/`ReleasedBy`/`ReleasedAt` + Status widened 16→24 (migration
+`AddWithdrawalFundingHold`, `70-withdrawal.sql` regenerated). Ops seam: `IWithdrawalFundingService` +
+`OpsWithdrawalFundingEndpoints` (`/release`, `/cancel`); `IWithdrawalDirectory` admin rows expose `StatusReason` +
+effective statuses `insufficient_balance`/`awaiting_release`. Notification is **status + structured log only** (push
+alert deferred, Energy-5a style). Dev: `DevHotWalletFloatSeeder` seeds the in-memory reader so the dev happy-path
+still sends (`Withdrawal:DevHotWalletFloatBaseUnits`, default 1,000,000 USDT; set low to demo the park path; no-op
+under live TRON, which reads the real balance). **Deferred (agreed):** Phase 2 = the treasury **cold reload** flow —
+build-unsigned treasury→hot transfer, **human signs client-side in the browser (key NEVER hits the backend, §10)**,
+backend broadcasts; plus redirecting **Sweep's destination to the cold treasury** (today it targets the hot wallet).
+Also agreed but not yet built: **reverting deposit wallets from per-merchant HD back to one shared platform pool**
+(the user's Q1 choice — its own phase, supersedes [[per-merchant-hd-wallets]]).
+
+**Withdrawal hot-wallet POOL (Option B: HD, one seed → N children) — DONE, 546 tests green.** The single hot wallet
+became a **pool**: each wallet processes **one transaction at a time, leased from sign until it CONFIRMS** (not freed
+at broadcast). Custody model chosen **Option B** (after weighing the two-factor/blast-radius trade-off): the pool is
+one **platform withdrawal HD wallet** (its own seed + xpub) whose N watch-only child addresses are the hot wallets —
+exactly the deposit model, so **no KeyManagement/Wallet/Treasury migration** (one HD wallet + N children fits the
+existing schema; the imported flat-key hot wallet is gone). One envelope-encrypted seed backs the whole pool (KMS KEK
++ DB ciphertext = the two factors; either alone is useless — the property the user wanted). **KeyManagement:**
+`IHdWalletProvisioner.ProvisionPlatformWithdrawalWalletAsync` (dev: deterministic seed, store xpub; optional
+`KeyManagement:DevWithdrawalXpub` for real mainnet), `AllocateNextAsync(chain,Withdrawal)` now provisions-on-first-use
+then derives children, `IPlatformSigningKeyDirectory.FindByAddressAsync` resolves each child's key by address
+(`"{secret}#{index}"`, like the deposit signer). **Treasury:** `GetHotWalletPoolAsync` (per-address key resolution;
+`TreasuryHotWallet` gained `WalletId`), `GetHotWalletAsync` returns the first (Sweep's single destination, until Phase
+2); a grow-only dev pool seeder derives+registers up to `Treasury:HotWalletPool:Size` children. **Withdrawal:** new
+`SourceWalletId` (stamped at sign, leases the wallet) + filtered unique index `UX_Withdrawal_InFlight_SourceWallet`
+`WHERE [Status] IN ('Signing','Broadcast')` (one in-flight per wallet, the DB backstop — migration
+`AddWithdrawalSourceWallet`); **`IHotWalletAllocator`** (replaces `IHotWalletProvider`): pool − leased → funded
+(`IBalanceReader`) → **least-recently-used**, null ⇒ park `AwaitingFunds` (reuses the Phase-1 hold). The per-wallet
+lease **replaces** the Phase-1 in-flight-sum float check — a free wallet has no unconfirmed outflow, so its balance is
+exact. Confirmation frees the wallet (busy is derived from status). Dev seeds a 3-wallet pool + each child's float.
+**Concurrency (multi-instance-safe, done):** correctness is the DB — `UX_Withdrawal_InFlight_SourceWallet` (no
+double-lease) + `rowversion` (no double-process) — so no double-send is possible regardless of workers (§7.4: the
+lock is performance, the DB is correctness). On top: a **single-flight distributed lock** in both withdrawal workers
+(`withdrawal:processing`/`:confirmation`, `WorkerLoop.SingleFlightAsync`, skip-if-contended — the OutboxDispatcher
+pattern) so instances don't do redundant work, and `IWithdrawalRepository.TrySaveSignedAsync` catches the
+lease/rowversion conflict and reverts cleanly (detach → re-allocate next pass) if the lock is ever bypassed (Redis
+down). Selection is platform-level LRU; the pool is **shared across all merchants** (not per-merchant);
+**per-merchant pools + health-based rotation stay deferred** ([[wallet-rotation-health-design]]).
 
 Every other module in the map is a placeholder in this doc, not yet on disk — scaffold a module
 only when real feature work on it starts, following the same 8-layer layout.

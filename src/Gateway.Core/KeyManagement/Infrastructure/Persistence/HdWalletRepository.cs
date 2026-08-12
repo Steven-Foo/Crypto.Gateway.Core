@@ -37,6 +37,29 @@ public sealed class HdWalletRepository(KeyManagementDbContext context) : IHdWall
         context.DerivedKeys.AsNoTracking().SingleOrDefaultAsync(
             k => k.HdWalletId == hdWalletId && k.DerivationIndex == index, cancellationToken);
 
+    public Task<DepositSigningKeyInfo?> FindDepositSigningKeyByAddressAsync(
+        Chain chain, string address, CancellationToken cancellationToken = default) =>
+        (from key in context.DerivedKeys.AsNoTracking()
+         join wallet in context.HdWallets.AsNoTracking() on key.HdWalletId equals wallet.Id
+         where wallet.Chain == chain
+            && wallet.Purpose == HdWalletPurpose.Deposit
+            && wallet.Status == HdWalletStatus.Active
+            && key.Address == address
+         select new DepositSigningKeyInfo(key.Id, wallet.Chain, wallet.SecretReference, key.DerivationIndex))
+        .SingleOrDefaultAsync(cancellationToken);
+
+    public Task<DepositSigningKeyInfo?> FindPlatformWithdrawalSigningKeyByAddressAsync(
+        Chain chain, string address, CancellationToken cancellationToken = default) =>
+        (from key in context.DerivedKeys.AsNoTracking()
+         join wallet in context.HdWallets.AsNoTracking() on key.HdWalletId equals wallet.Id
+         where wallet.Chain == chain
+            && wallet.MerchantId == null
+            && wallet.Purpose == HdWalletPurpose.Withdrawal
+            && wallet.Status == HdWalletStatus.Active
+            && key.Address == address
+         select new DepositSigningKeyInfo(key.Id, wallet.Chain, wallet.SecretReference, key.DerivationIndex))
+        .SingleOrDefaultAsync(cancellationToken);
+
     public void Add(HdWallet hdWallet) => context.HdWallets.Add(hdWallet);
 
     public async Task<HdWalletAddOutcome> TryAddActiveAsync(HdWallet hdWallet, CancellationToken cancellationToken = default)

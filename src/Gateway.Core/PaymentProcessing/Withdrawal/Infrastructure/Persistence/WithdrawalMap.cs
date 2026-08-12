@@ -25,9 +25,19 @@ public sealed class WithdrawalMap : IEntityTypeConfiguration<WithdrawalEntity>
 
         builder.Property(w => w.IdempotencyKey).IsUnicode(false).HasMaxLength(128).IsRequired();
         builder.Property(w => w.CallbackUrl).HasMaxLength(512);
-        builder.Property(w => w.Status).HasConversion<string>().HasMaxLength(16).IsRequired();
+        // 24, not 16: the funding-hold statuses ("AwaitingFunds"/"AwaitingRelease") are longer than the
+        // original lifecycle names, and the extra headroom keeps future statuses from silently truncating.
+        builder.Property(w => w.Status).HasConversion<string>().HasMaxLength(24).IsRequired();
         builder.Property(w => w.ApprovedBy).HasMaxLength(128);
         builder.Property(w => w.SigningRequestId);
+
+        // Why the withdrawal is parked (ops trace) + who/when released a large one for send.
+        builder.Property(w => w.StatusReason).HasMaxLength(512);
+        builder.Property(w => w.ReleasedBy).HasMaxLength(128);
+        builder.Property(w => w.ReleasedAt);
+
+        // The hot-pool wallet this payout is sent from (leased until confirmed). Null until signed.
+        builder.Property(w => w.SourceWalletId);
 
         // The signed, broadcast-ready transaction blob (public, not key material). varbinary(max), nullable.
         builder.Property(w => w.SignedTransaction);
@@ -52,5 +62,13 @@ public sealed class WithdrawalMap : IEntityTypeConfiguration<WithdrawalEntity>
         // Workers' working set: withdrawals in a given status.
         builder.HasIndex(w => w.Status).HasDatabaseName("IX_Withdrawal_Status");
         builder.HasIndex(w => w.MerchantId).HasDatabaseName("IX_Withdrawal_Merchant");
+
+        // One in-flight withdrawal per hot-pool wallet: a wallet is leased from sign until confirm, so at most
+        // one Signing/Broadcast withdrawal may carry a given SourceWalletId. The filtered unique index is the
+        // DB-level arbiter (a lost allocation race retries with another wallet), mirroring the Sweep pattern.
+        builder.HasIndex(w => w.SourceWalletId)
+            .IsUnique()
+            .HasFilter("[Status] IN ('Signing', 'Broadcast')")
+            .HasDatabaseName("UX_Withdrawal_InFlight_SourceWallet");
     }
 }

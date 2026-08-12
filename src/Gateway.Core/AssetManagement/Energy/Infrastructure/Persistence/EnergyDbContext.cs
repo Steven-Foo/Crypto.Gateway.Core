@@ -12,9 +12,12 @@ public sealed class EnergyDbContext(DbContextOptions<EnergyDbContext> options) :
 
     public DbSet<EnergyPolicy> EnergyPolicies => Set<EnergyPolicy>();
 
+    public DbSet<EnergyOperation> EnergyOperations => Set<EnergyOperation>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
         modelBuilder.ApplyConfiguration(new EnergyPolicyMap());
+        modelBuilder.ApplyConfiguration(new EnergyOperationMap());
     }
 }

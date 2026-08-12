@@ -60,6 +60,14 @@ public sealed class Withdrawal : Entity<Guid>
     public string? ApprovedBy { get; private set; }
     public Guid? SigningRequestId { get; private set; }
 
+    /// <summary>
+    /// Which hot-pool wallet this payout is being sent FROM, stamped at sign time. A wallet is "busy" (leased)
+    /// while a withdrawal carrying its id is in <see cref="WithdrawalStatus.Signing"/>/<see cref="WithdrawalStatus.Broadcast"/>
+    /// — committed but not yet confirmed — so the pool allocator serializes each wallet to one in-flight
+    /// transaction at a time. Null until signed. A filtered unique index enforces the one-in-flight rule.
+    /// </summary>
+    public Guid? SourceWalletId { get; private set; }
+
     /// <summary>Merchant's own callback endpoint for this withdrawal, carried on the confirmation/failure
     /// events so Notification never has to look it up (§4.5, mirrors PaymentIntent's own CallbackUrl).</summary>
     public string? CallbackUrl { get; private set; }
@@ -75,6 +83,21 @@ public sealed class Withdrawal : Entity<Guid>
 
     public string? TransactionHash { get; private set; }
     public string? FailureReason { get; private set; }
+
+    /// <summary>
+    /// Why the withdrawal is currently parked (<see cref="WithdrawalStatus.AwaitingFunds"/>/
+    /// <see cref="WithdrawalStatus.AwaitingRelease"/>) — a human-readable trace for the ops screen ("needs
+    /// 1,000, hot wallet holds 640"). Distinct from <see cref="FailureReason"/>: a hold is not a failure, so
+    /// it must never read as one. Cleared when the withdrawal resumes.
+    /// </summary>
+    public string? StatusReason { get; private set; }
+
+    /// <summary>The operator who released a large (above-threshold) parked withdrawal for sending, and when.
+    /// Once set, the withdrawal is treated as auto-cleared on subsequent passes — a fund dip that re-parks it
+    /// never demands a second release.</summary>
+    public string? ReleasedBy { get; private set; }
+
+    public DateTimeOffset? ReleasedAt { get; private set; }
 
     /// <summary>
     /// On-chain confirmation depth for the broadcast transaction, refreshed every confirmation-worker pass.
@@ -190,15 +213,16 @@ public sealed class Withdrawal : Entity<Guid>
     /// chain dedups) rather than building a fresh transaction the chain would treat as a second, distinct send
     /// — the double-send hazard on chains (like TRON) that stamp a fresh reference/expiry at build time.
     /// </summary>
-    public Result RecordSigned(Guid signingRequestId, byte[] signedTransaction, DateTimeOffset now)
+    public Result RecordSigned(Guid signingRequestId, Guid sourceWalletId, byte[] signedTransaction, DateTimeOffset now)
     {
         if (Status != WithdrawalStatus.Approved)
             return Result.Failure(WithdrawalErrors.InvalidStateTransition);
 
-        if (signedTransaction is not { Length: > 0 })
+        if (signedTransaction is not { Length: > 0 } || sourceWalletId == Guid.Empty)
             return Result.Failure(WithdrawalErrors.InvalidStateTransition);
 
         SigningRequestId = signingRequestId;
+        SourceWalletId = sourceWalletId; // leases the pool wallet until this withdrawal confirms or fails
         SignedTransaction = signedTransaction;
         Status = WithdrawalStatus.Signing;
         UpdatedAt = now;
@@ -234,7 +258,13 @@ public sealed class Withdrawal : Entity<Guid>
         return Result.Success();
     }
 
-    public Result Confirm(DateTimeOffset now)
+    /// <summary>
+    /// Confirms a broadcast withdrawal → raises <see cref="WithdrawalConfirmed"/> (Ledger settles). The
+    /// optional <paramref name="gasFeeSun"/>/<paramref name="gasAssetId"/> carry the native-coin fee the
+    /// platform paid on-chain, so the Ledger can book it as a platform gas expense (5c); both default to
+    /// "no gas" (fee 0, no asset) when the engine charged no fee or no gas asset is configured.
+    /// </summary>
+    public Result Confirm(DateTimeOffset now, BigInteger gasFeeSun = default, Guid? gasAssetId = null)
     {
         if (Status != WithdrawalStatus.Broadcast)
             return Result.Failure(WithdrawalErrors.InvalidStateTransition);
@@ -243,7 +273,8 @@ public sealed class Withdrawal : Entity<Guid>
         UpdatedAt = now;
         Raise(new WithdrawalConfirmed(
             Guid.CreateVersion7(), now, Id, MerchantId, AssetId, ToBaseUnits(Amount), ToBaseUnits(Fee), TransactionHash!, now,
-            IdempotencyKey, DestinationAddress, CallbackUrl));
+            IdempotencyKey, DestinationAddress, CallbackUrl,
+            gasAssetId?.ToString(), ToBaseUnits(gasFeeSun < BigInteger.Zero ? BigInteger.Zero : gasFeeSun)));
         return Result.Success();
     }
 
@@ -260,6 +291,97 @@ public sealed class Withdrawal : Entity<Guid>
         Status = WithdrawalStatus.Failed;
         UpdatedAt = now;
         RaiseReleased(reason, now);
+        return Result.Success();
+    }
+
+    // ── Funding holds (physical hot-wallet float, independent of the ledger reserve) ──────────────────────
+    // These transitions never raise an event: the ledger reserve stays exactly as placed at creation. Parking
+    // a withdrawal because the hot wallet is short is a deferral, NOT a release — the merchant is still owed it.
+
+    /// <summary>
+    /// Parks a withdrawal whose hot wallet cannot physically cover it. Reserve held; the processing worker
+    /// re-evaluates it every pass and resumes once the float recovers. Reachable from
+    /// <see cref="WithdrawalStatus.Approved"/> or from either hold (a re-park that just refreshes the reason).
+    /// </summary>
+    public Result Park(string reason, DateTimeOffset now)
+    {
+        if (Status is not (WithdrawalStatus.Approved or WithdrawalStatus.AwaitingFunds or WithdrawalStatus.AwaitingRelease))
+            return Result.Failure(WithdrawalErrors.InvalidStateTransition);
+
+        Status = WithdrawalStatus.AwaitingFunds;
+        StatusReason = reason;
+        UpdatedAt = now;
+        return Result.Success();
+    }
+
+    /// <summary>
+    /// The float is sufficient but the amount is above the approval threshold, so a human must release it to
+    /// send (the "large = manual" resume rule). Reserve held; cleared by <see cref="ReleaseForSend"/>.
+    /// </summary>
+    public Result MarkAwaitingRelease(string reason, DateTimeOffset now)
+    {
+        if (Status is not (WithdrawalStatus.Approved or WithdrawalStatus.AwaitingFunds or WithdrawalStatus.AwaitingRelease))
+            return Result.Failure(WithdrawalErrors.InvalidStateTransition);
+
+        Status = WithdrawalStatus.AwaitingRelease;
+        StatusReason = reason;
+        UpdatedAt = now;
+        return Result.Success();
+    }
+
+    /// <summary>
+    /// Auto-resume of a parked withdrawal that is now clear to send (float sufficient AND either below the
+    /// threshold or already released). Returns it to <see cref="WithdrawalStatus.Approved"/> so the normal
+    /// build → sign → broadcast path runs. Internal to the processing worker — not an ops action.
+    /// </summary>
+    public Result ResumeToApproved(DateTimeOffset now)
+    {
+        if (Status is not (WithdrawalStatus.AwaitingFunds or WithdrawalStatus.AwaitingRelease))
+            return Result.Failure(WithdrawalErrors.InvalidStateTransition);
+
+        Status = WithdrawalStatus.Approved;
+        StatusReason = null;
+        UpdatedAt = now;
+        return Result.Success();
+    }
+
+    /// <summary>
+    /// An operator releases a large parked withdrawal for sending. Records who/when (so a later fund dip that
+    /// re-parks it never demands a second release) and returns it to <see cref="WithdrawalStatus.Approved"/>;
+    /// the worker sends it on the next pass once the float is sufficient.
+    /// </summary>
+    public Result ReleaseForSend(string releasedBy, DateTimeOffset now)
+    {
+        if (Status is not (WithdrawalStatus.AwaitingRelease or WithdrawalStatus.AwaitingFunds))
+            return Result.Failure(WithdrawalErrors.InvalidStateTransition);
+
+        if (string.IsNullOrWhiteSpace(releasedBy))
+            return Result.Failure(WithdrawalErrors.OwnerRequired);
+
+        ReleasedBy = releasedBy.Trim();
+        ReleasedAt = now;
+        Status = WithdrawalStatus.Approved;
+        StatusReason = null;
+        UpdatedAt = now;
+        return Result.Success();
+    }
+
+    /// <summary>
+    /// An operator abandons a parked withdrawal that cannot be funded — the one path that releases the reserve
+    /// from a hold. Only reachable from a hold (never once signed/broadcast, funds may be on-chain). Raises
+    /// <see cref="WithdrawalFailed"/> so the ledger returns the reserved funds to the merchant.
+    /// </summary>
+    public Result Cancel(string cancelledBy, string reason, DateTimeOffset now)
+    {
+        if (Status is not (WithdrawalStatus.AwaitingFunds or WithdrawalStatus.AwaitingRelease))
+            return Result.Failure(WithdrawalErrors.InvalidStateTransition);
+
+        var detail = string.IsNullOrWhiteSpace(cancelledBy) ? reason : $"cancelled by {cancelledBy.Trim()}: {reason}";
+        FailureReason = detail;
+        StatusReason = null;
+        Status = WithdrawalStatus.Failed;
+        UpdatedAt = now;
+        RaiseReleased(detail, now);
         return Result.Success();
     }
 

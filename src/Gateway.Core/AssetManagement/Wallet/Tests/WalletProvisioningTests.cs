@@ -135,6 +135,10 @@ public sealed class WalletProvisioningTests : IAsyncLifetime
                     merchantId, $"merchant-{merchantId:N}", Chain.Tron,
                     SecretProviderKind.InMemoryDevelopment, SecretReference, PublicKeyReference, "m/44'/195'/0'/0")
                 : Result.Failure<HdWallet>(KeyManagementErrors.NotFound));
+
+        public Task<Result<HdWallet>> ProvisionPlatformWithdrawalWalletAsync(
+            Chain chain, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Result.Failure<HdWallet>(KeyManagementErrors.NotFound)); // not exercised by these deposit tests
     }
 
     [Fact]
@@ -369,6 +373,55 @@ public sealed class WalletProvisioningTests : IAsyncLifetime
     {
         await using var context = WalletContext();
         (await new WalletDirectory(context).FindByAddressAsync(Chain.Tron, "TNobody", Ct)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Directory_lists_only_funded_active_deposit_addresses_for_reconciliation()
+    {
+        var merchantId = await SeedActiveMerchantAsync();
+
+        // Two funded deposit addresses (count > 0), one never-funded (count 0), one platform wallet.
+        var funded = WalletEntity.CreateDeposit(Guid.CreateVersion7(), Chain.Tron, "TFundedA", merchantId).Value;
+        funded.RecordDepositReceived(DateTimeOffset.UtcNow);
+        var fundedTwice = WalletEntity.CreateDeposit(Guid.CreateVersion7(), Chain.Tron, "TFundedB", merchantId).Value;
+        fundedTwice.RecordDepositReceived(DateTimeOffset.UtcNow);
+        fundedTwice.RecordDepositReceived(DateTimeOffset.UtcNow);
+        var neverFunded = WalletEntity.CreateDeposit(Guid.CreateVersion7(), Chain.Tron, "TNeverFunded", merchantId).Value;
+        var platform = WalletEntity.CreatePlatform(Guid.CreateVersion7(), Chain.Tron, "THotWallet", WalletType.HotWithdrawal).Value;
+
+        await using (var context = WalletContext())
+        {
+            context.Wallets.AddRange(funded, fundedTwice, neverFunded, platform);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using (var context = WalletContext())
+        {
+            var receiving = await new WalletDirectory(context).ListReceivingDepositAddressesAsync(Chain.Tron, Ct);
+
+            receiving.Select(r => r.Address).ShouldBe(["TFundedA", "TFundedB"], ignoreOrder: true);
+            // The never-funded pool address and the platform hot wallet are both excluded.
+            receiving.ShouldNotContain(r => r.Address == "TNeverFunded");
+            receiving.ShouldNotContain(r => r.Address == "THotWallet");
+        }
+    }
+
+    [Fact]
+    public async Task Directory_disabled_deposit_addresses_are_excluded_from_reconciliation()
+    {
+        var merchantId = await SeedActiveMerchantAsync();
+        var funded = WalletEntity.CreateDeposit(Guid.CreateVersion7(), Chain.Tron, "TDisabled", merchantId).Value;
+        funded.RecordDepositReceived(DateTimeOffset.UtcNow);
+        funded.Disable(DateTimeOffset.UtcNow);
+
+        await using (var context = WalletContext())
+        {
+            context.Wallets.Add(funded);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using (var context = WalletContext())
+            (await new WalletDirectory(context).ListReceivingDepositAddressesAsync(Chain.Tron, Ct)).ShouldBeEmpty();
     }
 
     [Fact]

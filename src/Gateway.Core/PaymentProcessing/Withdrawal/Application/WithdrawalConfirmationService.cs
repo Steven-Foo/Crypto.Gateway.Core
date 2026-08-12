@@ -15,6 +15,7 @@ public sealed class WithdrawalConfirmationService(
     ITransactionBroadcaster broadcaster,
     IChainStatusReader chainStatus,
     IWithdrawalPolicyProvider policies,
+    GasAccountingOptions gasAccounting,
     TimeProvider timeProvider,
     ILogger<WithdrawalConfirmationService> logger)
 {
@@ -49,7 +50,11 @@ public sealed class WithdrawalConfirmationService(
             // Recorded every pass (ops visibility), independent of whether it already clears the policy depth.
             withdrawal.RecordConfirmations(confirmations, now);
 
-            if (confirmations >= policies.For(withdrawal.Chain).Confirmations && withdrawal.Confirm(now).IsSuccess)
+            // Carry the actual on-chain fee + its gas asset onto the confirmation event so the Ledger books the
+            // platform gas cost (5c). Both are inert in dev (in-memory engine charges no fee) and where no gas
+            // asset is configured for the chain.
+            if (confirmations >= policies.For(withdrawal.Chain).Confirmations
+                && withdrawal.Confirm(now, status.FeeSun, gasAccounting.Resolve(withdrawal.Chain)).IsSuccess)
                 confirmedCount++;
         }
 

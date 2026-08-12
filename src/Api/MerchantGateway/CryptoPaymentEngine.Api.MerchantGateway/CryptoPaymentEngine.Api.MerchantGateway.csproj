@@ -19,6 +19,8 @@
     <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/Withdrawal/Events/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Events.csproj" />
     <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/Withdrawal/Infrastructure/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure.csproj" />
     <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/Withdrawal/Workers/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Workers.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/AssetManagement/Sweep/Infrastructure/CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Infrastructure.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/AssetManagement/Sweep/Workers/CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Workers.csproj" />
     <ProjectReference Include="../../../Gateway.Core/AssetManagement/Wallet/Api/CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Api.csproj" />
     <ProjectReference Include="../../../Gateway.Core/AssetManagement/Wallet/Application/CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Application.csproj" />
     <ProjectReference Include="../../../Gateway.Core/AssetManagement/Wallet/Contracts/CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts.csproj" />
@@ -28,6 +30,8 @@
     <ProjectReference Include="../../../Gateway.Core/AssetManagement/Treasury/Infrastructure/CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Infrastructure.csproj" />
     <ProjectReference Include="../../../Gateway.Core/AssetManagement/Energy/Infrastructure/CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Infrastructure.csproj" />
     <ProjectReference Include="../../../Gateway.Core/AssetManagement/Energy/Workers/CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Workers.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/Reconciliation/Infrastructure/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Reconciliation.Infrastructure.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/Reconciliation/Workers/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Reconciliation.Workers.csproj" />
     <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/Deposit/Api/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Api.csproj" />
     <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/Deposit/Application/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Application.csproj" />
     <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/Deposit/Contracts/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Contracts.csproj" />

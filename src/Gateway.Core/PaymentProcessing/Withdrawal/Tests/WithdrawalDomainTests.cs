@@ -155,4 +155,83 @@ public sealed class WithdrawalDomainTests
         w.MarkBroadcast("0xtx", Now).Error!.Code.ShouldBe(WithdrawalErrors.InvalidStateTransition.Code); // can't broadcast before signing
         w.Confirm(Now).Error!.Code.ShouldBe(WithdrawalErrors.InvalidStateTransition.Code);                 // can't confirm before broadcast
     }
+
+    // ── Funding holds (physical hot-wallet float) ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Park_holds_the_reserve_and_records_the_reason_without_a_release()
+    {
+        var w = Approved(requiresApproval: false);
+
+        w.Park("needs 3000000, available 640000", Now).IsSuccess.ShouldBeTrue();
+
+        w.Status.ShouldBe(WithdrawalStatus.AwaitingFunds);
+        w.StatusReason.ShouldBe("needs 3000000, available 640000");
+        w.DomainEvents.OfType<WithdrawalFailed>().ShouldBeEmpty(); // a hold is not a release — the merchant is still owed it
+    }
+
+    [Fact]
+    public void A_parked_withdrawal_auto_resumes_to_approved_and_clears_the_reason()
+    {
+        var w = Approved(requiresApproval: false);
+        w.Park("short", Now);
+
+        w.ResumeToApproved(Now).IsSuccess.ShouldBeTrue();
+
+        w.Status.ShouldBe(WithdrawalStatus.Approved);
+        w.StatusReason.ShouldBeNull();
+    }
+
+    [Fact]
+    public void A_funded_but_above_threshold_withdrawal_awaits_a_human_release()
+    {
+        var w = Approved(requiresApproval: false);
+
+        w.MarkAwaitingRelease("above threshold", Now).IsSuccess.ShouldBeTrue();
+        w.Status.ShouldBe(WithdrawalStatus.AwaitingRelease);
+
+        w.ReleaseForSend("ops@cpe", Now).IsSuccess.ShouldBeTrue();
+        w.Status.ShouldBe(WithdrawalStatus.Approved);
+        w.ReleasedBy.ShouldBe("ops@cpe");
+        w.ReleasedAt.ShouldBe(Now);
+        w.StatusReason.ShouldBeNull();
+    }
+
+    [Fact]
+    public void Release_requires_an_operator_identity()
+    {
+        var w = Approved(requiresApproval: false);
+        w.MarkAwaitingRelease("above threshold", Now);
+
+        w.ReleaseForSend("  ", Now).Error!.Code.ShouldBe(WithdrawalErrors.OwnerRequired.Code);
+        w.Status.ShouldBe(WithdrawalStatus.AwaitingRelease); // unchanged
+    }
+
+    [Fact]
+    public void Cancelling_a_parked_withdrawal_releases_the_reserve()
+    {
+        var w = Approved(requiresApproval: false, callbackUrl: "https://merchant.test/cb");
+        w.Park("cannot fund", Now);
+
+        w.Cancel("ops@cpe", "unfundable", Now).IsSuccess.ShouldBeTrue();
+
+        w.Status.ShouldBe(WithdrawalStatus.Failed);
+        var evt = w.DomainEvents.OfType<WithdrawalFailed>().ShouldHaveSingleItem();
+        evt.Reason.ShouldContain("cancelled by ops@cpe");
+        evt.AmountBaseUnits.ShouldBe(Amount.ToString());
+        evt.CallbackUrl.ShouldBe("https://merchant.test/cb");
+    }
+
+    [Fact]
+    public void Holds_are_unreachable_before_a_withdrawal_is_approved()
+    {
+        var reserving = Reserving();
+        reserving.Park("x", Now).Error!.Code.ShouldBe(WithdrawalErrors.InvalidStateTransition.Code);
+        reserving.MarkAwaitingRelease("x", Now).Error!.Code.ShouldBe(WithdrawalErrors.InvalidStateTransition.Code);
+
+        // Resume/release/cancel only apply once on a hold, never from a fresh Approved.
+        Approved(requiresApproval: false).ResumeToApproved(Now).Error!.Code.ShouldBe(WithdrawalErrors.InvalidStateTransition.Code);
+        Approved(requiresApproval: false).ReleaseForSend("ops", Now).Error!.Code.ShouldBe(WithdrawalErrors.InvalidStateTransition.Code);
+        Approved(requiresApproval: false).Cancel("ops", "x", Now).Error!.Code.ShouldBe(WithdrawalErrors.InvalidStateTransition.Code);
+    }
 }
