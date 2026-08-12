@@ -2,15 +2,18 @@
 
   <ItemGroup>
     <ProjectReference Include="../Application/CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Application.csproj" />
+    <ProjectReference Include="../Domain/CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Domain.csproj" />
     <ProjectReference Include="../Contracts/CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Contracts.csproj" />
     <ProjectReference Include="../../../../SharedKernel/CryptoPaymentEngine.SharedKernel/CryptoPaymentEngine.SharedKernel.csproj" />
-    <!-- The dev seeder resolves the cross-module registrars (Wallet + KeyManagement) through their
-         Contracts. No EF/Mongo/Redis: Treasury has no persistence of its own. -->
+    <ProjectReference Include="../../../../Infrastructure/CryptoPaymentEngine.Infrastructure/CryptoPaymentEngine.Infrastructure.csproj" />
+    <!-- The dev seeder resolves the cross-module registrars (Wallet + KeyManagement) through their Contracts. -->
     <ProjectReference Include="../../Wallet/Contracts/CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts.csproj" />
     <ProjectReference Include="../../../KeyManagement/Contracts/CryptoPaymentEngine.Gateway.Core.KeyManagement.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
     <PackageReference Include="Microsoft.Extensions.Configuration" />
     <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
     <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />

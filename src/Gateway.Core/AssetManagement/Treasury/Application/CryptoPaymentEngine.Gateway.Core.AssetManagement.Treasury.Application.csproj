@@ -1,12 +1,14 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <ProjectReference Include="../Domain/CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Domain.csproj" />
     <ProjectReference Include="../Contracts/CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Contracts.csproj" />
     <ProjectReference Include="../../../../SharedKernel/CryptoPaymentEngine.SharedKernel/CryptoPaymentEngine.SharedKernel.csproj" />
-    <!-- Composes other modules' Contracts only (§4.5): Wallet's platform-wallet read/write and
-         KeyManagement's platform-key read/write. Treasury owns no persistence of its own. -->
+    <!-- Composes other modules' Contracts only (§4.5): Wallet's platform-wallet read/write, KeyManagement's
+         platform-key read/write, and Blockchain's tx build/broadcast for the treasury reload flow. -->
     <ProjectReference Include="../../Wallet/Contracts/CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts.csproj" />
     <ProjectReference Include="../../../KeyManagement/Contracts/CryptoPaymentEngine.Gateway.Core.KeyManagement.Contracts.csproj" />
+    <ProjectReference Include="../../../Blockchain/Contracts/CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>

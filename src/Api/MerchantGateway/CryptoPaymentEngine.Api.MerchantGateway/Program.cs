@@ -1,5 +1,6 @@
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Infrastructure;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Workers;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Workers;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Reconciliation.Infrastructure;
@@ -84,7 +85,7 @@ builder.Services.AddMerchantModule(config, dbConnection);
 builder.Services.AddKeyManagementModule(dbConnection);
 builder.Services.AddBlockchainAddressEncoding();
 builder.Services.AddWalletModule(dbConnection);
-builder.Services.AddTreasuryModule();                   // platform hot-wallet registry (composes Wallet + KeyManagement Contracts); backs Withdrawal's IHotWalletProvider
+builder.Services.AddTreasuryModule(dbConnection);       // hot-pool directory + cold wallet + reload persistence (schema 'treasury'); backs Withdrawal's allocator + Sweep's destination
 builder.Services.AddEnergyModule(config, dbConnection);  // TRON resource monitoring (Phase 5a): SQL policy + Mongo snapshots
 builder.Services.AddLedgerModule(dbConnection);         // consumes Deposit + Withdrawal events (credit/settle/release)
 builder.Services.AddDepositModule(config, dbConnection);
@@ -156,6 +157,10 @@ if (isTestnetTier)
     // KMS-backed ops action, never seeded from config (§10).
     builder.Services.AddDevelopmentTreasuryHotWalletSeed(config);
 
+    // Registers the cold treasury address(es) from Treasury:ColdWallets on boot (public, watch-only — no key,
+    // §10) so Sweep has a destination and Reconciliation a controlled address. Prod uses the staff ops action.
+    builder.Services.AddDevelopmentTreasuryColdWalletSeed(config);
+
     // Seeds the in-memory hot-pool float AFTER the pool seeder above, so the withdrawal happy-path allocates
     // and sends in dev (the in-memory reader reads zero, which the allocator treats as underfunded). No-op
     // under live TRON. Set Withdrawal:DevHotWalletFloatBaseUnits low to demo the no-wallet-available park path.
@@ -197,6 +202,10 @@ builder.Services.AddSweepWorkers(new SweepWorkerOptions
     ProcessInterval = TimeSpan.FromSeconds(15),
     ConfirmationInterval = TimeSpan.FromSeconds(15),
 });
+
+// Treasury cold-reload (Phase 2): broadcasts + confirms operator-signed treasury→hot transfers. Single-flighted
+// like the withdrawal workers. Inert in prod until a real broadcaster lands (no signer needed — the human signs).
+builder.Services.AddTreasuryReloadWorker(new TreasuryReloadWorkerOptions { Interval = TimeSpan.FromSeconds(15) });
 
 // Frees lapsed deposit-invoice addresses back to the pool (§9).
 builder.Services.AddPaymentIntentWorkers();

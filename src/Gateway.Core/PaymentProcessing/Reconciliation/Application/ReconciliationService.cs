@@ -1,4 +1,5 @@
 using System.Numerics;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Contracts;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
@@ -27,6 +28,7 @@ public sealed class ReconciliationService(
     IAssetCatalog assets,
     IPlatformWalletDirectory platformWallets,
     IWalletDirectory depositWallets,
+    ITreasuryColdWalletDirectory coldTreasury,
     IReconciliationStore store,
     IReconciliationHistoryStore history,
     ReconciliationOptions options,
@@ -103,6 +105,13 @@ public sealed class ReconciliationService(
             unique.Add(wallet.Address);
         foreach (var deposit in deposits)
             unique.Add(deposit.Address);
+
+        // The cold treasury holds most of the custody post-sweep, and it is not a Wallet-module row (it is
+        // watch-only, keyless — homed in Treasury). Include it, or reconciliation would report a huge false
+        // drift once sweeping concentrates funds there.
+        var cold = await coldTreasury.GetAsync(chain, cancellationToken);
+        if (cold.IsSuccess)
+            unique.Add(cold.Value.Address);
 
         return [.. unique];
     }

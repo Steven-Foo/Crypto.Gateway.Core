@@ -28,6 +28,7 @@
     <ProjectReference Include="../../../Gateway.Core/AssetManagement/Wallet/Workers/CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Workers.csproj" />
     <ProjectReference Include="../../../Gateway.Core/AssetManagement/Wallet/Infrastructure/CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Infrastructure.csproj" />
     <ProjectReference Include="../../../Gateway.Core/AssetManagement/Treasury/Infrastructure/CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Infrastructure.csproj" />
+    <ProjectReference Include="../../../Gateway.Core/AssetManagement/Treasury/Workers/CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Workers.csproj" />
     <ProjectReference Include="../../../Gateway.Core/AssetManagement/Energy/Infrastructure/CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Infrastructure.csproj" />
     <ProjectReference Include="../../../Gateway.Core/AssetManagement/Energy/Workers/CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Workers.csproj" />
     <ProjectReference Include="../../../Gateway.Core/PaymentProcessing/Reconciliation/Infrastructure/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Reconciliation.Infrastructure.csproj" />

@@ -411,6 +411,28 @@ lease/rowversion conflict and reverts cleanly (detach → re-allocate next pass)
 down). Selection is platform-level LRU; the pool is **shared across all merchants** (not per-merchant);
 **per-merchant pools + health-based rotation stay deferred** ([[wallet-rotation-health-design]]).
 
+**Treasury cold reload + Sweep→cold (Phase 2 — the three-tier custody completed) — DONE, 561 tests green.** The
+custody topology is now complete: deposit addresses (hot) → **sweep → COLD treasury** (accumulates; key NOT in the
+system) → admin **reload → hot pool** (a human signs client-side) → withdrawals drain the pool. **Treasury gained
+its first persistence** (schema `treasury`, Domain+Workers projects added): `TreasuryColdWallet` (watch-only address,
+one per chain — homed in Treasury, NOT a keyless Wallet row, since we hold no key for it) + a `TreasuryReload`
+aggregate (`AwaitingSignature → Signed → Broadcast → Confirmed / Failed`, mirrors Withdrawal/Sweep minus the reserve;
+migration `InitialTreasury`, `db/sql/130-treasury.sql`). **Reload flow (human-in-the-loop, §10):** `TreasuryReloadService.InitiateAsync`
+builds the **unsigned** treasury→hot transfer (`ITransactionBuilder`) to an **operator-chosen pool wallet** (returns
+the unsigned tx hex); the operator **signs client-side — the cold key never reaches the backend** — and posts the
+signed blob to `SubmitSignedAsync`; the single-flighted `TreasuryReloadWorker` broadcasts + confirms it. **NO ledger
+entry** (treasury→hot is custody-internal — total custody unchanged, only its location, §14). On confirm the target
+hot wallet's float rises on-chain → the withdrawal allocator sees it next pass → parked `AwaitingFunds` withdrawals
+**auto-resume** (Phase 1 mechanism, unchanged). **Sweep redirected:** `SweepScanService` now sweeps deposits to the
+**cold treasury** (`ITreasuryColdWalletDirectory`) instead of the hot pool. **Reconciliation** includes the cold
+address in the custody sum (else it would report a huge false drift once sweeping concentrates funds cold). **Cold
+registration:** dev config seed (`Treasury:ColdWallets`, watch-only address — no key) + `ITreasuryColdWalletRegistrar`
+(the seam a prod staff ops action reuses). **Real TRON tx-build/broadcast + real browser signing deferred** like
+everything else (in-memory engine in dev; inert in prod until the adapters land). **Deferred/known:** the reload +
+cold-register endpoints are **dev-only** (`/dev/treasury/*` in MerchantGateway) — the production **staff-auth Ops
+endpoints in OperationsApi are a follow-up** (that host must first gain the transaction builder); a per-chain reload
+confirmation depth (currently one `TreasuryReloadOptions.Confirmations`, dev=1); and the client-side signing UI.
+
 Every other module in the map is a placeholder in this doc, not yet on disk — scaffold a module
 only when real feature work on it starts, following the same 8-layer layout.
 

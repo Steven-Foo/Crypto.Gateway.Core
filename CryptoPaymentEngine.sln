@@ -433,6 +433,14 @@ Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Contracts", "Contracts", "{
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Contracts", "src\Gateway.Core\AssetManagement\Energy\Contracts\CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Contracts.csproj", "{72D5133C-B53E-4DB0-B614-761F5E953620}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Domain", "Domain", "{DFB66912-04DB-A63D-166B-B799689B01E8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Domain", "src\Gateway.Core\AssetManagement\Treasury\Domain\CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Domain.csproj", "{3D564988-EA30-44D4-9A90-2AE30B3B4C8E}"
+EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Workers", "Workers", "{A3068E74-2BF6-13DC-335A-9166E402A222}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Workers", "src\Gateway.Core\AssetManagement\Treasury\Workers\CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Workers.csproj", "{071E8702-34F1-4322-BD9A-4BD7CB0535F2}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -1607,6 +1615,30 @@ Global
 		{72D5133C-B53E-4DB0-B614-761F5E953620}.Release|x64.Build.0 = Release|Any CPU
 		{72D5133C-B53E-4DB0-B614-761F5E953620}.Release|x86.ActiveCfg = Release|Any CPU
 		{72D5133C-B53E-4DB0-B614-761F5E953620}.Release|x86.Build.0 = Release|Any CPU
+		{3D564988-EA30-44D4-9A90-2AE30B3B4C8E}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{3D564988-EA30-44D4-9A90-2AE30B3B4C8E}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{3D564988-EA30-44D4-9A90-2AE30B3B4C8E}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{3D564988-EA30-44D4-9A90-2AE30B3B4C8E}.Debug|x64.Build.0 = Debug|Any CPU
+		{3D564988-EA30-44D4-9A90-2AE30B3B4C8E}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{3D564988-EA30-44D4-9A90-2AE30B3B4C8E}.Debug|x86.Build.0 = Debug|Any CPU
+		{3D564988-EA30-44D4-9A90-2AE30B3B4C8E}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{3D564988-EA30-44D4-9A90-2AE30B3B4C8E}.Release|Any CPU.Build.0 = Release|Any CPU
+		{3D564988-EA30-44D4-9A90-2AE30B3B4C8E}.Release|x64.ActiveCfg = Release|Any CPU
+		{3D564988-EA30-44D4-9A90-2AE30B3B4C8E}.Release|x64.Build.0 = Release|Any CPU
+		{3D564988-EA30-44D4-9A90-2AE30B3B4C8E}.Release|x86.ActiveCfg = Release|Any CPU
+		{3D564988-EA30-44D4-9A90-2AE30B3B4C8E}.Release|x86.Build.0 = Release|Any CPU
+		{071E8702-34F1-4322-BD9A-4BD7CB0535F2}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{071E8702-34F1-4322-BD9A-4BD7CB0535F2}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{071E8702-34F1-4322-BD9A-4BD7CB0535F2}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{071E8702-34F1-4322-BD9A-4BD7CB0535F2}.Debug|x64.Build.0 = Debug|Any CPU
+		{071E8702-34F1-4322-BD9A-4BD7CB0535F2}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{071E8702-34F1-4322-BD9A-4BD7CB0535F2}.Debug|x86.Build.0 = Debug|Any CPU
+		{071E8702-34F1-4322-BD9A-4BD7CB0535F2}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{071E8702-34F1-4322-BD9A-4BD7CB0535F2}.Release|Any CPU.Build.0 = Release|Any CPU
+		{071E8702-34F1-4322-BD9A-4BD7CB0535F2}.Release|x64.ActiveCfg = Release|Any CPU
+		{071E8702-34F1-4322-BD9A-4BD7CB0535F2}.Release|x64.Build.0 = Release|Any CPU
+		{071E8702-34F1-4322-BD9A-4BD7CB0535F2}.Release|x86.ActiveCfg = Release|Any CPU
+		{071E8702-34F1-4322-BD9A-4BD7CB0535F2}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -1825,5 +1857,9 @@ Global
 		{431081D0-DFAF-4544-ADDD-E0AE2FDF05E5} = {4FC234CB-CA8C-061A-641B-25810FCACB7A}
 		{ABAC3BE0-4291-7AD0-28FC-C76BDE86777C} = {590055CB-8D68-4131-D078-A8210F68B07B}
 		{72D5133C-B53E-4DB0-B614-761F5E953620} = {ABAC3BE0-4291-7AD0-28FC-C76BDE86777C}
+		{DFB66912-04DB-A63D-166B-B799689B01E8} = {8C27C3D1-0072-57A6-B7BE-E9A817A81398}
+		{3D564988-EA30-44D4-9A90-2AE30B3B4C8E} = {DFB66912-04DB-A63D-166B-B799689B01E8}
+		{A3068E74-2BF6-13DC-335A-9166E402A222} = {8C27C3D1-0072-57A6-B7BE-E9A817A81398}
+		{071E8702-34F1-4322-BD9A-4BD7CB0535F2} = {A3068E74-2BF6-13DC-335A-9166E402A222}
 	EndGlobalSection
 EndGlobal

@@ -1,4 +1,5 @@
 using System.Numerics;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Contracts;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
@@ -32,16 +33,20 @@ public sealed class ReconciliationServiceTests
     private readonly IAssetCatalog _assets = Substitute.For<IAssetCatalog>();
     private readonly IPlatformWalletDirectory _platform = Substitute.For<IPlatformWalletDirectory>();
     private readonly IWalletDirectory _deposits = Substitute.For<IWalletDirectory>();
+    private readonly ITreasuryColdWalletDirectory _coldTreasury = Substitute.For<ITreasuryColdWalletDirectory>();
     private readonly CapturingStore _store = new();
 
     public ReconciliationServiceTests()
     {
         _assets.GetActiveAsync(Arg.Any<CancellationToken>())
             .Returns([new AssetDto(Usdt, Chain.Tron, "USDT", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", 6, IsNative: false)]);
+        // No cold treasury registered by default; individual tests opt in.
+        _coldTreasury.GetAsync(Chain.Tron, Arg.Any<CancellationToken>())
+            .Returns(Result.Failure<ColdTreasuryWallet>(Error.NotFound("treasury.cold.none", "none")));
     }
 
     private ReconciliationService Build(IBalanceReader balances, BigInteger tolerance = default) =>
-        new(_ledger, balances, _assets, _platform, _deposits, _store, _store,
+        new(_ledger, balances, _assets, _platform, _deposits, _coldTreasury, _store, _store,
             new ReconciliationOptions { DriftTolerance = tolerance }, TimeProvider.System, NullLogger<ReconciliationService>.Instance);
 
     private void GivenControlledAddresses(params (Guid Id, string Address)[] deposits)
@@ -72,6 +77,28 @@ public sealed class ReconciliationServiceTests
         snap.AddressesScanned.ShouldBe(3);
         snap.AddressesUnreadable.ShouldBe(0);
         _store.HistoryCount.ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task The_cold_treasury_balance_is_included_in_the_on_chain_total()
+    {
+        const string cold = "TColdTreasury";
+        _coldTreasury.GetAsync(Chain.Tron, Arg.Any<CancellationToken>())
+            .Returns(Result.Success(new ColdTreasuryWallet(Chain.Tron, cold)));
+        _ledger.GetTreasuryHoldingAsync(Usdt, Arg.Any<CancellationToken>()).Returns(new BigInteger(9_000_000));
+        GivenControlledAddresses((Guid.CreateVersion7(), Deposit1));
+
+        var reader = new InMemoryBalanceReader();
+        reader.Set(Chain.Tron, HotWallet, Usdt, 1_000_000);
+        reader.Set(Chain.Tron, Deposit1, Usdt, 1_000_000);
+        reader.Set(Chain.Tron, cold, Usdt, 7_000_000); // most custody sits cold post-sweep
+
+        await Build(reader).ReconcileAsync(Chain.Tron, Ct);
+
+        var snap = _store.Latest.ShouldNotBeNull();
+        snap.OnChainTotal.ShouldBe(new BigInteger(9_000_000)); // hot + deposit + COLD
+        snap.Status.ShouldBe(ReconciliationStatus.Balanced);
+        snap.AddressesScanned.ShouldBe(3);
     }
 
     [Fact]

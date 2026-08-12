@@ -15,13 +15,13 @@ using Xunit;
 namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Tests;
 
 /// <summary>
-/// The scanner turns "a deposit address holds enough to be worth sweeping" into a Pending sweep into the hot
-/// wallet. Money-relevant: it sweeps only at/above the threshold (never dust), never when one is already in
-/// flight, and never at all without a registered hot-wallet destination.
+/// The scanner turns "a deposit address holds enough to be worth sweeping" into a Pending sweep into the cold
+/// treasury. Money-relevant: it sweeps only at/above the threshold (never dust), never when one is already in
+/// flight, and never at all without a registered cold-treasury destination.
 /// </summary>
 public sealed class SweepScanServiceTests
 {
-    private const string HotWallet = "THotWallet";
+    private const string ColdWallet = "TColdTreasury";
     private const string Deposit1 = "TDeposit1";
     private const string Deposit2 = "TDeposit2";
     private static readonly Guid Usdt = Guid.CreateVersion7();
@@ -33,7 +33,7 @@ public sealed class SweepScanServiceTests
     private readonly IAssetCatalog _assets = Substitute.For<IAssetCatalog>();
     private readonly IWalletDirectory _wallets = Substitute.For<IWalletDirectory>();
     private readonly InMemoryBalanceReader _balances = new();
-    private readonly ITreasuryHotWalletDirectory _hotWallets = Substitute.For<ITreasuryHotWalletDirectory>();
+    private readonly ITreasuryColdWalletDirectory _coldWallets = Substitute.For<ITreasuryColdWalletDirectory>();
     private readonly ISweepPolicyProvider _policies = Substitute.For<ISweepPolicyProvider>();
     private readonly ISweepRepository _repository = Substitute.For<ISweepRepository>();
 
@@ -43,19 +43,19 @@ public sealed class SweepScanServiceTests
             .Returns([new AssetDto(Usdt, Chain.Tron, "USDT", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", 6, IsNative: false)]);
         _wallets.ListReceivingDepositAddressesAsync(Chain.Tron, Arg.Any<CancellationToken>())
             .Returns([new ReceivingDepositAddress(Wallet1, Deposit1), new ReceivingDepositAddress(Wallet2, Deposit2)]);
-        _hotWallets.GetHotWalletAsync(Chain.Tron, Arg.Any<CancellationToken>())
-            .Returns(Result.Success(new TreasuryHotWallet(Guid.NewGuid(), Chain.Tron, HotWallet, "hotref")));
+        _coldWallets.GetAsync(Chain.Tron, Arg.Any<CancellationToken>())
+            .Returns(Result.Success(new ColdTreasuryWallet(Chain.Tron, ColdWallet)));
         _policies.For(Chain.Tron).Returns(new SweepPolicy(1_000_000, 19)); // threshold 1 USDT
         _repository.HasInFlightAsync(Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns(false);
         _repository.TryAddAsync(Arg.Any<Domain.Sweep>(), Arg.Any<CancellationToken>()).Returns(true);
     }
 
     private SweepScanService Service => new(
-        _assets, _wallets, _balances, _hotWallets, _policies, _repository, TimeProvider.System,
+        _assets, _wallets, _balances, _coldWallets, _policies, _repository, TimeProvider.System,
         NullLogger<SweepScanService>.Instance);
 
     [Fact]
-    public async Task Only_addresses_at_or_above_the_threshold_are_swept_and_the_full_balance_goes_to_the_hot_wallet()
+    public async Task Only_addresses_at_or_above_the_threshold_are_swept_and_the_full_balance_goes_to_the_cold_treasury()
     {
         _balances.Set(Chain.Tron, Deposit1, Usdt, 5_000_000); // >= threshold
         _balances.Set(Chain.Tron, Deposit2, Usdt, 500_000);   // dust, below threshold
@@ -68,7 +68,7 @@ public sealed class SweepScanServiceTests
         count.ShouldBe(1);
         created.ShouldNotBeNull();
         created.FromAddress.ShouldBe(Deposit1);
-        created.ToAddress.ShouldBe(HotWallet);
+        created.ToAddress.ShouldBe(ColdWallet);
         created.Amount.ShouldBe(new BigInteger(5_000_000)); // the full balance is swept
         created.WalletId.ShouldBe(Wallet1);
     }
@@ -88,10 +88,10 @@ public sealed class SweepScanServiceTests
     }
 
     [Fact]
-    public async Task Nothing_is_swept_when_no_hot_wallet_destination_is_registered()
+    public async Task Nothing_is_swept_when_no_cold_treasury_destination_is_registered()
     {
-        _hotWallets.GetHotWalletAsync(Chain.Tron, Arg.Any<CancellationToken>())
-            .Returns(Result.Failure<TreasuryHotWallet>(Error.NotFound("treasury.none", "no hot wallet")));
+        _coldWallets.GetAsync(Chain.Tron, Arg.Any<CancellationToken>())
+            .Returns(Result.Failure<ColdTreasuryWallet>(Error.NotFound("treasury.none", "no cold treasury")));
         _balances.Set(Chain.Tron, Deposit1, Usdt, 5_000_000);
 
         var count = await Service.ScanAsync(Chain.Tron, Ct);

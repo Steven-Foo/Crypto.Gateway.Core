@@ -13,14 +13,16 @@ namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Application;
 /// Finds deposit addresses worth sweeping and creates a <see cref="Domain.Sweep"/> for each. For every active
 /// asset on the chain, it reads each funded deposit address's on-chain balance (<see cref="IBalanceReader"/>)
 /// and, when the balance clears the policy threshold and no sweep is already in flight for it, creates a
-/// Pending sweep into the hot wallet. It moves no money itself (the processing service builds/signs/broadcasts)
-/// and holds no keys. Reaches other modules only through their Contracts (§4.5).
+/// Pending sweep into the <b>cold treasury</b> (the custody anchor) — funds then leave the hot deposit tier for
+/// cold storage, and the hot withdrawal pool is refilled from treasury by a human-signed reload (Phase 2). It
+/// moves no money itself (the processing service builds/signs/broadcasts) and holds no keys. Reaches other
+/// modules only through their Contracts (§4.5).
 /// </summary>
 public sealed class SweepScanService(
     IAssetCatalog assets,
     IWalletDirectory wallets,
     IBalanceReader balances,
-    ITreasuryHotWalletDirectory hotWallets,
+    ITreasuryColdWalletDirectory coldWallets,
     ISweepPolicyProvider policies,
     ISweepRepository repository,
     TimeProvider timeProvider,
@@ -28,11 +30,11 @@ public sealed class SweepScanService(
 {
     public async Task<int> ScanAsync(Chain chain, CancellationToken cancellationToken = default)
     {
-        var hotWallet = await hotWallets.GetHotWalletAsync(chain, cancellationToken);
-        if (hotWallet.IsFailure)
+        var coldWallet = await coldWallets.GetAsync(chain, cancellationToken);
+        if (coldWallet.IsFailure)
         {
             // No destination ⇒ nothing to sweep into. Stay inert (same posture as a missing signer/config).
-            logger.LogWarning("Sweep scan skipped for {Chain}: no hot wallet registered ({Error}).", chain, hotWallet.Error!.Message);
+            logger.LogWarning("Sweep scan skipped for {Chain}: no cold treasury registered ({Error}).", chain, coldWallet.Error!.Message);
             return 0;
         }
 
@@ -46,7 +48,7 @@ public sealed class SweepScanService(
             foreach (var address in addresses)
             {
                 cancellationToken.ThrowIfCancellationRequested();
-                if (await TryCreateSweepAsync(chain, asset.AssetId, address, hotWallet.Value.Address, policy, cancellationToken))
+                if (await TryCreateSweepAsync(chain, asset.AssetId, address, coldWallet.Value.Address, policy, cancellationToken))
                     created++;
             }
         }
