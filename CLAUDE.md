@@ -433,6 +433,34 @@ cold-register endpoints are **dev-only** (`/dev/treasury/*` in MerchantGateway) 
 endpoints in OperationsApi are a follow-up** (that host must first gain the transaction builder); a per-chain reload
 confirmation depth (currently one `TreasuryReloadOptions.Confirmations`, dev=1); and the client-side signing UI.
 
+**Production KMS-envelope seed custody (§10) — DONE, 567 tests green (0 failed, 5 known skips).** The seam that flips
+withdrawal + sweep + address-provisioning from "inert in prod" to live money-out. **Key simplification:** because
+Option B made the withdrawal pool an HD wallet and the cold treasury is human-signed, the ENTIRE launch money-out
+custody surface is **one Tier-2 envelope pattern** ([[kms-key-topology]]) — the Tier-1 KMS-asymmetric signer is NOT
+needed (no flat single-address signing wallet remains). **The two-factor property (user's requirement):** the seed
+ciphertext lives in **this system's DB** (`keymgmt.SecretMaterial`, migration `AddSecretMaterial`) and the
+key-encryption-key lives in **KMS** — either alone is useless; only compromise of both is dangerous. New
+`SecretProviderKind.AwsKmsEnvelope`. **`KmsHdWalletProvisioner`** mints a CSPRNG 64-byte seed → `kms:Encrypt` under the
+**per-purpose CMK** (`KeyManagement:Kms:KeyArns:{Deposit,Withdrawal}`) → stores **one** `SecretMaterial` row holding
+ciphertext **and** the public xpub together, so the seed↔xpub pairing is atomic (a torn write would derive addresses no
+key can sign); seed minted **exactly-once** under the create-on-first-use race via a unique `Reference` index +
+adopt-on-conflict. **`KmsEnvelopeSecretProvider`** (singleton; reads its store through a scope) serves a plain ref → the
+public xpub (watch-only derivation never touches the seed, §8), and a signing ref `"{ref}#{index}"` → `kms:Decrypt` the
+seed **in memory only** → derive the secp256k1 child at `m/44'/coin'/0'/0/{index}` → return it as a zeroized
+`SecretLease` → wipe the seed. **The signer is unchanged** — the existing `TronSigner` already does the secp256k1
+recoverable signing; KMS plugs in purely at the `ISecretProvider` seam (DRYer than a separate `EnvelopeHdSigner`).
+**Defence in depth:** each ciphertext is bound to a KMS **encryption context** `{reference,purpose,chain}` (AAD — one
+wallet's blob can't decrypt as another's even with full KMS access), and the provider refuses to `Decrypt` under a CMK
+not in config (`IsConfiguredKey`). `AWSSDK.KeyManagementService` (approved §11) referenced only by
+KeyManagement.Infrastructure. **`AddAwsKmsKeyCustody`** is registered ONLY in the host's **Production** branch and only
+when `KeyManagement:Kms:Enabled` — which also turns on the real TRON tx-engine + `AddTronSigner`; without it Production
+registers no signer at all (never a fake signer, §10). Config is **identifiers only** (region + ARNs); the app
+authenticates by its instance/task IAM role, no keys in config. Tests: `KmsEnvelopeCustodyTests` (6) incl. the
+money-critical proof that the **KMS-derived signing key == the watch-only address's public key**, context-mismatch +
+unconfigured-CMK rejection, exactly-once minting, and the AwsKmsEnvelope↔InMemoryDevelopment interlock (both
+directions). **Deferred:** a live-AWS round-trip (staging — needs the real CMKs + IAM role; unit tests fake
+`IAmazonKeyManagementService`); ETH/SOL adapters; native-TRX; and the prod OperationsApi reload/cold endpoints.
+
 Every other module in the map is a placeholder in this doc, not yet on disk — scaffold a module
 only when real feature work on it starts, following the same 8-layer layout.
 

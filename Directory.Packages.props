@@ -22,6 +22,11 @@
     <!-- Keccak-256 for Ethereum/TRON address encoding. Nethereum is approved in §11. -->
     <PackageVersion Include="Nethereum.Util" Version="6.1.0" />
   </ItemGroup>
+  <ItemGroup Label="Custody — AWS KMS envelope encryption for production HD-wallet seeds (§10)">
+    <!-- Encrypt/Decrypt only. The private key/seed never leaves the process except as KMS-sealed
+         ciphertext; referenced solely by KeyManagement.Infrastructure. -->
+    <PackageVersion Include="AWSSDK.KeyManagementService" Version="4.0.100.8" />
+  </ItemGroup>
   <ItemGroup Label="Validation / Mapping / CQRS">
     <PackageVersion Include="FluentValidation" Version="12.1.1" />
     <PackageVersion Include="FluentValidation.DependencyInjectionExtensions" Version="12.1.1" />

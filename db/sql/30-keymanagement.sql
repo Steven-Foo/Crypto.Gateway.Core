@@ -222,3 +222,42 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [keymgmt].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260812084800_AddSecretMaterial'
+)
+BEGIN
+    CREATE TABLE [keymgmt].[SecretMaterial] (
+        [Id] uniqueidentifier NOT NULL,
+        [Reference] varchar(512) NOT NULL,
+        [Ciphertext] varbinary(max) NOT NULL,
+        [Xpub] varchar(256) NOT NULL,
+        [KmsKeyId] varchar(512) NOT NULL,
+        [Purpose] nvarchar(16) NOT NULL,
+        [Chain] nvarchar(16) NOT NULL,
+        [CreatedAt] datetimeoffset NOT NULL,
+        CONSTRAINT [PK_SecretMaterial] PRIMARY KEY ([Id])
+    );
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [keymgmt].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260812084800_AddSecretMaterial'
+)
+BEGIN
+    CREATE UNIQUE INDEX [IX_SecretMaterial_Reference] ON [keymgmt].[SecretMaterial] ([Reference]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [keymgmt].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260812084800_AddSecretMaterial'
+)
+BEGIN
+    INSERT INTO [keymgmt].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260812084800_AddSecretMaterial', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

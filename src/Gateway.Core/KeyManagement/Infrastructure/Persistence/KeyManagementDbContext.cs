@@ -13,10 +13,14 @@ public sealed class KeyManagementDbContext(DbContextOptions<KeyManagementDbConte
     public DbSet<HdWallet> HdWallets => Set<HdWallet>();
     public DbSet<DerivedKey> DerivedKeys => Set<DerivedKey>();
 
+    /// <summary>KMS-envelope material (production custody): sealed seed + public xpub per HD wallet (§10).</summary>
+    public DbSet<SecretMaterial> SecretMaterials => Set<SecretMaterial>();
+
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
         modelBuilder.ApplyConfiguration(new HdWalletMap());
         modelBuilder.ApplyConfiguration(new DerivedKeyMap());
+        modelBuilder.ApplyConfiguration(new SecretMaterialMap());
     }
 }

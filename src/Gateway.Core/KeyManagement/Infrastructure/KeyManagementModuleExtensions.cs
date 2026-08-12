@@ -1,9 +1,12 @@
+using Amazon;
+using Amazon.KeyManagementService;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Application;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Contracts;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Derivation;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Persistence;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Secrets;
+using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Secrets.Aws;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Signing;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
@@ -120,6 +123,49 @@ public static class KeyManagementModuleExtensions
         // Retained for any platform-wallet dev seeding described in config; per-merchant deposit wallets no
         // longer rely on it (they are provisioned lazily above).
         services.AddHostedService<DevHdWalletSeeder>();
+
+        return services;
+    }
+
+    /// <summary>
+    /// PRODUCTION custody. Wires AWS KMS envelope encryption for HD-wallet seeds (§10): the KMS provider (which
+    /// decrypts a seed only in memory to derive a child key, then wipes it) and the KMS provisioner (which mints
+    /// a random seed, seals it under the purpose's CMK, and stores only the ciphertext + public xpub). Both sit
+    /// behind the same <see cref="ISecretProvider"/>/<see cref="IHdWalletProvisioner"/> ports as the dev
+    /// in-memory custody, so nothing else in the system changes when production custody comes online.
+    ///
+    /// <para>No-op unless <c>KeyManagement:Kms:Enabled</c> is true — so a misconfigured environment stays inert
+    /// (address provisioning + signing simply don't happen) rather than falling back to anything unsafe. Config
+    /// carries only identifiers (region + key ARNs); the app authenticates by its instance/task IAM role.</para>
+    /// </summary>
+    public static IServiceCollection AddAwsKmsKeyCustody(
+        this IServiceCollection services,
+        IConfiguration configuration)
+    {
+        var section = configuration.GetSection(AwsKmsKeyCustodyOptions.SectionName);
+        var options = section.Get<AwsKmsKeyCustodyOptions>() ?? new AwsKmsKeyCustodyOptions();
+
+        if (!options.Enabled)
+            return services; // custody stays inert until a real KMS config lands (§10)
+
+        services.Configure<AwsKmsKeyCustodyOptions>(section);
+
+        // One KMS client for the process. Credentials come from the default AWS resolution chain (instance/task
+        // IAM role in AWS, a profile/SSO locally) — never from config (§10). Region is an identifier.
+        services.AddSingleton<IAmazonKeyManagementService>(_ =>
+            string.IsNullOrWhiteSpace(options.Region)
+                ? new AmazonKeyManagementServiceClient()
+                : new AmazonKeyManagementServiceClient(RegionEndpoint.GetBySystemName(options.Region)));
+
+        // The "my database" half of the two-factor model: ciphertext store over the module DbContext.
+        services.AddScoped<ISecretMaterialStore, SecretMaterialStore>();
+
+        // Singleton (consumed by the singleton ISecretProviderFactory + TronSigner); reads its store per-call
+        // through a scope. Reports AwsKmsEnvelope, so only KMS-configured wallets ever resolve to it (§10).
+        services.AddSingleton<ISecretProvider, KmsEnvelopeSecretProvider>();
+
+        // Scoped (consumed by the scoped WalletDerivationService). Mints + seals seeds on first use.
+        services.AddScoped<IHdWalletProvisioner, KmsHdWalletProvisioner>();
 
         return services;
     }

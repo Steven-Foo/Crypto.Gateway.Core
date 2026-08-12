@@ -170,10 +170,21 @@ else // Production (the hard §10 boundary)
 {
     builder.Services.AddJsonRpcChainSources();
     builder.Services.AddTronChainAdapter(config);
-    // Deliberately NOT registered in Production: any ISigner (no fake, no throwaway — a KMS-backed signer must
-    // land first), the real ITransactionBuilder/ITransactionBroadcaster, the in-memory secret provider + dev
-    // wallet/merchant seeding, and the in-memory account-resource reader. Withdrawal processing and address
-    // provisioning therefore stay inert in Production until their KMS/real implementations exist — by design.
+
+    // Production custody (§10). Money-out comes online ONLY when a real KMS config is present: KMS-envelope
+    // seed custody (the provider that decrypts a seed in memory to derive a child key then wipes it, + the
+    // provisioner that mints and seals seeds), the real TRON build→broadcast engine, and the real secp256k1
+    // signer over the KMS-resolved key. Without KeyManagement:Kms:Enabled, none of this is registered:
+    // withdrawal/sweep and address provisioning stay inert rather than ever falling back to a fake signer or an
+    // in-memory seed. The signer never sees a key — only the KMS provider does, only in memory, only briefly.
+    if (config.GetValue<bool>("KeyManagement:Kms:Enabled"))
+    {
+        builder.Services.AddAwsKmsKeyCustody(config);
+        builder.Services.AddTronTransactionEngine(config);
+        builder.Services.AddTronSigner();
+    }
+    // Still NOT registered in Production: any in-memory secret provider, dev wallet/merchant seeding, and the
+    // in-memory account-resource reader — those remain dev-only by design.
 }
 
 // ── Background processing ─────────────────────────────────────────────────────

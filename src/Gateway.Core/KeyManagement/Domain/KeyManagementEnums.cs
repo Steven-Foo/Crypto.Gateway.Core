@@ -41,5 +41,15 @@ public enum SecretProviderKind
     AzureKeyVault = 2,
     HashiCorpVault = 3,
     Hsm = 4,
+
+    /// <summary>
+    /// Envelope encryption over AWS KMS: the seed is generated in-process, encrypted under a customer-managed
+    /// symmetric CMK, and only the ciphertext is stored (in this system's DB) — so both the KMS key and the
+    /// database are required to recover it, and either alone is useless. The plaintext seed exists only briefly
+    /// in memory at sign time (to derive a child key), then is wiped. This is the production custody model for
+    /// HD wallets, whose thousands of derived addresses rule out a KMS-asymmetric-key-per-address scheme (§10).
+    /// </summary>
+    AwsKmsEnvelope = 5,
+
     InMemoryDevelopment = 99,
 }
