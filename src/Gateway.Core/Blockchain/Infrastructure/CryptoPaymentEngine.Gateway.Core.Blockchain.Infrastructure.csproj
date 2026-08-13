@@ -1,7 +1,6 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
-    <ProjectReference Include="../Application/CryptoPaymentEngine.Gateway.Core.Blockchain.Application.csproj" />
     <ProjectReference Include="../Contracts/CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.csproj" />
     <ProjectReference Include="../Domain/CryptoPaymentEngine.Gateway.Core.Blockchain.Domain.csproj" />
     <ProjectReference Include="../../../SharedKernel/CryptoPaymentEngine.SharedKernel/CryptoPaymentEngine.SharedKernel.csproj" />

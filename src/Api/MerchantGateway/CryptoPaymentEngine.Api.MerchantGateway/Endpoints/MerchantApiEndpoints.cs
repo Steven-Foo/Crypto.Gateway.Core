@@ -1,5 +1,4 @@
 using CryptoPaymentEngine.Api.MerchantGateway.Models;
-using CryptoPaymentEngine.Api.MerchantGateway.Money;
 using CryptoPaymentEngine.Api.MerchantGateway.Security;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Contracts;

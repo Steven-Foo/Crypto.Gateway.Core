@@ -9,7 +9,6 @@
     <ProjectReference Include="../Domain/CryptoPaymentEngine.Gateway.Core.KeyManagement.Domain.csproj" />
     <ProjectReference Include="../Application/CryptoPaymentEngine.Gateway.Core.KeyManagement.Application.csproj" />
     <ProjectReference Include="../Infrastructure/CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.csproj" />
-    <ProjectReference Include="../Api/CryptoPaymentEngine.Gateway.Core.KeyManagement.Api.csproj" />
     <!-- The test acts as a composition root: it wires Blockchain's concrete address encoders,
          which production code must NOT reference across the module boundary (§4.5). -->
     <ProjectReference Include="../../Blockchain/Infrastructure/CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.csproj" />

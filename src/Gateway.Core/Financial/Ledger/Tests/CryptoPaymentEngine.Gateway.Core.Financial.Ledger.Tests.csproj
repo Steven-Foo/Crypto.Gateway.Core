@@ -9,7 +9,6 @@
     <ProjectReference Include="../Domain/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Domain.csproj" />
     <ProjectReference Include="../Application/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application.csproj" />
     <ProjectReference Include="../Infrastructure/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Infrastructure.csproj" />
-    <ProjectReference Include="../Api/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Api.csproj" />
   </ItemGroup>
 
   <ItemGroup>

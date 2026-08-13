@@ -1,11 +1,14 @@
 using System.Numerics;
 
-namespace CryptoPaymentEngine.Api.MerchantGateway.Money;
+namespace CryptoPaymentEngine.SharedKernel;
 
 /// <summary>
-/// The single place a display decimal crosses into base-unit integers and back — only ever at the API edge
-/// (§14). Inbound conversion refuses an amount with more precision than the asset supports, rather than
-/// silently truncating money.
+/// The single place a display decimal crosses into base-unit integers and back. This is an
+/// <b>API/UI-edge concern only</b> (§14): base-unit <see cref="BigInteger"/> is the currency of Domain and
+/// Application — never call this from inside a module's Domain/Application to "do the math in decimals".
+/// It lives in SharedKernel, next to <see cref="MoneyLimits"/>, so both host edges (MerchantGateway and
+/// OperationsApi) share one implementation instead of drifting copies. Inbound conversion refuses an amount
+/// with finer precision than the asset supports, rather than silently truncating money.
 /// </summary>
 public static class AmountConversion
 {

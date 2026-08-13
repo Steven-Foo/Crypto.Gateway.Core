@@ -1,5 +1,4 @@
 using System.Numerics;
-using CryptoPaymentEngine.Api.MerchantGateway.Money;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Contracts;

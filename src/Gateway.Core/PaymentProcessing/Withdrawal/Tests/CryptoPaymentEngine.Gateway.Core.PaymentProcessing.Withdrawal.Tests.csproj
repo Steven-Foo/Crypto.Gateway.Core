@@ -9,7 +9,6 @@
     <ProjectReference Include="../Domain/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Domain.csproj" />
     <ProjectReference Include="../Application/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application.csproj" />
     <ProjectReference Include="../Infrastructure/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure.csproj" />
-    <ProjectReference Include="../Api/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Api.csproj" />
     <!-- e2e money-out to the Ledger, driven by the in-memory chain engine + signer fakes. -->
     <ProjectReference Include="../../../Financial/Ledger/Application/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application.csproj" />
     <ProjectReference Include="../../../Financial/Ledger/Infrastructure/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Infrastructure.csproj" />

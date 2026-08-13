@@ -151,9 +151,10 @@ USDT-TRON `AssetId`). End-to-end composition proven (`MoneyInCompositionTests`: 
 verified) **and dev merchant seeding — DONE** (`AddDevelopmentMerchantSeed`): a full signed
 `/api/v1/deposit` round-trip is proven over HTTP in dev (returns the published TRON vector address), with
 `docs/dev-round-trip.md` + `tools/dev/Invoke-MerchantRequest.ps1` for the next engineer.
-**Follow-ups (none block the spine):** `/transactions/query`, withdrawal callbacks (needs a per-tx callback URL
-on Withdrawal), a dedicated callback delivery worker (backoff/abandon vs. the current outbox-retry), and
-Development auto-migration (the host doesn't migrate on boot — dev DB is migrated manually per `docs/dev-round-trip.md`).
+**Follow-ups:** `/transactions/query`, withdrawal callbacks, and a dedicated callback delivery worker were all
+**since built** (see the back-office + callback-delivery milestones near the end of this "Built so far" section).
+Development auto-migration remains a gap (the host doesn't migrate on boot — dev DB is migrated manually per
+`docs/dev-round-trip.md`).
 
 **`AssetManagement/Energy` (Phase 5a — TRON resource monitoring) — DONE, 343 tests green.** Energy is
 **TRON-specific** (ETH/SOL have no energy — gas is just native-coin balance, a future Treasury top-up concern,
@@ -511,15 +512,49 @@ asymmetry** (deposit vs withdrawal): deposit addresses are many+transient ⇒ NO
 the withdrawal hot pool is few+fixed ⇒ monitored by 5a AND now provisioned on-demand (though 5a only *alerts* where an
 `EnergyPolicy` exists — a `HotWithdrawal` policy to alert on the pool is a follow-up). Test: `WithdrawalFlowTests.Without_energy_…`.
 
+**Back-office (`Api/OperationsApi`) + `Platform/Identity` staff auth — BUILT (in-tree; not in my earlier notes).**
+A second composition-root host. `Platform/Identity` (schema `identity`, migration `InitialIdentity`) owns staff
+identity: `StaffUser`/`StaffSession`, `IStaffPasswordHasher`, `IBearerTokenGenerator`, `AddDevelopmentStaffSeed`
+(fixed dev Admin). `OperationsApi` sits behind `StaffBearerAuthMiddleware` and composes 11 modules for **read
+Contracts only** — no workers/dispatchers, so the host scans/processes/broadcasts nothing (§4.7): staff
+login/logout, merchant admin, transaction search (deposit/withdrawal/paymentintent/callback), withdrawal
+**approval** (§10 above-threshold) and **funding release/cancel** (`Ops*Endpoints`). **Known placeholders:** the two
+transaction screens hardcode `fee = "0"` and `userId = null` (real per-merchant fee + user attribution not yet
+surfaced — `§ docs/backoffice-api.md`). No Treasury/Energy/Sweep/Reconciliation ops surface yet; prod treasury
+reload/cold-register stay the dev-only `/dev/treasury/*` in MerchantGateway.
+
+**Callback delivery completion — BUILT.** `Platform/Notification` now also consumes **`WithdrawalConfirmed` /
+`WithdrawalFailed`** (merchant withdrawal callbacks) alongside `PaymentIntentMatched` / `PaymentIntentFailed`,
+delivered by a **dedicated `CallbackDeliveryWorker`** (attempt / backoff / abandon) + a `CallbackDeliveryResendService`
+(ops resend) — supersedes the earlier "outbox-retry only, withdrawal callbacks deferred" note above.
+
+**Scaffolding prune (2026-08-13) — DONE, build green (0 errors).** Removed **18 empty projects** (each held only a
+`.csproj`, zero source): all **7 module `Api/` projects** (Wallet, Blockchain, Ledger, KeyManagement, Merchant,
+Deposit, Withdrawal — HTTP endpoints live in the hosts under `Api/`, never in a per-module `Api/`), the empty
+**`Events/` + `Workers/`** of Wallet · Blockchain · Ledger · KeyManagement · Merchant, and **`Blockchain/Application`**
+(ports live in `Contracts`, adapters in `Infrastructure`) — plus a stray empty
+`PaymentIntent/Infrastructure/Migrations/` folder (real migrations are under `.../Persistence/Migrations/`). Solution
+is now **81 code projects (was 99)**; all 31 inbound `ProjectReference`s (both hosts + 7 Tests + Blockchain.Infrastructure)
+were pruned via `dotnet remove reference` / `dotnet sln remove`. **Kept (NOT redundant):** the in-memory adapters +
+`AddDevelopment*` seeders (deliberate dev/test DI seams).
+
+**Money-edge dedup (2026-08-13, follow-on) — DONE, build green.** The duplicated `Money/AmountConversion` (the §14
+display↔base-unit edge converter) was consolidated into **`SharedKernel.AmountConversion`** (next to `MoneyLimits`;
+logic byte-identical — the superset `TryToBaseUnits` + `ToDisplay`; XML-doc'd API/UI-edge-only so Domain never does
+decimal math). Both hosts' copies + their `Money/` folders were deleted; the 4 call sites resolve it via the
+`SharedKernel` using they already had. Gave it its **first direct tests** in a new **`SharedKernel.Tests`** project
+(18 tests: precision-floor, over-precision-rejected-never-truncated, non-positive-rejected, lossless round-trip across
+6/9/18-dp) — SharedKernel's first unit-test project. Solution now **82 projects**.
+
 Every other module in the map is a placeholder in this doc, not yet on disk — scaffold a module
-only when real feature work on it starts, following the same 8-layer layout.
+only when real feature work on it starts, creating only the layers it uses (§4.3).
 
 **Persistence rules in force:** one `DbContext` + one SQL schema + one migrations-history table per
 module; money is `decimal(38,0)` via `.UseBigIntegerMoney()`; PKs are `Guid.CreateVersion7()`;
 append-heavy tables get a non-clustered GUID PK + clustered `bigint IDENTITY Seq`
 (`HasSeqClusteredIndex()`). See `docs/database-design.md`.
 
-### 4.3 Module structure (identical for every module — consistency mandatory)
+### 4.3 Module structure (canonical layout — a module has only the layers it actually uses)
     <Module>/
       Api/            # module's own endpoints/minimal-API groups, mapped by the host
       Application/    # use-cases, CQRS handlers, validators
@@ -529,6 +564,13 @@ append-heavy tables get a non-clustered GUID PK + clustered `bigint IDENTITY Seq
       Events/         # integration events this module publishes/consumes
       Workers/        # BackgroundServices owned by this module
       Tests/
+
+This is the *canonical* layout, not a mandate to create all eight. **Create a layer only when its first real file
+lands** — the 2026-08-13 prune removed 18 empty layer-projects that were scaffolded but never filled (see §4.2). In
+particular, `Api/` is usually **absent**: HTTP endpoints live in the hosts (`Api/MerchantGateway`, `Api/OperationsApi`),
+not in per-module `Api/` projects. `Reconciliation` / `Notification` / `Treasury` are the reference shape — they carry
+only the layers they use. Keep consistency in *naming and internal shape* of the layers a module does have; don't
+pre-create empty ones.
 
 A module must be understandable without reading any other module.
 
