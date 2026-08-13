@@ -26,9 +26,31 @@ public sealed class EnergyDelegationService(
         Chain chain, string address, CancellationToken cancellationToken = default)
     {
         var observed = await resources.GetAsync(chain, address, cancellationToken);
-        if (observed.EnergyAvailable >= options.RequiredEnergyPerTransfer)
-            return EnergyReadiness.Ready;
 
+        // 1. Energy — the expensive resource. A short TRC-20 transfer burns ~27 TRX, so we delegate rather than
+        //    burn: ensure a delegation from the platform staking wallet, then have the caller retry.
+        if (observed.EnergyAvailable < options.RequiredEnergyPerTransfer)
+            return await EnsureEnergyDelegatedAsync(chain, address, observed.EnergyAvailable, cancellationToken);
+
+        // 2. Bandwidth — the cheap resource (~0.27 TRX burn). We do NOT delegate it; we only require the address
+        //    can pay for it, from free/staked bandwidth OR a small spendable-TRX cushion (the "leftover TRX funds
+        //    the next sweep" buffer). An address with energy but neither bandwidth nor TRX can't broadcast — keep
+        //    it waiting (funds are safe) and surface it for a TRX top-up rather than letting the tx fail on-chain.
+        if (observed.BandwidthAvailable < options.RequiredBandwidthPerTransfer
+            && observed.AvailableTrxBalance < options.MinTrxCushionSun)
+        {
+            logger.LogWarning(
+                "Address {Address} on {Chain} has energy but cannot pay bandwidth (bandwidth {Bandwidth}, TRX {Trx} sun); needs a TRX top-up.",
+                address, chain, observed.BandwidthAvailable, observed.AvailableTrxBalance);
+            return EnergyReadiness.Unavailable;
+        }
+
+        return EnergyReadiness.Ready;
+    }
+
+    private async Task<EnergyReadiness> EnsureEnergyDelegatedAsync(
+        Chain chain, string address, System.Numerics.BigInteger energyAvailable, CancellationToken cancellationToken)
+    {
         var staking = await stakingWallets.FindAsync(chain, cancellationToken);
         if (staking is null)
         {
@@ -51,7 +73,7 @@ public sealed class EnergyDelegationService(
 
         logger.LogInformation(
             "Delegating {Trx} sun of energy to {Address} on {Chain} (had {Energy}, needs {Required}).",
-            options.DelegateTrxSun, address, chain, observed.EnergyAvailable, options.RequiredEnergyPerTransfer);
+            options.DelegateTrxSun, address, chain, energyAvailable, options.RequiredEnergyPerTransfer);
         return EnergyReadiness.Provisioning;
     }
 }

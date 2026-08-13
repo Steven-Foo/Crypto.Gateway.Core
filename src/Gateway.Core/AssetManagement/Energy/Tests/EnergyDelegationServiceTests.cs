@@ -4,6 +4,7 @@ using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Application.Abstra
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Contracts;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Domain;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts;
+using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers;
 using CryptoPaymentEngine.SharedKernel;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -88,4 +89,33 @@ public sealed class EnergyDelegationServiceTests
         (await Service.EnsureEnergyForTransferAsync(Chain.Tron, Deposit, Ct)).ShouldBe(EnergyReadiness.Provisioning);
         await _operations.DidNotReceive().TryAddAsync(Arg.Any<EnergyOperation>(), Arg.Any<CancellationToken>());
     }
+
+    [Fact]
+    public async Task With_energy_but_no_bandwidth_and_no_trx_it_is_unavailable_never_a_failed_broadcast()
+    {
+        // Energy is fine, but the address has neither free bandwidth nor a TRX cushion to burn for it — it
+        // physically cannot broadcast, so we hold it (funds safe) rather than let the transfer fail on-chain.
+        _resources.Set(Chain.Tron, Deposit, Snapshot(energy: 200_000, bandwidth: 100, trxSun: 0));
+
+        (await Service.EnsureEnergyForTransferAsync(Chain.Tron, Deposit, Ct)).ShouldBe(EnergyReadiness.Unavailable);
+        await _operations.DidNotReceive().TryAddAsync(Arg.Any<EnergyOperation>(), Arg.Any<CancellationToken>()); // energy wasn't short
+    }
+
+    [Fact]
+    public async Task With_energy_and_no_bandwidth_but_a_trx_cushion_it_is_ready()
+    {
+        // The "leftover TRX funds the next sweep" case: free bandwidth is exhausted, but the address holds
+        // enough spendable TRX to burn for bandwidth — so it can broadcast, and we proceed.
+        _resources.Set(Chain.Tron, Deposit, Snapshot(energy: 200_000, bandwidth: 0, trxSun: 2_000_000)); // 2 TRX > 1 TRX cushion
+
+        (await Service.EnsureEnergyForTransferAsync(Chain.Tron, Deposit, Ct)).ShouldBe(EnergyReadiness.Ready);
+    }
+
+    private static AccountResourceSnapshot Snapshot(long energy, long bandwidth, long trxSun) =>
+        new(Chain.Tron, Deposit,
+            EnergyLimit: energy, EnergyUsed: 0,
+            BandwidthLimit: bandwidth, BandwidthUsed: 0,
+            FrozenTrxForEnergy: 0, FrozenTrxForBandwidth: 0,
+            DelegatedEnergyOut: 0, DelegatedEnergyIn: 0,
+            AvailableTrxBalance: trxSun, TimeProvider.System.GetUtcNow());
 }

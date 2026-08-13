@@ -13,7 +13,7 @@ namespace CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers.T
 /// NOTE: exercised against a live node only in staging (needs an endpoint/API key). The adapter's
 /// response-mapping logic is unit-tested separately via <see cref="ITronRpc"/>/<see cref="ITronTxRpc"/> fakes.
 /// </summary>
-public sealed class TronRpc(HttpClient http) : ITronRpc, ITronTxRpc
+public sealed class TronRpc(HttpClient http) : ITronRpc, ITronTxRpc, ITronResourceRpc
 {
     public async Task<long> GetBlockNumberAsync(CancellationToken cancellationToken = default)
     {
@@ -140,6 +140,48 @@ public sealed class TronRpc(HttpClient http) : ITronRpc, ITronTxRpc
             return null;
         using var enumerator = element.EnumerateObject();
         return enumerator.MoveNext() ? element.Deserialize<TronTransactionInfoDto>() : null;
+    }
+
+    // ── Resource path (ITronResourceRpc): native /wallet/* API, keyless (§10) ──
+
+    public async Task<TronAccountResourceDto> GetAccountResourceAsync(
+        string ownerHexAddress, CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PostAsJsonAsync(
+            "wallet/getaccountresource", new { address = ownerHexAddress, visible = false }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        // A brand-new / unfunded account returns {} — deserialize to an all-zero DTO, never an error.
+        return await response.Content.ReadFromJsonAsync<TronAccountResourceDto>(cancellationToken) ?? new TronAccountResourceDto();
+    }
+
+    public async Task<TronAccountDto> GetAccountAsync(string ownerHexAddress, CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PostAsJsonAsync(
+            "wallet/getaccount", new { address = ownerHexAddress, visible = false }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        return await response.Content.ReadFromJsonAsync<TronAccountDto>(cancellationToken) ?? new TronAccountDto();
+    }
+
+    public async Task<JsonElement> FreezeBalanceV2Async(
+        FreezeBalanceV2Request request, CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PostAsJsonAsync("wallet/freezebalancev2", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        // Returns the unsigned transaction object at the TOP LEVEL (not wrapped like triggersmartcontract),
+        // or { "Error": "<hex-ascii>" } on rejection. The builder inspects for the error key.
+        return await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
+    }
+
+    public async Task<JsonElement> DelegateResourceAsync(
+        DelegateResourceRequest request, CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PostAsJsonAsync("wallet/delegateresource", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        return await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
     }
 
     private static string ToHex(long value) => "0x" + value.ToString("x");

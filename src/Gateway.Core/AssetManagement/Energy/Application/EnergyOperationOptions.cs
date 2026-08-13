@@ -12,6 +12,16 @@ public sealed class EnergyOperationOptions
     /// transfer costs roughly 65k–131k energy depending on the receiver's state; default is the safe upper end.</summary>
     public BigInteger RequiredEnergyPerTransfer { get; init; } = 131_000;
 
+    /// <summary>Bandwidth a transfer needs. Unlike energy, we do NOT delegate bandwidth (its burn is trivial,
+    /// ~0.27 TRX) — the gate only requires the address can cover it from free bandwidth or a small TRX cushion.
+    /// A TRC-20 transfer is ~345 bytes; a native TRX transfer ~267. Default is the safe upper end.</summary>
+    public BigInteger RequiredBandwidthPerTransfer { get; init; } = 400;
+
+    /// <summary>The minimum spendable TRX (sun) an address must hold to cover a bandwidth burn when its free
+    /// bandwidth is exhausted — the "leftover TRX funds the next sweep" cushion. Default 1 TRX, enough for
+    /// several bandwidth burns. Below this AND out of free bandwidth ⇒ the address needs a TRX top-up.</summary>
+    public BigInteger MinTrxCushionSun { get; init; } = 1_000_000; // 1 TRX
+
     /// <summary>TRX (sun) to delegate to a short address to cover a transfer.</summary>
     public BigInteger DelegateTrxSun { get; init; } = 20_000_000; // 20 TRX
 

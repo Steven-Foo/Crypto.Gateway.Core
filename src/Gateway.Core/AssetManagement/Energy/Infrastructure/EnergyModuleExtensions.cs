@@ -59,12 +59,31 @@ public static class EnergyModuleExtensions
         return new EnergyOperationOptions
         {
             RequiredEnergyPerTransfer = ParseOr("RequiredEnergyPerTransfer", defaults.RequiredEnergyPerTransfer),
+            RequiredBandwidthPerTransfer = ParseOr("RequiredBandwidthPerTransfer", defaults.RequiredBandwidthPerTransfer),
+            MinTrxCushionSun = ParseOr("MinTrxCushionSun", defaults.MinTrxCushionSun),
             DelegateTrxSun = ParseOr("DelegateTrxSun", defaults.DelegateTrxSun),
             StakeIncrementTrxSun = ParseOr("StakeIncrementTrxSun", defaults.StakeIncrementTrxSun),
             Confirmations = string.IsNullOrWhiteSpace(section["Confirmations"])
                 ? defaults.Confirmations
                 : int.Parse(section["Confirmations"]!, CultureInfo.InvariantCulture),
         };
+    }
+
+    /// <summary>
+    /// DEV/TESTNET-tier ONLY. Idempotently registers the platform <b>staking (energy) wallet</b> from
+    /// <c>Energy:DevStakingWallets</c> — its imported signing key (KeyManagement, purpose Energy), its
+    /// <c>WalletType.Energy</c> Wallet row (so <c>StakingWalletLocator</c> finds it), and an <c>EnergyPolicy</c>
+    /// so auto-stake has thresholds. This is the delegation SOURCE the sweep energy gate draws from. Call only
+    /// in the testnet tier, alongside <c>AddDevelopmentKeyCustody</c> (whose imported-key registrar it uses).
+    /// Never in production — the staking wallet is provisioned through a KMS-backed ops action, not config (§10).
+    /// A live delegation still needs the wallet funded with (testnet) TRX to freeze.
+    /// </summary>
+    public static IServiceCollection AddDevelopmentEnergyStakingSeed(
+        this IServiceCollection services, IConfiguration configuration)
+    {
+        services.Configure<EnergyStakingDevOptions>(configuration.GetSection(EnergyStakingDevOptions.SectionName));
+        services.AddHostedService<EnergyStakingWalletSeeder>();
+        return services;
     }
 
     /// <summary>

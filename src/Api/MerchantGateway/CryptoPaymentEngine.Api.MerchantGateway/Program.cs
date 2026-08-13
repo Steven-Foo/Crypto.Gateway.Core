@@ -118,11 +118,12 @@ if (isTestnetTier)
     if (config.GetValue<bool>("Chains:Tron:Live") || liveTron)
     {
         builder.Services.AddJsonRpcChainSources();
-        builder.Services.AddTronChainAdapter(config);
+        builder.Services.AddTronChainAdapter(config); // also registers the real TRON resource reader (getaccountresource)
     }
     else
     {
         builder.Services.AddInMemoryChainSource();
+        builder.Services.AddInMemoryAccountResourceReader(); // in-memory resource observation (reports healthy)
     }
 
     if (liveTron)
@@ -139,8 +140,6 @@ if (isTestnetTier)
         builder.Services.AddInMemoryTransactionEngine();
         builder.Services.AddInMemorySigner(); // NEVER touches a key; a real KMS signer replaces it in prod (§10)
     }
-
-    builder.Services.AddInMemoryAccountResourceReader(); // read-only resource observation for the Energy monitor
 
     // In-memory secret provider (PUBLIC xpub only) + idempotent HD-wallet seeder, so a signed /deposit can
     // provision an address on a fresh clone. Overridable per-developer via appsettings.Local.json. The
@@ -160,6 +159,11 @@ if (isTestnetTier)
     // Registers the cold treasury address(es) from Treasury:ColdWallets on boot (public, watch-only — no key,
     // §10) so Sweep has a destination and Reconciliation a controlled address. Prod uses the staff ops action.
     builder.Services.AddDevelopmentTreasuryColdWalletSeed(config);
+
+    // Registers the platform staking (energy) wallet + policy from Energy:DevStakingWallets on boot (imported
+    // throwaway key under KeyManagement:DevSecrets) — the delegation SOURCE the sweep energy gate draws from.
+    // Inert until the wallet is funded with (testnet) TRX to freeze. Prod uses a KMS-backed ops action (§10).
+    builder.Services.AddDevelopmentEnergyStakingSeed(config);
 
     // Seeds the in-memory hot-pool float AFTER the pool seeder above, so the withdrawal happy-path allocates
     // and sends in dev (the in-memory reader reads zero, which the allocator treats as underfunded). No-op

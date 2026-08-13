@@ -118,6 +118,13 @@ public static class BlockchainInfrastructureExtensions
         // On-chain balance reads (Reconciliation) go through the same read-only TRON RPC — eth_call
         // balanceOf for TRC-20, eth_getBalance for native TRX. Read-only, keyless (§10).
         services.TryAddScoped<IBalanceReader, TronBalanceReader>();
+
+        // Native /wallet resource RPC (getaccountresource/getaccount + freeze/delegate builds), and the
+        // read-only resource reader the Energy monitor + the sweep energy/bandwidth gate consume (§8). The
+        // reader is keyless observation; the freeze/delegate BUILDER comes with the money-out engine below.
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddHttpClient<ITronResourceRpc, TronRpc>(ConfigureTronClient(options)).AddStandardResilienceHandler();
+        services.TryAddScoped<IAccountResourceReader, TronAccountResourceReader>();
         return services;
     }
 
@@ -137,6 +144,12 @@ public static class BlockchainInfrastructureExtensions
         services.AddHttpClient<Providers.Tron.ITronTxRpc, TronRpc>(ConfigureTronClient(options)).AddStandardResilienceHandler();
         services.AddScoped<ITransactionBuilder, TronTransactionBuilder>();
         services.AddScoped<ITransactionBroadcaster, TronTransactionBroadcaster>();
+
+        // Energy 5b stake/delegate builder (freezebalancev2 / delegateresource) — the money-out counterpart to
+        // the resource reader in AddTronChainAdapter. Reuses ITronResourceRpc registered there; the built blob
+        // is signed by the staking wallet's key via the same ISigner (§10). Real TRON here (vs the in-memory
+        // builder in AddInMemoryTransactionEngine).
+        services.TryAddScoped<IResourceOperationBuilder, TronResourceOperationBuilder>();
         return services;
     }
 

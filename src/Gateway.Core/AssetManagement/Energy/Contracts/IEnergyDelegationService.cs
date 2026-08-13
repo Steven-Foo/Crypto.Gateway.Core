@@ -2,17 +2,19 @@ using CryptoPaymentEngine.SharedKernel;
 
 namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Contracts;
 
-/// <summary>Whether an address is ready to send a TRON transfer without burning TRX for energy.</summary>
+/// <summary>Whether an address is ready to send a TRON transfer without burning TRX — checking both
+/// energy (TRC-20 execution) and bandwidth (transaction size).</summary>
 public enum EnergyReadiness
 {
-    /// <summary>The address already has enough energy — proceed.</summary>
+    /// <summary>The address has enough energy AND can pay bandwidth (free allotment or a TRX cushion) — proceed.</summary>
     Ready = 1,
 
     /// <summary>Energy is being provisioned (a delegation is in flight or was just created) — retry later.</summary>
     Provisioning = 2,
 
-    /// <summary>Energy could not be provisioned (no staking wallet registered, or auto-delegate disabled) —
-    /// the caller decides what to do (Sweep keeps the transfer waiting rather than burning TRX).</summary>
+    /// <summary>The address cannot be readied: energy couldn't be delegated (no staking wallet registered), or
+    /// it has energy but neither free bandwidth nor a spendable-TRX cushion to cover the bandwidth burn. The
+    /// caller keeps the transfer waiting (funds are safe) — a TRX top-up is needed.</summary>
     Unavailable = 3,
 }
 

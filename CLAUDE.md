@@ -461,6 +461,31 @@ unconfigured-CMK rejection, exactly-once minting, and the AwsKmsEnvelope↔InMem
 directions). **Deferred:** a live-AWS round-trip (staging — needs the real CMKs + IAM role; unit tests fake
 `IAmazonKeyManagementService`); ETH/SOL adapters; native-TRX; and the prod OperationsApi reload/cold endpoints.
 
+**Real TRON energy/bandwidth adapters + sweep bandwidth gate + dev staking-wallet seed — DONE, 580 tests green.** Takes the already-built
+Energy 5b flow live on a real node (unblocked by the KMS signer). New segregated **`ITronResourceRpc`** (on `TronRpc`
+alongside `ITronRpc`/`ITronTxRpc`, so no existing fake breaks): `getaccountresource` + `getaccount` reads and
+`freezebalancev2` + `delegateresource` unsigned builds (keyless, §10). **`TronAccountResourceReader`** maps
+getaccountresource (energy + free-and-staked bandwidth) + getaccount (`balance` = spendable TRX sun, `frozenV2`) →
+`AccountResourceSnapshot` (TRON omits zero fields ⇒ DTOs default 0; a new account `{}` ⇒ all-zero).
+**`TronResourceOperationBuilder`** builds FreezeBalanceV2(ENERGY)/DelegateResource(ENERGY) into the same
+`UnsignedTransaction` the existing signer/broadcaster handle (freeze/delegate return the tx at top level or
+`{"Error":<hex-ascii>}` ⇒ builder throws). Wired: reader bundled into `AddTronChainAdapter` (real whenever the real
+chain adapter is used — dev-live + prod), builder into `AddTronTransactionEngine`; in-memory in the non-live dev
+branch. **The sweep gate now covers energy AND bandwidth** (a TRC-20 sweep needs both): energy is delegated when
+short (avoids the ~27 TRX burn); **bandwidth is NOT delegated** (its ~0.27 TRX burn is trivial) — the gate only
+requires the address can pay it from free bandwidth OR a small spendable-TRX cushion (the "leftover TRX funds the
+next sweep" buffer). Energy-OK-but-no-bandwidth-and-no-TRX ⇒ `Unavailable` (park, needs a TRX top-up). New
+`EnergyOperationOptions.RequiredBandwidthPerTransfer` + `MinTrxCushionSun`; `InMemoryAccountResourceReader` reports
+healthy bandwidth+TRX by default so dev sweeps stay Ready. Tests: `TronResourceAdapterTests` + 2 gate tests.
+**Dev staking-wallet + policy seed — DONE** (`AddDevelopmentEnergyStakingSeed`/`EnergyStakingWalletSeeder`):
+idempotently registers the platform staking wallet — the delegation source the gate draws from — as an imported
+`Purpose.Energy` signing key + a `WalletType.Energy` row + an auto-stake `EnergyPolicy`, from `Energy:DevStakingWallets`
+(empty by default; a dev fills it + a `KeyManagement:DevSecrets` key + faucet TRX in `appsettings.Local.json` for a live
+Nile delegation). No schema change; `EnergyStakingWalletSeederTests` (4). **Deferred:** the PROD KMS **Energy CMK**
+(`KeyArns:Energy`) + a prod staking-wallet provisioning trigger (dev seed only, §10); the **native-TRX transfer** builder
+(`/wallet/createtransaction` — to sweep stranded TRX + auto bandwidth top-up); undelegate/unstake reclaim; and the
+frozen/delegated-TRX reconciliation count (TRX isn't reconciled yet).
+
 Every other module in the map is a placeholder in this doc, not yet on disk — scaffold a module
 only when real feature work on it starts, following the same 8-layer layout.
 
