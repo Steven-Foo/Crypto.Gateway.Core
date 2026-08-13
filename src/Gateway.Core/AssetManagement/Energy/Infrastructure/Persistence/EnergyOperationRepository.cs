@@ -26,6 +26,11 @@ public sealed class EnergyOperationRepository(EnergyDbContext context) : IEnergy
             o => o.Kind == EnergyOperationKind.Delegate && o.Chain == chain && o.TargetAddress == targetAddress && InFlight.Contains(o.Status),
             cancellationToken);
 
+    public Task<bool> HasInFlightTopUpAsync(Chain chain, string targetAddress, CancellationToken cancellationToken = default) =>
+        context.EnergyOperations.AsNoTracking().AnyAsync(
+            o => o.Kind == EnergyOperationKind.TopUp && o.Chain == chain && o.TargetAddress == targetAddress && InFlight.Contains(o.Status),
+            cancellationToken);
+
     public async Task<bool> TryAddAsync(EnergyOperation operation, CancellationToken cancellationToken = default)
     {
         context.EnergyOperations.Add(operation);

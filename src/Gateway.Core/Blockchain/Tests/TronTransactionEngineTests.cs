@@ -388,6 +388,7 @@ public sealed class TronTransactionEngineTests
     {
         public TriggerSmartContractRequest? LastTrigger { get; private set; }
         public Func<TriggerSmartContractRequest, TronTriggerResultDto> OnTrigger { get; init; } = _ => throw new NotImplementedException();
+        public Func<CreateTransactionRequest, JsonElement> OnCreate { get; init; } = _ => throw new NotImplementedException();
         public Func<JsonElement, TronBroadcastResultDto> OnBroadcast { get; init; } = _ => throw new NotImplementedException();
         public Func<string, TronTransactionInfoDto?> OnGetInfo { get; init; } = _ => null;
 
@@ -396,6 +397,9 @@ public sealed class TronTransactionEngineTests
             LastTrigger = request;
             return Task.FromResult(OnTrigger(request));
         }
+
+        public Task<JsonElement> CreateTransactionAsync(CreateTransactionRequest request, CancellationToken ct = default) =>
+            Task.FromResult(OnCreate(request));
 
         public Task<TronBroadcastResultDto> BroadcastTransactionAsync(JsonElement signedTransaction, CancellationToken ct = default) =>
             Task.FromResult(OnBroadcast(signedTransaction));

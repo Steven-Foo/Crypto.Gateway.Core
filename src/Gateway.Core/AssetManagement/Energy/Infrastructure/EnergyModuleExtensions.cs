@@ -62,6 +62,7 @@ public static class EnergyModuleExtensions
             RequiredBandwidthPerTransfer = ParseOr("RequiredBandwidthPerTransfer", defaults.RequiredBandwidthPerTransfer),
             MinTrxCushionSun = ParseOr("MinTrxCushionSun", defaults.MinTrxCushionSun),
             DelegateTrxSun = ParseOr("DelegateTrxSun", defaults.DelegateTrxSun),
+            TopUpTrxSun = ParseOr("TopUpTrxSun", defaults.TopUpTrxSun),
             StakeIncrementTrxSun = ParseOr("StakeIncrementTrxSun", defaults.StakeIncrementTrxSun),
             Confirmations = string.IsNullOrWhiteSpace(section["Confirmations"])
                 ? defaults.Confirmations

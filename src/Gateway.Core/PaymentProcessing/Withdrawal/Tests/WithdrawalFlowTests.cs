@@ -1,4 +1,5 @@
 using System.Numerics;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Contracts;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers;
@@ -59,6 +60,7 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
 
     private ServiceProvider _provider = null!;
     private InMemoryBalanceReader _hotFloat = null!;
+    private StubEnergy _energy = null!;
 
     private const string HotWalletAddress = "THotWallet";
     private static readonly Guid HotWalletId = Guid.CreateVersion7();
@@ -114,6 +116,11 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
         _hotFloat.Set(Chain.Tron, HotWalletAddress, Asset, AmpleFloat);
         services.AddSingleton<IBalanceReader>(_hotFloat);
 
+        // On-demand energy gate for the hot pool wallet — Ready by default so the money-path tests send; the
+        // energy-gate test dials it to Provisioning.
+        _energy = new StubEnergy();
+        services.AddSingleton<IEnergyDelegationService>(_energy);
+
         _provider = services.BuildServiceProvider();
 
         await using var scope = _provider.CreateAsyncScope();
@@ -160,6 +167,31 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
         (await BalanceAsync(AccountType.TreasuryAsset, null)).ShouldBe(BigInteger.Parse("7000000"));  // amount left custody
         (await BalanceAsync(AccountType.FeeRevenue, null)).ShouldBe(Fee);                             // fee kept as revenue
         (await BalanceAsync(AccountType.MerchantLiability, Merchant)).ShouldBe(BigInteger.Parse("6900000"));
+    }
+
+    [Fact]
+    public async Task Without_energy_the_hot_wallet_does_not_sign_and_resumes_once_energy_is_ready()
+    {
+        await SeedMerchantBalanceAsync(BigInteger.Parse("10000000"));
+        _energy.Readiness = EnergyReadiness.Provisioning; // gas hub still delegating energy to the hot wallet
+
+        var request = await RequestAsync(BigInteger.Parse("3000000"), "idem-noenergy");
+        request.Value.Status.ShouldBe(nameof(WithdrawalStatus.Approved));
+
+        await ProcessAsync(); // energy not Ready ⇒ must not sign
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var w = await scope.ServiceProvider.GetRequiredService<WithdrawalDbContext>().Withdrawals.SingleAsync(Ct);
+            w.Status.ShouldBe(WithdrawalStatus.Approved);   // never advanced — no energy, no sign, no ~27 TRX burn
+            w.HasSignedTransaction.ShouldBeFalse();
+        }
+
+        // Energy provisioned ⇒ the SAME withdrawal sends on the next pass.
+        _energy.Readiness = EnergyReadiness.Ready;
+        await ProcessAsync();
+        await using (var scope = _provider.CreateAsyncScope())
+            (await scope.ServiceProvider.GetRequiredService<WithdrawalDbContext>().Withdrawals.SingleAsync(Ct))
+                .Status.ShouldBe(WithdrawalStatus.Broadcast);
     }
 
     [Fact]
@@ -526,6 +558,16 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
     private sealed class StubPolicy : IWithdrawalPolicyProvider
     {
         public WithdrawalPolicy For(Chain chain) => Policy;
+    }
+
+    /// <summary>A stub energy gate. Ready by default (money-path tests send); a test dials Readiness to prove the
+    /// withdrawal won't sign without energy, then back to Ready to prove it resumes.</summary>
+    private sealed class StubEnergy : IEnergyDelegationService
+    {
+        public EnergyReadiness Readiness { get; set; } = EnergyReadiness.Ready;
+
+        public Task<EnergyReadiness> EnsureEnergyForTransferAsync(Chain chain, string address, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Readiness);
     }
 
     private sealed class StubTreasuryPool(Guid walletId, string address) : ITreasuryHotWalletDirectory

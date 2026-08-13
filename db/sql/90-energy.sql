@@ -172,3 +172,24 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [energy].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260813090405_AddEnergyTopUpIndex'
+)
+BEGIN
+    EXEC(N'CREATE UNIQUE INDEX [UX_EnergyOp_InFlight_TopUp] ON [energy].[EnergyOperation] ([Chain], [TargetAddress]) WHERE [Kind] = ''TopUp'' AND [Status] IN (''Pending'', ''Signing'', ''Broadcast'')');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [energy].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260813090405_AddEnergyTopUpIndex'
+)
+BEGIN
+    INSERT INTO [energy].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260813090405_AddEnergyTopUpIndex', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

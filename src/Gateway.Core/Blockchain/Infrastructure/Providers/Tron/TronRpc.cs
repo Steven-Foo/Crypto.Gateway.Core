@@ -116,6 +116,16 @@ public sealed class TronRpc(HttpClient http) : ITronRpc, ITronTxRpc, ITronResour
             ?? throw new JsonRpcException("triggersmartcontract", "empty response.");
     }
 
+    public async Task<JsonElement> CreateTransactionAsync(
+        CreateTransactionRequest request, CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PostAsJsonAsync("wallet/createtransaction", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        // Returns the unsigned transaction object at the TOP LEVEL, or { "Error": "<hex-ascii>" } on rejection.
+        return await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
+    }
+
     public async Task<TronBroadcastResultDto> BroadcastTransactionAsync(
         JsonElement signedTransaction, CancellationToken cancellationToken = default)
     {

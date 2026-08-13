@@ -482,9 +482,34 @@ idempotently registers the platform staking wallet — the delegation source the
 `Purpose.Energy` signing key + a `WalletType.Energy` row + an auto-stake `EnergyPolicy`, from `Energy:DevStakingWallets`
 (empty by default; a dev fills it + a `KeyManagement:DevSecrets` key + faucet TRX in `appsettings.Local.json` for a live
 Nile delegation). No schema change; `EnergyStakingWalletSeederTests` (4). **Deferred:** the PROD KMS **Energy CMK**
-(`KeyArns:Energy`) + a prod staking-wallet provisioning trigger (dev seed only, §10); the **native-TRX transfer** builder
-(`/wallet/createtransaction` — to sweep stranded TRX + auto bandwidth top-up); undelegate/unstake reclaim; and the
+(`KeyArns:Energy`) + a prod staking-wallet provisioning trigger (dev seed only, §10); undelegate/unstake reclaim; and the
 frozen/delegated-TRX reconciliation count (TRX isn't reconciled yet).
+
+**Energy "gas hub" — native-TRX builder + bandwidth top-up (Pieces 1+2) — DONE, 585 tests green.** The staking/energy
+wallet becomes the per-chain **TRX gas hub** (single source+sink for TRX-as-gas). (1) **Native-TRX builder:** new
+**`INativeTransferBuilder`** port — deliberately its OWN port, NOT an `AssetId` path, so native TRX never enters the
+deposit catalog (which would switch on TRX deposit scanning) — over `ITronTxRpc.CreateTransactionAsync`
+(`/wallet/createtransaction`); `TronNativeTransferBuilder` + in-memory impl; flows through the existing signer/broadcaster.
+(2) **Bandwidth top-up:** the sweep energy gate now *supplies* bandwidth-TRX instead of dead-ending — new
+`EnergyOperationKind.TopUp` (a native-TRX transfer hub→short-address); `EnsureEnergyForTransferAsync`, on energy-OK-but-no-
+bandwidth-and-no-TRX, creates a top-up and returns `Provisioning` (was `Unavailable`); `EnergyOperationProcessingService`
+routes TopUp via the native builder, signed by the hub's `Purpose.Energy` key; filtered unique index `UX_EnergyOp_InFlight_TopUp`
+(migration `AddEnergyTopUpIndex`, `90-energy.sql` regenerated). NO ledger (hub→deposit is custody-internal; the bandwidth burn
+is deferred gas). **EF gotcha fixed:** two filtered indexes on the same columns need the *named-index overload* or the second
+silently replaces the first. **Piece 3 (NOT yet built):** sweep residual TRX from **`Disabled` (dead) deposit wallets** → the
+hub (user chose: always to the hub, no cold-overflow; trigger = the existing `WalletStatus.Disabled`). Design resolved (no
+Sweep migration — reuse the aggregate with the gas `AssetId`, add `IBalanceReader.GetNativeBalanceAsync` +
+`IWalletDirectory.ListDisabledDepositAddressesAsync` + an Energy gas-hub-address Contract, processing branches native).
+**Inert until a wallet-deactivation flow sets `Disabled`** (nothing does in prod today — merchant Close doesn't cascade).
+
+**Withdrawal on-demand energy gate — DONE, 586 tests green.** Closed a real gap: a USDT payout is a TRC-20 transfer FROM a
+hot-pool wallet, so it needs energy like a sweep does, but `WithdrawalProcessingService` only gated on physical float — a real
+mainnet payout would have burned ~27 TRX. It now calls `IEnergyDelegationService.EnsureEnergyForTransferAsync(chain, lease.Address)`
+after resume-to-approved and before build/sign; not Ready ⇒ stays Approved and retries (transient), never signs without energy
+(Withdrawal.Application now refs Energy.Contracts, §4.5). So the gas hub serves BOTH money-out paths. **Monitor/provision
+asymmetry** (deposit vs withdrawal): deposit addresses are many+transient ⇒ NOT monitored, energy provisioned JIT by Sweep;
+the withdrawal hot pool is few+fixed ⇒ monitored by 5a AND now provisioned on-demand (though 5a only *alerts* where an
+`EnergyPolicy` exists — a `HotWithdrawal` policy to alert on the pool is a follow-up). Test: `WithdrawalFlowTests.Without_energy_…`.
 
 Every other module in the map is a placeholder in this doc, not yet on disk — scaffold a module
 only when real feature work on it starts, following the same 8-layer layout.

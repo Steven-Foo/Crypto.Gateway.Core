@@ -96,6 +96,7 @@ public static class BlockchainInfrastructureExtensions
         // the engine directly, so this host-only registration doesn't affect them.
         services.TryAddSingleton(new InMemoryTransactionEngine { MinedAtBlock = 0 });
         services.TryAddSingleton<ITransactionBuilder>(sp => sp.GetRequiredService<InMemoryTransactionEngine>());
+        services.TryAddSingleton<INativeTransferBuilder>(sp => sp.GetRequiredService<InMemoryTransactionEngine>());
         services.TryAddSingleton<ITransactionBroadcaster>(sp => sp.GetRequiredService<InMemoryTransactionEngine>());
 
         // Energy 5b builds stake/delegate txs through the same signer/broadcaster. In-memory here (dev/test);
@@ -143,6 +144,7 @@ public static class BlockchainInfrastructureExtensions
 
         services.AddHttpClient<Providers.Tron.ITronTxRpc, TronRpc>(ConfigureTronClient(options)).AddStandardResilienceHandler();
         services.AddScoped<ITransactionBuilder, TronTransactionBuilder>();
+        services.AddScoped<INativeTransferBuilder, TronNativeTransferBuilder>();
         services.AddScoped<ITransactionBroadcaster, TronTransactionBroadcaster>();
 
         // Energy 5b stake/delegate builder (freezebalancev2 / delegateresource) — the money-out counterpart to

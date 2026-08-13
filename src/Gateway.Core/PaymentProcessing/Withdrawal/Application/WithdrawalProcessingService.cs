@@ -1,4 +1,5 @@
 using System.Numerics;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application.Abstractions;
@@ -32,6 +33,7 @@ public sealed class WithdrawalProcessingService(
     ITransactionBroadcaster broadcaster,
     IHotWalletAllocator allocator,
     IWithdrawalPolicyProvider policies,
+    IEnergyDelegationService energy,
     TimeProvider timeProvider,
     ILogger<WithdrawalProcessingService> logger)
 {
@@ -82,6 +84,20 @@ public sealed class WithdrawalProcessingService(
                 if (withdrawal.ResumeToApproved(timeProvider.GetUtcNow()).IsFailure)
                     return false; // state moved under us — leave for the next pass
                 await repository.SaveChangesAsync(cancellationToken);
+            }
+
+            // Energy gate: a USDT payout is a TRC-20 transfer FROM the hot pool wallet, so — like a sweep — it needs
+            // energy (+ bandwidth) or it burns ~27 TRX. Provision on-demand from the gas hub (delegate energy, top up
+            // bandwidth). Not Ready yet ⇒ leave the withdrawal Approved and retry next pass (transient — the
+            // delegation/top-up confirms in a few blocks); never sign without energy. In dev the in-memory resource
+            // reader reports healthy energy ⇒ Ready immediately, so the happy path is unaffected.
+            var readiness = await energy.EnsureEnergyForTransferAsync(withdrawal.Chain, lease.Address, cancellationToken);
+            if (readiness != EnergyReadiness.Ready)
+            {
+                logger.LogInformation(
+                    "Withdrawal {WithdrawalId} waiting on energy for hot wallet {Address} ({Readiness}).",
+                    withdrawal.Id, lease.Address, readiness);
+                return false; // retried next pass once energy is provisioned
             }
 
             // Approved: build → sign FROM the leased wallet → persist the signed blob (→ Signing, stamping the

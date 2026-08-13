@@ -115,6 +115,18 @@ public sealed record TriggerSmartContractRequest
 }
 
 /// <summary>
+/// Request body for <c>/wallet/createtransaction</c> — builds an unsigned native-TRX <c>TransferContract</c>.
+/// Addresses are the 21-byte <c>41…</c> hex form (<c>visible=false</c>); <see cref="Amount"/> is in sun.
+/// </summary>
+public sealed record CreateTransactionRequest
+{
+    [JsonPropertyName("owner_address")] public required string OwnerAddress { get; init; }
+    [JsonPropertyName("to_address")] public required string ToAddress { get; init; }
+    [JsonPropertyName("amount")] public required long Amount { get; init; }
+    [JsonPropertyName("visible")] public bool Visible { get; init; }
+}
+
+/// <summary>
 /// Response of <c>/wallet/triggersmartcontract</c>. <see cref="Result"/> reports whether the node accepted
 /// the build; <see cref="Transaction"/> is the raw unsigned transaction object (with <c>txID</c> /
 /// <c>raw_data</c> / <c>raw_data_hex</c>) carried opaquely to the signer and broadcaster.

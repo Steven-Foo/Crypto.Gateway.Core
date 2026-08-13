@@ -26,7 +26,7 @@ namespace CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers;
 ///
 /// Thread-safe.
 /// </summary>
-public sealed class InMemoryTransactionEngine : ITransactionBuilder, ITransactionBroadcaster
+public sealed class InMemoryTransactionEngine : ITransactionBuilder, INativeTransferBuilder, ITransactionBroadcaster
 {
     private readonly object _gate = new();
     private readonly Dictionary<string, TxRecord> _broadcast = [];
@@ -61,6 +61,13 @@ public sealed class InMemoryTransactionEngine : ITransactionBuilder, ITransactio
     {
         var payload = Encoding.UTF8.GetBytes(
             $"unsigned:{request.Chain}:{request.AssetId}:{request.FromAddress}->{request.ToAddress}:{request.Amount}");
+        return Task.FromResult(new UnsignedTransaction(payload));
+    }
+
+    public Task<UnsignedTransaction> BuildNativeTransferAsync(
+        Chain chain, string fromAddress, string toAddress, System.Numerics.BigInteger amountSun, CancellationToken cancellationToken = default)
+    {
+        var payload = Encoding.UTF8.GetBytes($"unsigned-native:{chain}:{fromAddress}->{toAddress}:{amountSun}");
         return Task.FromResult(new UnsignedTransaction(payload));
     }
 

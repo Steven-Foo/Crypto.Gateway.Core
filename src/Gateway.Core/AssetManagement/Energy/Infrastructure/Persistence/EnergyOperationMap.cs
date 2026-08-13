@@ -49,6 +49,14 @@ public sealed class EnergyOperationMap : IEntityTypeConfiguration<EnergyOperatio
             .HasFilter("[Kind] = 'Delegate' AND [Status] IN ('Pending', 'Signing', 'Broadcast')")
             .HasDatabaseName("UX_EnergyOp_InFlight_Delegate");
 
+        // Idempotency (§7.3): at most one in-flight TopUp per (chain, target address) — never two TRX top-ups
+        // racing to the same short address. The NAMED-index overload is REQUIRED here: EF identifies an index by
+        // its property set, so a second index on the SAME columns as the Delegate index above would silently
+        // REPLACE it; a named index coexists with the unnamed one instead of overwriting it.
+        builder.HasIndex(["Chain", "TargetAddress"], "UX_EnergyOp_InFlight_TopUp")
+            .IsUnique()
+            .HasFilter("[Kind] = 'TopUp' AND [Status] IN ('Pending', 'Signing', 'Broadcast')");
+
         // Workers' working set: operations in a given status.
         builder.HasIndex(o => o.Status).HasDatabaseName("IX_EnergyOp_Status");
     }

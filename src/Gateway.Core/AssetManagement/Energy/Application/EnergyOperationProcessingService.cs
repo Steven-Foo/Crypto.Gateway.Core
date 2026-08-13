@@ -17,6 +17,7 @@ namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Application;
 public sealed class EnergyOperationProcessingService(
     IEnergyOperationRepository repository,
     IResourceOperationBuilder builder,
+    INativeTransferBuilder nativeTransferBuilder,
     ISigner signer,
     ITransactionBroadcaster broadcaster,
     IPlatformSigningKeyDirectory signingKeys,
@@ -51,11 +52,17 @@ public sealed class EnergyOperationProcessingService(
             if (signingKey is null)
                 return await FailAsync(operation, "no staking signing key registered", cancellationToken);
 
-            var unsigned = operation.Kind == EnergyOperationKind.Stake
-                ? await builder.BuildStakeForEnergyAsync(
-                    new StakeForEnergyRequest(operation.Chain, operation.OwnerAddress, operation.AmountSun), cancellationToken)
-                : await builder.BuildDelegateEnergyAsync(
-                    new DelegateEnergyRequest(operation.Chain, operation.OwnerAddress, operation.TargetAddress!, operation.AmountSun), cancellationToken);
+            var unsigned = operation.Kind switch
+            {
+                EnergyOperationKind.Stake => await builder.BuildStakeForEnergyAsync(
+                    new StakeForEnergyRequest(operation.Chain, operation.OwnerAddress, operation.AmountSun), cancellationToken),
+                EnergyOperationKind.Delegate => await builder.BuildDelegateEnergyAsync(
+                    new DelegateEnergyRequest(operation.Chain, operation.OwnerAddress, operation.TargetAddress!, operation.AmountSun), cancellationToken),
+                // A TopUp is a native-TRX transfer from the gas hub to the target (bandwidth funding).
+                EnergyOperationKind.TopUp => await nativeTransferBuilder.BuildNativeTransferAsync(
+                    operation.Chain, operation.OwnerAddress, operation.TargetAddress!, operation.AmountSun, cancellationToken),
+                _ => throw new InvalidOperationException($"Unknown energy operation kind {operation.Kind}."),
+            };
 
             var signed = await signer.SignAsync(
                 new SigningRequest(operation.Id, operation.Chain, unsigned.Payload, signingKey.KeyReference), cancellationToken);

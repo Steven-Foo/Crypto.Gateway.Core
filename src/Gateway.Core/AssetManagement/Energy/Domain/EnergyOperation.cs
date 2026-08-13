@@ -93,6 +93,28 @@ public sealed class EnergyOperation : Entity<Guid>
             receiverAddress.Trim(), trxAmountSun, EnergyOperationStatus.Pending, now));
     }
 
+    /// <summary>
+    /// A native-TRX top-up from the staking (gas hub) wallet to <paramref name="receiverAddress"/>, so the
+    /// receiver can pay bandwidth. A real transfer, but between platform-controlled addresses (custody-internal
+    /// ⇒ no ledger entry, §15.4). Shares the sign→broadcast→confirm lifecycle with stake/delegate.
+    /// </summary>
+    public static Result<EnergyOperation> CreateTopUp(
+        Guid stakingWalletId, Chain chain, string ownerAddress, string receiverAddress, BigInteger trxAmountSun, DateTimeOffset now)
+    {
+        if (stakingWalletId == Guid.Empty || string.IsNullOrWhiteSpace(ownerAddress))
+            return Result.Failure<EnergyOperation>(EnergyErrors.OperationOwnerRequired);
+
+        if (string.IsNullOrWhiteSpace(receiverAddress))
+            return Result.Failure<EnergyOperation>(EnergyErrors.DelegateReceiverRequired);
+
+        if (trxAmountSun <= BigInteger.Zero)
+            return Result.Failure<EnergyOperation>(EnergyErrors.OperationAmountNotPositive);
+
+        return Result.Success(new EnergyOperation(
+            Guid.CreateVersion7(), EnergyOperationKind.TopUp, chain, stakingWalletId, ownerAddress.Trim(),
+            receiverAddress.Trim(), trxAmountSun, EnergyOperationStatus.Pending, now));
+    }
+
     /// <summary>Records the signed blob and moves Pending → Signing (persist-before-broadcast safety).</summary>
     public Result RecordSigned(Guid signingRequestId, byte[] signedTransaction, DateTimeOffset now)
     {

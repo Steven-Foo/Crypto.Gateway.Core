@@ -25,6 +25,10 @@ public sealed class EnergyOperationOptions
     /// <summary>TRX (sun) to delegate to a short address to cover a transfer.</summary>
     public BigInteger DelegateTrxSun { get; init; } = 20_000_000; // 20 TRX
 
+    /// <summary>TRX (sun) the gas hub sends to an address that has energy but can't pay bandwidth — a few
+    /// bandwidth-burns' worth, left as its cushion. Default 2 TRX.</summary>
+    public BigInteger TopUpTrxSun { get; init; } = 2_000_000; // 2 TRX
+
     /// <summary>TRX (sun) to freeze per auto-stake top-up of the staking wallet.</summary>
     public BigInteger StakeIncrementTrxSun { get; init; } = 100_000_000; // 100 TRX
 

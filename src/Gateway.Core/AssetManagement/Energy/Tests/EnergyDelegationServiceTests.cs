@@ -37,6 +37,7 @@ public sealed class EnergyDelegationServiceTests
         _wallets.GetPlatformWalletsAsync(Chain.Tron, Arg.Any<CancellationToken>())
             .Returns([new PlatformWallet(StakingWalletId, Chain.Tron, StakingAddress, "Energy")]);
         _operations.HasInFlightDelegateAsync(Chain.Tron, Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(false);
+        _operations.HasInFlightTopUpAsync(Chain.Tron, Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(false);
         _operations.TryAddAsync(Arg.Any<EnergyOperation>(), Arg.Any<CancellationToken>()).Returns(true);
     }
 
@@ -91,14 +92,42 @@ public sealed class EnergyDelegationServiceTests
     }
 
     [Fact]
-    public async Task With_energy_but_no_bandwidth_and_no_trx_it_is_unavailable_never_a_failed_broadcast()
+    public async Task With_energy_but_no_bandwidth_and_no_trx_the_gas_hub_tops_up_and_reads_provisioning()
     {
-        // Energy is fine, but the address has neither free bandwidth nor a TRX cushion to burn for it — it
-        // physically cannot broadcast, so we hold it (funds safe) rather than let the transfer fail on-chain.
+        // Energy is fine, but the address has neither free bandwidth nor a TRX cushion — the gas hub SUPPLIES the
+        // TRX (a native-transfer top-up from the staking wallet) rather than letting the transfer fail on-chain.
+        _resources.Set(Chain.Tron, Deposit, Snapshot(energy: 200_000, bandwidth: 100, trxSun: 0));
+
+        EnergyOperation? created = null;
+        _operations.TryAddAsync(Arg.Do<EnergyOperation>(o => created = o), Arg.Any<CancellationToken>()).Returns(true);
+
+        (await Service.EnsureEnergyForTransferAsync(Chain.Tron, Deposit, Ct)).ShouldBe(EnergyReadiness.Provisioning);
+
+        created.ShouldNotBeNull();
+        created.Kind.ShouldBe(EnergyOperationKind.TopUp);
+        created.OwnerAddress.ShouldBe(StakingAddress); // from the gas hub
+        created.TargetAddress.ShouldBe(Deposit);
+        created.AmountSun.ShouldBe(_options.TopUpTrxSun);
+    }
+
+    [Fact]
+    public async Task A_topup_already_in_flight_is_not_duplicated()
+    {
+        _resources.Set(Chain.Tron, Deposit, Snapshot(energy: 200_000, bandwidth: 100, trxSun: 0));
+        _operations.HasInFlightTopUpAsync(Chain.Tron, Deposit, Arg.Any<CancellationToken>()).Returns(true);
+
+        (await Service.EnsureEnergyForTransferAsync(Chain.Tron, Deposit, Ct)).ShouldBe(EnergyReadiness.Provisioning);
+        await _operations.DidNotReceive().TryAddAsync(Arg.Any<EnergyOperation>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Without_a_gas_hub_wallet_a_bandwidth_short_address_is_unavailable_never_a_failed_broadcast()
+    {
+        _wallets.GetPlatformWalletsAsync(Chain.Tron, Arg.Any<CancellationToken>()).Returns([]); // no staking/gas-hub wallet
         _resources.Set(Chain.Tron, Deposit, Snapshot(energy: 200_000, bandwidth: 100, trxSun: 0));
 
         (await Service.EnsureEnergyForTransferAsync(Chain.Tron, Deposit, Ct)).ShouldBe(EnergyReadiness.Unavailable);
-        await _operations.DidNotReceive().TryAddAsync(Arg.Any<EnergyOperation>(), Arg.Any<CancellationToken>()); // energy wasn't short
+        await _operations.DidNotReceive().TryAddAsync(Arg.Any<EnergyOperation>(), Arg.Any<CancellationToken>());
     }
 
     [Fact]

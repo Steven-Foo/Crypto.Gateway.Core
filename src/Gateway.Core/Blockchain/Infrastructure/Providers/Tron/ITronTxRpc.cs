@@ -17,6 +17,13 @@ public interface ITronTxRpc
         TriggerSmartContractRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// <c>/wallet/createtransaction</c> — builds an unsigned native-TRX <c>TransferContract</c>. Returns the raw
+    /// transaction JSON (txID / raw_data / raw_data_hex), or a <c>{ "Error": … }</c> object on rejection.
+    /// </summary>
+    Task<System.Text.Json.JsonElement> CreateTransactionAsync(
+        CreateTransactionRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// <c>/wallet/broadcasttransaction</c> — submits an already-signed transaction object verbatim.
     /// Idempotent at the chain: re-broadcasting the same signed blob (same <c>txID</c>) does not
     /// double-send; the node reports it as a duplicate, which the broadcaster treats as success.

@@ -32,20 +32,50 @@ public sealed class EnergyDelegationService(
         if (observed.EnergyAvailable < options.RequiredEnergyPerTransfer)
             return await EnsureEnergyDelegatedAsync(chain, address, observed.EnergyAvailable, cancellationToken);
 
-        // 2. Bandwidth — the cheap resource (~0.27 TRX burn). We do NOT delegate it; we only require the address
-        //    can pay for it, from free/staked bandwidth OR a small spendable-TRX cushion (the "leftover TRX funds
-        //    the next sweep" buffer). An address with energy but neither bandwidth nor TRX can't broadcast — keep
-        //    it waiting (funds are safe) and surface it for a TRX top-up rather than letting the tx fail on-chain.
+        // 2. Bandwidth — the cheap resource (~0.27 TRX burn). We do NOT delegate it; the address pays it from
+        //    free/staked bandwidth OR a small spendable-TRX cushion. If it has neither, the gas hub SUPPLIES the
+        //    TRX (a top-up transfer) rather than letting the tx fail on-chain — the address then has a cushion.
         if (observed.BandwidthAvailable < options.RequiredBandwidthPerTransfer
             && observed.AvailableTrxBalance < options.MinTrxCushionSun)
         {
+            return await EnsureBandwidthToppedUpAsync(chain, address, observed, cancellationToken);
+        }
+
+        return EnergyReadiness.Ready;
+    }
+
+    /// <summary>
+    /// The gas hub supplies bandwidth-TRX: sends a small native-TRX top-up from the staking (gas hub) wallet to a
+    /// short address so it can pay its own bandwidth. A real transfer between platform-controlled addresses
+    /// (custody-internal ⇒ no ledger, §15.4). Non-blocking — creates a Pending TopUp and returns Provisioning; the
+    /// energy workers confirm it and the caller retries. No staking wallet ⇒ Unavailable (nothing can top it up).
+    /// </summary>
+    private async Task<EnergyReadiness> EnsureBandwidthToppedUpAsync(
+        Chain chain, string address, AccountResourceSnapshot observed, CancellationToken cancellationToken)
+    {
+        var staking = await stakingWallets.FindAsync(chain, cancellationToken);
+        if (staking is null)
+        {
             logger.LogWarning(
-                "Address {Address} on {Chain} has energy but cannot pay bandwidth (bandwidth {Bandwidth}, TRX {Trx} sun); needs a TRX top-up.",
+                "Address {Address} on {Chain} has energy but cannot pay bandwidth (bandwidth {Bandwidth}, TRX {Trx} sun) and no gas-hub wallet is registered to top it up.",
                 address, chain, observed.BandwidthAvailable, observed.AvailableTrxBalance);
             return EnergyReadiness.Unavailable;
         }
 
-        return EnergyReadiness.Ready;
+        if (await operations.HasInFlightTopUpAsync(chain, address, cancellationToken))
+            return EnergyReadiness.Provisioning; // already being topped up
+
+        var operation = EnergyOperation.CreateTopUp(
+            staking.WalletId, chain, staking.Address, address, options.TopUpTrxSun, timeProvider.GetUtcNow());
+        if (operation.IsFailure)
+            return EnergyReadiness.Unavailable;
+
+        await operations.TryAddAsync(operation.Value, cancellationToken);
+
+        logger.LogInformation(
+            "Topping up {Trx} sun of TRX from the gas hub to {Address} on {Chain} for bandwidth (had bandwidth {Bandwidth}, TRX {Balance} sun).",
+            options.TopUpTrxSun, address, chain, observed.BandwidthAvailable, observed.AvailableTrxBalance);
+        return EnergyReadiness.Provisioning;
     }
 
     private async Task<EnergyReadiness> EnsureEnergyDelegatedAsync(

@@ -2,6 +2,7 @@ using System.Numerics;
 using System.Security.Cryptography;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Contracts;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
@@ -106,6 +107,7 @@ public sealed class WithdrawalTronTestnetFlowTests : IAsyncLifetime
         services.AddScoped<IWithdrawalRequestService, WithdrawalRequestService>();
         services.AddScoped<WithdrawalProcessingService>();
         services.AddScoped<WithdrawalConfirmationService>();
+        services.AddSingleton<IEnergyDelegationService>(new ReadyEnergy()); // in-memory reader reports healthy energy in dev
         services.AddSingleton(new GasAccountingOptions()); // 5c gas accounting dependency
         services.AddSingleton<IWithdrawalPolicyProvider>(new StubPolicy());
         services.AddSingleton<ITreasuryHotWalletDirectory>(new StubTreasuryPool(HotWalletId, _hotWalletAddress, KeyReference));
@@ -307,6 +309,20 @@ public sealed class WithdrawalTronTestnetFlowTests : IAsyncLifetime
             });
         }
 
+        public Task<JsonElement> CreateTransactionAsync(CreateTransactionRequest request, CancellationToken ct = default)
+        {
+            // A native-TRX build, same txID = sha256(raw_data) shape as a contract call (unused by this test).
+            var rawData = RandomNumberGenerator.GetBytes(48);
+            var tx = new JsonObject
+            {
+                ["txID"] = Convert.ToHexString(SHA256.HashData(rawData)).ToLowerInvariant(),
+                ["raw_data"] = new JsonObject { ["contract"] = new JsonArray() },
+                ["raw_data_hex"] = Convert.ToHexString(rawData).ToLowerInvariant(),
+                ["visible"] = false,
+            };
+            return Task.FromResult(JsonSerializer.Deserialize<JsonElement>(tx.ToJsonString()));
+        }
+
         public Task<TronBroadcastResultDto> BroadcastTransactionAsync(JsonElement signedTransaction, CancellationToken ct = default) =>
             Task.FromResult(new TronBroadcastResultDto { Result = true });
 
@@ -326,6 +342,12 @@ public sealed class WithdrawalTronTestnetFlowTests : IAsyncLifetime
             Task.FromResult<AssetDto?>(assetId == Asset ? Usdt : null);
         public Task<AssetDto?> FindAsync(Chain chain, string symbol, CancellationToken ct = default) => Task.FromResult<AssetDto?>(null);
         public Task<IReadOnlyList<AssetDto>> GetActiveAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<AssetDto>>([Usdt]);
+    }
+
+    private sealed class ReadyEnergy : IEnergyDelegationService
+    {
+        public Task<EnergyReadiness> EnsureEnergyForTransferAsync(Chain chain, string address, CancellationToken cancellationToken = default) =>
+            Task.FromResult(EnergyReadiness.Ready);
     }
 
     private sealed class StubPolicy : IWithdrawalPolicyProvider

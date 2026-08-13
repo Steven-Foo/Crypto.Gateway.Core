@@ -9,6 +9,8 @@
     <ProjectReference Include="../../../Blockchain/Contracts/CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.csproj" />
     <ProjectReference Include="../../../KeyManagement/Contracts/CryptoPaymentEngine.Gateway.Core.KeyManagement.Contracts.csproj" />
     <ProjectReference Include="../../../Merchant/Contracts/CryptoPaymentEngine.Gateway.Core.Merchant.Contracts.csproj" />
+    <!-- Energy readiness gate for the hot pool wallet (delegate energy + top-up bandwidth on-demand before a payout). -->
+    <ProjectReference Include="../../../AssetManagement/Energy/Contracts/CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>

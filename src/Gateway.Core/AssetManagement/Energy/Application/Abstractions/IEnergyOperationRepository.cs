@@ -15,6 +15,9 @@ public interface IEnergyOperationRepository
     /// <summary>True if a non-terminal Delegate operation already targets this address on this chain.</summary>
     Task<bool> HasInFlightDelegateAsync(Chain chain, string targetAddress, CancellationToken cancellationToken = default);
 
+    /// <summary>True if a non-terminal TopUp (native-TRX transfer) already targets this address on this chain.</summary>
+    Task<bool> HasInFlightTopUpAsync(Chain chain, string targetAddress, CancellationToken cancellationToken = default);
+
     /// <summary>
     /// Inserts a new operation, saving immediately. Returns false when a one-in-flight unique index rejects it
     /// (a concurrent stake/delegate already exists) — the caller then drops it. Keeps the EF-specific race

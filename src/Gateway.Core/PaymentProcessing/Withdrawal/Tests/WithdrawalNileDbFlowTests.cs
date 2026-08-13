@@ -1,4 +1,5 @@
 using System.Numerics;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Contracts;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
@@ -105,6 +106,7 @@ public sealed class WithdrawalNileDbFlowTests : IAsyncLifetime
         services.AddScoped<IWithdrawalRequestService, WithdrawalRequestService>();
         services.AddScoped<WithdrawalProcessingService>();
         services.AddScoped<WithdrawalConfirmationService>();
+        services.AddSingleton<IEnergyDelegationService>(new ReadyEnergy()); // in-memory reader reports healthy energy in dev
         services.AddSingleton(new GasAccountingOptions()); // 5c gas accounting dependency
         services.AddSingleton<IWithdrawalPolicyProvider>(new StubPolicy());
         services.AddSingleton<ITreasuryHotWalletDirectory>(new StubTreasuryPool(HotWalletId, from!, KeyReference));
@@ -263,6 +265,12 @@ public sealed class WithdrawalNileDbFlowTests : IAsyncLifetime
         public Task<AssetDto?> FindByIdAsync(Guid id, CancellationToken ct = default) => Task.FromResult<AssetDto?>(id == Asset ? _asset : null);
         public Task<AssetDto?> FindAsync(Chain chain, string symbol, CancellationToken ct = default) => Task.FromResult<AssetDto?>(null);
         public Task<IReadOnlyList<AssetDto>> GetActiveAsync(CancellationToken ct = default) => Task.FromResult<IReadOnlyList<AssetDto>>([_asset]);
+    }
+
+    private sealed class ReadyEnergy : IEnergyDelegationService
+    {
+        public Task<EnergyReadiness> EnsureEnergyForTransferAsync(Chain chain, string address, CancellationToken cancellationToken = default) =>
+            Task.FromResult(EnergyReadiness.Ready);
     }
 
     private sealed class StubPolicy : IWithdrawalPolicyProvider

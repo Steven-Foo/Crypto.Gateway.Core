@@ -10,6 +10,11 @@ public enum EnergyOperationKind
     /// <summary>Delegate staked energy from the staking wallet to a target address (TRON DelegateResource),
     /// e.g. a deposit address about to be swept. Reclaimable.</summary>
     Delegate = 2,
+
+    /// <summary>Send a small amount of native TRX from the staking (gas hub) wallet to a target address so it can
+    /// pay <em>bandwidth</em> (which energy delegation does not cover). Unlike Stake/Delegate this is a real
+    /// transfer, but between platform-controlled addresses — custody-internal, so still no ledger entry.</summary>
+    TopUp = 3,
 }
 
 /// <summary>

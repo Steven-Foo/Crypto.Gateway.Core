@@ -5,6 +5,7 @@ using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Infrastructure.Per
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -12,9 +13,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(EnergyDbContext))]
-    partial class EnergyDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260813090405_AddEnergyTopUpIndex")]
+    partial class AddEnergyTopUpIndex
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

@@ -143,6 +143,39 @@ public sealed class TronResourceAdapterTests
             new StakeForEnergyRequest(Chain.Tron, Staker, BigInteger.Zero), Ct));
     }
 
+    // ── Native-TRX transfer builder ──────────────────────────────────────────────
+
+    [Fact]
+    public async Task Builds_a_native_trx_transfer_with_owner_to_and_amount_in_sun()
+    {
+        var txRpc = Substitute.For<ITronTxRpc>();
+        txRpc.CreateTransactionAsync(Arg.Any<CreateTransactionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(TxJson("{\"txID\":\"cc\",\"raw_data_hex\":\"02\"}"));
+
+        var unsigned = await new TronNativeTransferBuilder(txRpc, NullLogger<TronNativeTransferBuilder>.Instance)
+            .BuildNativeTransferAsync(Chain.Tron, Staker, Deposit, new BigInteger(5_000_000), Ct);
+
+        System.Text.Encoding.UTF8.GetString(unsigned.Payload).ShouldContain("\"txID\":\"cc\"");
+        await txRpc.Received(1).CreateTransactionAsync(
+            Arg.Is<CreateTransactionRequest>(r =>
+                r.OwnerAddress == TronAddress.ToRawHex(Staker) && r.ToAddress == TronAddress.ToRawHex(Deposit) && r.Amount == 5_000_000),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_native_transfer_node_error_throws()
+    {
+        var txRpc = Substitute.For<ITronTxRpc>();
+        var errorHex = Convert.ToHexString("balance is not sufficient"u8).ToLowerInvariant();
+        txRpc.CreateTransactionAsync(Arg.Any<CreateTransactionRequest>(), Arg.Any<CancellationToken>())
+            .Returns(TxJson($"{{\"Error\":\"{errorHex}\"}}"));
+
+        var ex = await Should.ThrowAsync<InvalidOperationException>(async () =>
+            await new TronNativeTransferBuilder(txRpc, NullLogger<TronNativeTransferBuilder>.Instance)
+                .BuildNativeTransferAsync(Chain.Tron, Staker, Deposit, new BigInteger(5_000_000), Ct));
+        ex.Message.ShouldContain("balance is not sufficient");
+    }
+
     /// <summary>A detached <see cref="JsonElement"/> (survives its document's disposal) for the RPC fake.</summary>
     private static JsonElement TxJson(string json) => JsonDocument.Parse(json).RootElement.Clone();
 }
