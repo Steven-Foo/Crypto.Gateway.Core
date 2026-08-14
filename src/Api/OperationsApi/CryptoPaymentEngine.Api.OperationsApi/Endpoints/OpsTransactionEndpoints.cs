@@ -8,7 +8,7 @@ namespace CryptoPaymentEngine.Api.OperationsApi.Endpoints;
 /// Deposit/Withdrawal/PaymentIntent's own tables (§ ILedgerQuery.GetJournalsAsync).
 ///
 /// <c>transactionId</c> search resolves through PaymentIntent only (deposit-side) — this host doesn't
-/// compose the Withdrawal module yet, so withdrawal-side resolution (by <c>Withdrawal.IdempotencyKey</c>)
+/// compose the Withdrawal module yet, so withdrawal-side resolution (by <c>Withdrawal.MerchantTransactionId</c>)
 /// isn't wired in. Add it the same way once Ops needs to search withdrawal transactions by ID.
 /// </summary>
 public static class OpsTransactionEndpoints
@@ -32,7 +32,7 @@ public static class OpsTransactionEndpoints
         if (pageSize > 200) pageSize = 200;
 
         // Resolving a merchant's own transaction string only makes sense scoped to that merchant — both
-        // PaymentIntent's and (eventually) Withdrawal's idempotency keys are unique per-merchant, not globally.
+        // PaymentIntent's and Withdrawal's merchant transaction ids are unique per-merchant, not globally.
         Guid? referenceId = null;
         if (!string.IsNullOrWhiteSpace(transactionId))
         {

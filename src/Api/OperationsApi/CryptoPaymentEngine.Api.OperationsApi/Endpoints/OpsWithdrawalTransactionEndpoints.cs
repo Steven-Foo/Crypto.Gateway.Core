@@ -81,7 +81,7 @@ public static class OpsWithdrawalTransactionEndpoints
             {
                 merchantId = withdrawal.MerchantId,
                 systemOrderNumber = withdrawal.WithdrawalId,
-                merchantOrderNumber = withdrawal.IdempotencyKey,
+                merchantOrderNumber = withdrawal.MerchantTransactionId,
                 userId = (string?)null, // not implemented yet — always null (§ docs/backoffice-api.md)
                 receivingAddress = withdrawal.DestinationAddress,
                 network = withdrawal.Chain.ToString(),

@@ -273,3 +273,32 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260814080834_RenameWithdrawalIdempotencyKeyToMerchantTransactionId'
+)
+BEGIN
+    EXEC sp_rename N'[withdrawal].[Withdrawal].[IdempotencyKey]', N'MerchantTransactionId', 'COLUMN';
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260814080834_RenameWithdrawalIdempotencyKeyToMerchantTransactionId'
+)
+BEGIN
+    EXEC sp_rename N'[withdrawal].[Withdrawal].[UX_Withdrawal_Idempotency]', N'UX_Withdrawal_MerchantTxn', 'INDEX';
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260814080834_RenameWithdrawalIdempotencyKeyToMerchantTransactionId'
+)
+BEGIN
+    INSERT INTO [withdrawal].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260814080834_RenameWithdrawalIdempotencyKeyToMerchantTransactionId', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

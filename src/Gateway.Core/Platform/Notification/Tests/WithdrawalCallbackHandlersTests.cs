@@ -25,12 +25,12 @@ public sealed class WithdrawalCallbackHandlersTests
     private static WithdrawalConfirmed Confirmed(string? callbackUrl = "https://merchant.test/callback") => new(
         Guid.CreateVersion7(), DateTimeOffset.UtcNow, WithdrawalId, Merchant, Asset,
         AmountBaseUnits: "3000000", FeeBaseUnits: "100000", TransactionHash: "0xwithdrawtx",
-        ConfirmedAt: DateTimeOffset.UtcNow, IdempotencyKey: "wd-1", DestinationAddress: "TDestAddress", callbackUrl);
+        ConfirmedAt: DateTimeOffset.UtcNow, MerchantTransactionId: "wd-1", DestinationAddress: "TDestAddress", callbackUrl);
 
     private static WithdrawalFailed Failed(string? callbackUrl = "https://merchant.test/callback") => new(
         Guid.CreateVersion7(), DateTimeOffset.UtcNow, WithdrawalId, Merchant, Asset,
         AmountBaseUnits: "3000000", FeeBaseUnits: "100000", Reason: "insufficient balance",
-        FailedAt: DateTimeOffset.UtcNow, IdempotencyKey: "wd-1", callbackUrl);
+        FailedAt: DateTimeOffset.UtcNow, MerchantTransactionId: "wd-1", callbackUrl);
 
     private sealed class Captured
     {

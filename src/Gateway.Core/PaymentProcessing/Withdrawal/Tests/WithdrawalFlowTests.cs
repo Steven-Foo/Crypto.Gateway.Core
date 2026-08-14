@@ -234,14 +234,16 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task The_request_is_idempotent_on_the_client_key()
+    public async Task A_resent_merchant_transaction_id_is_rejected_and_never_paid_twice()
     {
         await SeedMerchantBalanceAsync(BigInteger.Parse("10000000"));
 
         var first = await RequestAsync(BigInteger.Parse("3000000"), "idem-dupe");
         var second = await RequestAsync(BigInteger.Parse("3000000"), "idem-dupe");
 
-        first.Value.WithdrawalId.ShouldBe(second.Value.WithdrawalId); // same withdrawal
+        first.IsSuccess.ShouldBeTrue();
+        second.IsFailure.ShouldBeTrue();
+        second.Error!.ShouldBe(WithdrawalErrors.DuplicateReference); // rejected, not replayed — never a second payout
         await using var scope = _provider.CreateAsyncScope();
         (await scope.ServiceProvider.GetRequiredService<WithdrawalDbContext>().Withdrawals.CountAsync(Ct)).ShouldBe(1);
         (await BalanceAsync(AccountType.MerchantLiability, Merchant)).ShouldBe(BigInteger.Parse("6900000")); // debited once
@@ -508,11 +510,11 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
             .CreditDepositAsync(new CreditDepositCommand(Guid.CreateVersion7(), Merchant, Asset, amount), Ct);
     }
 
-    private async Task<Result<WithdrawalResult>> RequestAsync(BigInteger amount, string idempotencyKey)
+    private async Task<Result<WithdrawalResult>> RequestAsync(BigInteger amount, string merchantTransactionId)
     {
         await using var scope = _provider.CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<IWithdrawalRequestService>()
-            .RequestAsync(new RequestWithdrawalCommand(Merchant, Asset, Chain.Tron, "TDestination", amount, idempotencyKey), Ct);
+            .RequestAsync(new RequestWithdrawalCommand(Merchant, Asset, Chain.Tron, "TDestination", amount, merchantTransactionId), Ct);
     }
 
     private async Task<string?> SearchStatusAsync(Guid withdrawalId)

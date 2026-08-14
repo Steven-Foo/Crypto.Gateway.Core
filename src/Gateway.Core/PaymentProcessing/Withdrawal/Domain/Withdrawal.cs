@@ -27,7 +27,7 @@ public sealed class Withdrawal : Entity<Guid>
         string destinationAddress,
         BigInteger amount,
         BigInteger fee,
-        string idempotencyKey,
+        string merchantTransactionId,
         string? callbackUrl,
         WithdrawalStatus status,
         DateTimeOffset now) : base(id)
@@ -38,7 +38,7 @@ public sealed class Withdrawal : Entity<Guid>
         DestinationAddress = destinationAddress;
         Amount = amount;
         Fee = fee;
-        IdempotencyKey = idempotencyKey;
+        MerchantTransactionId = merchantTransactionId;
         CallbackUrl = callbackUrl;
         Status = status;
         CreatedAt = now;
@@ -55,7 +55,7 @@ public sealed class Withdrawal : Entity<Guid>
     public string DestinationAddress { get; private set; } = null!;
     public BigInteger Amount { get; private set; }
     public BigInteger Fee { get; private set; }
-    public string IdempotencyKey { get; private set; } = null!;
+    public string MerchantTransactionId { get; private set; } = null!;
     public WithdrawalStatus Status { get; private set; }
     public string? ApprovedBy { get; private set; }
     public Guid? SigningRequestId { get; private set; }
@@ -113,7 +113,7 @@ public sealed class Withdrawal : Entity<Guid>
     /// Creates a withdrawal in <see cref="WithdrawalStatus.Reserving"/>. The caller then reserves the
     /// funds in the ledger and calls <see cref="ConfirmReserved"/> (success) or
     /// <see cref="MarkReserveFailed"/> (insufficient). Creating first, reserving second — deduped by the
-    /// idempotency key — means funds are never double-debited nor left reserved without a record.
+    /// merchant transaction id — means funds are never double-debited nor left reserved without a record.
     /// <paramref name="fee"/> is the on-top platform fee.
     /// </summary>
     public static Result<Withdrawal> Request(
@@ -123,7 +123,7 @@ public sealed class Withdrawal : Entity<Guid>
         string destinationAddress,
         BigInteger amount,
         BigInteger fee,
-        string idempotencyKey,
+        string merchantTransactionId,
         string? callbackUrl,
         DateTimeOffset now)
     {
@@ -136,12 +136,12 @@ public sealed class Withdrawal : Entity<Guid>
         if (amount <= BigInteger.Zero || fee < BigInteger.Zero)
             return Result.Failure<Withdrawal>(WithdrawalErrors.AmountNotPositive);
 
-        if (string.IsNullOrWhiteSpace(idempotencyKey))
-            return Result.Failure<Withdrawal>(WithdrawalErrors.IdempotencyKeyRequired);
+        if (string.IsNullOrWhiteSpace(merchantTransactionId))
+            return Result.Failure<Withdrawal>(WithdrawalErrors.MerchantTransactionIdRequired);
 
         return Result.Success(new Withdrawal(
             Guid.CreateVersion7(), merchantId, assetId, chain, destinationAddress.Trim(), amount, fee,
-            idempotencyKey.Trim(), string.IsNullOrWhiteSpace(callbackUrl) ? null : callbackUrl.Trim(),
+            merchantTransactionId.Trim(), string.IsNullOrWhiteSpace(callbackUrl) ? null : callbackUrl.Trim(),
             WithdrawalStatus.Reserving, now));
     }
 
@@ -273,7 +273,7 @@ public sealed class Withdrawal : Entity<Guid>
         UpdatedAt = now;
         Raise(new WithdrawalConfirmed(
             Guid.CreateVersion7(), now, Id, MerchantId, AssetId, ToBaseUnits(Amount), ToBaseUnits(Fee), TransactionHash!, now,
-            IdempotencyKey, DestinationAddress, CallbackUrl,
+            MerchantTransactionId, DestinationAddress, CallbackUrl,
             gasAssetId?.ToString(), ToBaseUnits(gasFeeSun < BigInteger.Zero ? BigInteger.Zero : gasFeeSun)));
         return Result.Success();
     }
@@ -388,7 +388,7 @@ public sealed class Withdrawal : Entity<Guid>
     private void RaiseReleased(string reason, DateTimeOffset now) =>
         Raise(new WithdrawalFailed(
             Guid.CreateVersion7(), now, Id, MerchantId, AssetId, ToBaseUnits(Amount), ToBaseUnits(Fee), reason, now,
-            IdempotencyKey, CallbackUrl));
+            MerchantTransactionId, CallbackUrl));
 
     private static string ToBaseUnits(BigInteger value) => value.ToString(CultureInfo.InvariantCulture);
 }

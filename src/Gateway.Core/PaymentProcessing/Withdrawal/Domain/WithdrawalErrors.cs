@@ -13,8 +13,8 @@ public static class WithdrawalErrors
     public static readonly Error OwnerRequired =
         Error.Validation("withdrawal.owner_required", "A withdrawal must reference a merchant and an asset.");
 
-    public static readonly Error IdempotencyKeyRequired =
-        Error.Validation("withdrawal.idempotency_key_required", "An idempotency key is required.");
+    public static readonly Error MerchantTransactionIdRequired =
+        Error.Validation("withdrawal.merchant_transaction_id_required", "A merchant transaction id is required.");
 
     public static readonly Error BelowMinimum =
         Error.Validation("withdrawal.below_minimum", "The amount is below the minimum withdrawal for this asset.");
@@ -28,8 +28,8 @@ public static class WithdrawalErrors
     public static readonly Error InsufficientBalance =
         Error.Conflict("withdrawal.insufficient_balance", "The merchant's balance is insufficient for this withdrawal.");
 
-    public static readonly Error DuplicateRequest =
-        Error.Conflict("withdrawal.duplicate_request", "A withdrawal with this idempotency key already exists.");
+    public static readonly Error DuplicateReference =
+        Error.Conflict("withdrawal.duplicate_reference", "Duplicate transactionId.");
 
     public static readonly Error InvalidStateTransition =
         Error.Conflict("withdrawal.invalid_state", "The withdrawal is not in a state that allows this operation.");

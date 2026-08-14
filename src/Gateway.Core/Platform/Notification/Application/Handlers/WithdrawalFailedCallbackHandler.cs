@@ -45,10 +45,10 @@ public sealed class WithdrawalFailedCallbackHandler(
     private static string BuildPayload(WithdrawalFailed e) =>
         JsonSerializer.Serialize(new
         {
-            transactionId = e.IdempotencyKey,
+            transactionId = e.MerchantTransactionId,
             data = new
             {
-                transactionId = e.IdempotencyKey,
+                transactionId = e.MerchantTransactionId,
                 referenceNo = e.WithdrawalId,
                 type = "withdraw",
                 status = "failed",

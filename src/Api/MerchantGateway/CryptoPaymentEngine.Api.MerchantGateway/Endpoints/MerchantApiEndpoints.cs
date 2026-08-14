@@ -71,7 +71,15 @@ public static class MerchantApiEndpoints
                 MerchantId(http), asset.AssetId, asset.Chain, request.ToAddress, amount, request.TransactionId, request.CallbackUrl),
             http.RequestAborted);
         if (result.IsFailure)
-            return Fail(StatusCodes.Status400BadRequest, result.Error!.Message);
+        {
+            // Only a duplicate transactionId escalates to 409 — a resent request must not create a second
+            // payout (mirrors /deposit). Every other withdrawal failure keeps its existing 400 so the frozen
+            // partner error contract is unchanged. Code mirrors WithdrawalErrors.DuplicateReference.
+            var status = result.Error!.Code == "withdrawal.duplicate_reference"
+                ? StatusCodes.Status409Conflict
+                : StatusCodes.Status400BadRequest;
+            return Fail(status, result.Error!.Message);
+        }
 
         return Results.Ok(ApiResponse.Ok(new
         {

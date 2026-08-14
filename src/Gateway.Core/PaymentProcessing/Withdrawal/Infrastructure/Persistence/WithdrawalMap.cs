@@ -23,7 +23,7 @@ public sealed class WithdrawalMap : IEntityTypeConfiguration<WithdrawalEntity>
         builder.Property(w => w.Amount).IsRequired();
         builder.Property(w => w.Fee).IsRequired();
 
-        builder.Property(w => w.IdempotencyKey).IsUnicode(false).HasMaxLength(128).IsRequired();
+        builder.Property(w => w.MerchantTransactionId).IsUnicode(false).HasMaxLength(128).IsRequired();
         builder.Property(w => w.CallbackUrl).HasMaxLength(512);
         // 24, not 16: the funding-hold statuses ("AwaitingFunds"/"AwaitingRelease") are longer than the
         // original lifecycle names, and the extra headroom keeps future statuses from silently truncating.
@@ -54,10 +54,11 @@ public sealed class WithdrawalMap : IEntityTypeConfiguration<WithdrawalEntity>
         // Append-heavy: non-clustered GUID PK + monotonic clustered Seq.
         builder.HasSeqClusteredIndex();
 
-        // Idempotency arbiter (§7.3): one withdrawal per client key per merchant.
-        builder.HasIndex(w => new { w.MerchantId, w.IdempotencyKey })
+        // Idempotency arbiter (§7.3): one withdrawal per (merchant, merchant transaction id) — a resent
+        // reference is rejected, never paid twice. The id is unique per merchant, not globally.
+        builder.HasIndex(w => new { w.MerchantId, w.MerchantTransactionId })
             .IsUnique()
-            .HasDatabaseName("UX_Withdrawal_Idempotency");
+            .HasDatabaseName("UX_Withdrawal_MerchantTxn");
 
         // Workers' working set: withdrawals in a given status.
         builder.HasIndex(w => w.Status).HasDatabaseName("IX_Withdrawal_Status");

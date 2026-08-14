@@ -13,7 +13,7 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
     {
         var withdrawal = await context.Withdrawals.AsNoTracking()
             .SingleOrDefaultAsync(
-                w => w.MerchantId == merchantId && w.IdempotencyKey == merchantTransactionId, cancellationToken);
+                w => w.MerchantId == merchantId && w.MerchantTransactionId == merchantTransactionId, cancellationToken);
 
         if (withdrawal is null)
             return null;
@@ -36,7 +36,7 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
         var query = context.Withdrawals.AsNoTracking()
             .Where(w => filter.MerchantId == null || w.MerchantId == filter.MerchantId)
             .Where(w => filter.SystemOrderNumber == null || w.Id == filter.SystemOrderNumber)
-            .Where(w => filter.MerchantOrderNumber == null || w.IdempotencyKey == filter.MerchantOrderNumber)
+            .Where(w => filter.MerchantOrderNumber == null || w.MerchantTransactionId == filter.MerchantOrderNumber)
             .Where(w => filter.ReceivingAddress == null || w.DestinationAddress == filter.ReceivingAddress)
             .Where(w => filter.Network == null || w.Chain == filter.Network)
             .Where(w => filter.AssetId == null || w.AssetId == filter.AssetId)
@@ -57,7 +57,7 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
     private static WithdrawalAdminRow ToAdminRow(WithdrawalEntity withdrawal) => new(
         withdrawal.MerchantId,
         withdrawal.Id,
-        withdrawal.IdempotencyKey,
+        withdrawal.MerchantTransactionId,
         withdrawal.Chain,
         withdrawal.AssetId,
         withdrawal.DestinationAddress,

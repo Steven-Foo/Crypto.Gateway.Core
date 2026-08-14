@@ -36,7 +36,7 @@ public sealed record WithdrawalAdminFilter(
 public sealed record WithdrawalAdminRow(
     Guid MerchantId,
     Guid WithdrawalId,
-    string IdempotencyKey,
+    string MerchantTransactionId,
     Chain Chain,
     Guid AssetId,
     string DestinationAddress,
@@ -48,9 +48,9 @@ public sealed record WithdrawalAdminRow(
 
 public interface IWithdrawalDirectory
 {
-    /// <summary>Looks up a withdrawal by the merchant's own idempotency key — the merchant-facing
+    /// <summary>Looks up a withdrawal by the merchant's own transaction id — the merchant-facing
     /// transaction-query endpoint's withdrawal-side lookup. Scoped to <paramref name="merchantId"/>: this
-    /// key is only unique per-merchant, never globally.</summary>
+    /// id is only unique per-merchant, never globally.</summary>
     Task<WithdrawalView?> FindByMerchantReferenceAsync(
         Guid merchantId, string merchantTransactionId, CancellationToken cancellationToken = default);
 

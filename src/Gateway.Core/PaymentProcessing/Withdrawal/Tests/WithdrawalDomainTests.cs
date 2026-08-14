@@ -56,7 +56,7 @@ public sealed class WithdrawalDomainTests
 
     [Theory]
     [InlineData("", "idem", "withdrawal.destination_required")]
-    [InlineData("TDest", "", "withdrawal.idempotency_key_required")]
+    [InlineData("TDest", "", "withdrawal.merchant_transaction_id_required")]
     public void Request_validates_required_fields(string destination, string idem, string expected) =>
         WithdrawalEntity.Request(Merchant, Asset, Chain.Tron, destination, Amount, Fee, idem, null, Now)
             .Error!.Code.ShouldBe(expected);
@@ -117,7 +117,7 @@ public sealed class WithdrawalDomainTests
         // The bug this closes: the merchant's callbackUrl (from the withdraw request) must reach the
         // event Notification schedules from — it must never be silently dropped.
         evt.CallbackUrl.ShouldBe("https://merchant.test/cb");
-        evt.IdempotencyKey.ShouldBe("idem-1");
+        evt.MerchantTransactionId.ShouldBe("idem-1");
         evt.DestinationAddress.ShouldBe("TDest");
     }
 
@@ -133,7 +133,7 @@ public sealed class WithdrawalDomainTests
         var evt = w.DomainEvents.OfType<WithdrawalFailed>().ShouldHaveSingleItem();
         evt.Reason.ShouldBe("signer unavailable");
         evt.CallbackUrl.ShouldBe("https://merchant.test/cb");
-        evt.IdempotencyKey.ShouldBe("idem-1");
+        evt.MerchantTransactionId.ShouldBe("idem-1");
     }
 
     [Fact]

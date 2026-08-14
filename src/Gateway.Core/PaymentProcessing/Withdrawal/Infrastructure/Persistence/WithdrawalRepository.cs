@@ -9,8 +9,8 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastr
 
 public sealed class WithdrawalRepository(WithdrawalDbContext context) : IWithdrawalRepository
 {
-    public Task<WithdrawalEntity?> FindByIdempotencyKeyAsync(Guid merchantId, string idempotencyKey, CancellationToken cancellationToken = default) =>
-        context.Withdrawals.SingleOrDefaultAsync(w => w.MerchantId == merchantId && w.IdempotencyKey == idempotencyKey, cancellationToken);
+    public Task<WithdrawalEntity?> FindByMerchantTransactionIdAsync(Guid merchantId, string merchantTransactionId, CancellationToken cancellationToken = default) =>
+        context.Withdrawals.SingleOrDefaultAsync(w => w.MerchantId == merchantId && w.MerchantTransactionId == merchantTransactionId, cancellationToken);
 
     public Task<WithdrawalEntity?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
         context.Withdrawals.SingleOrDefaultAsync(w => w.Id == id, cancellationToken);

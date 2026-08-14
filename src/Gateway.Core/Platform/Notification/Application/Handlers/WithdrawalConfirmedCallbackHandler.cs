@@ -53,10 +53,10 @@ public sealed class WithdrawalConfirmedCallbackHandler(
     private static string BuildPayload(WithdrawalConfirmed e, string currencyCode, int decimals) =>
         JsonSerializer.Serialize(new
         {
-            transactionId = e.IdempotencyKey,
+            transactionId = e.MerchantTransactionId,
             data = new
             {
-                transactionId = e.IdempotencyKey,
+                transactionId = e.MerchantTransactionId,
                 referenceNo = e.WithdrawalId,
                 txHash = e.TransactionHash,
                 type = "withdraw",

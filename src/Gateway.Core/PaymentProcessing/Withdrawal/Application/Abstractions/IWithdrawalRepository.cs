@@ -8,14 +8,14 @@ public enum WithdrawalRecordOutcome
 {
     Recorded = 1,
 
-    /// <summary>A withdrawal with the same <c>(MerchantId, IdempotencyKey)</c> already existed. Skipped.</summary>
+    /// <summary>A withdrawal with the same <c>(MerchantId, MerchantTransactionId)</c> already existed. Skipped.</summary>
     Duplicate = 2,
 }
 
 public interface IWithdrawalRepository
 {
     /// <summary>The idempotency arbiter: one withdrawal per client key per merchant (§7.3).</summary>
-    Task<WithdrawalEntity?> FindByIdempotencyKeyAsync(Guid merchantId, string idempotencyKey, CancellationToken cancellationToken = default);
+    Task<WithdrawalEntity?> FindByMerchantTransactionIdAsync(Guid merchantId, string merchantTransactionId, CancellationToken cancellationToken = default);
 
     Task<WithdrawalEntity?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
 

@@ -221,11 +221,11 @@ public sealed class WithdrawalNileDbFlowTests : IAsyncLifetime
             .CreditDepositAsync(new CreditDepositCommand(Guid.CreateVersion7(), Merchant, Asset, amount), Ct);
     }
 
-    private async Task<Result<WithdrawalResult>> RequestAsync(BigInteger amount, string idempotencyKey)
+    private async Task<Result<WithdrawalResult>> RequestAsync(BigInteger amount, string merchantTransactionId)
     {
         await using var scope = _provider.CreateAsyncScope();
         return await scope.ServiceProvider.GetRequiredService<IWithdrawalRequestService>()
-            .RequestAsync(new RequestWithdrawalCommand(Merchant, Asset, Chain.Tron, Env("CPE_NILE_TO")!, amount, idempotencyKey), Ct);
+            .RequestAsync(new RequestWithdrawalCommand(Merchant, Asset, Chain.Tron, Env("CPE_NILE_TO")!, amount, merchantTransactionId), Ct);
     }
 
     private async Task ProcessAsync()
