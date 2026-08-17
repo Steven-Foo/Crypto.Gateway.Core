@@ -11,7 +11,7 @@ The host has three tiers, decided purely by `ASPNETCORE_ENVIRONMENT`:
 |---|---|---|---|
 | **Development** (local) | throwaway signer via `Withdrawal:LiveTron` | Nile | on |
 | **Staging** (EC2) | throwaway signer via `Withdrawal:LiveTron` | Nile | on |
-| **Production** | **none** — a KMS-backed signer must be added first (not built yet) | mainnet | **off** |
+| **Production** | **none** unless `KeyManagement:Kms:Enabled` → the KMS-envelope signer (built; validate per [`kms-go-live.md`](kms-go-live.md)) | mainnet | **off** |
 
 `Development` and `Staging` are the **testnet tiers**. `Production` is a **hard wall**: it registers **no**
 key-loading signer, no in-memory secret provider, and no dev seeding. So **flipping
@@ -119,14 +119,18 @@ staging test merchant, and exposes Swagger at `/swagger`.
 
 When this box becomes production, in order:
 
-1. **Build + register a KMS/HSM-backed `ISigner`** (the real signer). Until it exists, Production withdrawal is
-   inert by design — the throwaway signer is *not* carried over.
+1. **Bring KMS custody live.** The KMS-envelope signer + provisioner are **built** — set
+   `KeyManagement:Kms:Enabled` with the two CMK ARNs and validate per **[`kms-go-live.md`](kms-go-live.md)** (an
+   EC2 instance role, no static keys). Enabling KMS is what registers the real signer + TRON tx-engine; until it
+   is enabled, Production withdrawal/sweep stay inert by design — the throwaway signer is *not* carried over.
 2. Set `ASPNETCORE_ENVIRONMENT=Production`. This alone disables the throwaway signer, the in-memory secret
    provider, dev seeding, Swagger, and `/dev/*` (fail-safe).
 3. Point `Chains:Tron:RpcBaseUrl` at **mainnet** and set `Blockchain:Assets` USDT to the **mainnet** contract.
 4. Provision **real merchants** through the Merchant module (no dev seed) and rotate the pepper/HMAC keys to
    production secrets held in a secret manager.
-5. Replace the dev HD-wallet provisioner with the KMS-backed one for deposit address provisioning.
+5. Deposit **address provisioning** switches to the KMS-backed provisioner automatically once
+   `KeyManagement:Kms:Enabled` is set (step 1) — no separate action; the dev in-memory provisioner is never
+   registered in Production.
 
 Everything else — the connection-string mechanism, the config layering, the module wiring — stays identical, so
 the transition is a change of *values and the signer*, not of code.
