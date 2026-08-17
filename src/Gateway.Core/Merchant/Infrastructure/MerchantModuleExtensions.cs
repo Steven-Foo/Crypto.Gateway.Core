@@ -41,6 +41,7 @@ public static class MerchantModuleExtensions
         services.AddScoped<IMerchantDirectory, MerchantDirectory>();
         services.AddScoped<IMerchantFeeSchedule, MerchantFeeSchedule>();
         services.AddScoped<IMerchantRegistrar, MerchantRegistrar>();
+        services.AddScoped<IMerchantAssetPolicyService, MerchantAssetPolicyService>();
         services.AddScoped<IMerchantAuthenticator, MerchantAuthenticator>();
 
         // Request-signing (§10): verify inbound gateway signatures / sign outbound callbacks without the

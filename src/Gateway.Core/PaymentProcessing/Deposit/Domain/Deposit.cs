@@ -29,6 +29,7 @@ public sealed class Deposit : Entity<Guid>
         Guid merchantId,
         Guid assetId,
         BigInteger amount,
+        BigInteger fee,
         string transactionHash,
         int outputIndex,
         long blockNumber,
@@ -42,6 +43,7 @@ public sealed class Deposit : Entity<Guid>
         MerchantId = merchantId;
         AssetId = assetId;
         Amount = amount;
+        Fee = fee;
         TransactionHash = transactionHash;
         OutputIndex = outputIndex;
         BlockNumber = blockNumber;
@@ -63,6 +65,16 @@ public sealed class Deposit : Entity<Guid>
     public Guid MerchantId { get; private set; }
     public Guid AssetId { get; private set; }
     public BigInteger Amount { get; private set; }
+
+    /// <summary>
+    /// The platform deposit fee (base units) snapshotted when the deposit was recorded — computed once from
+    /// the received amount against the merchant's schedule, then frozen. It is carried on
+    /// <see cref="DepositConfirmed"/>/<see cref="DepositOrphaned"/> so the Ledger books (and later reverses)
+    /// the exact same fee it was told, never re-deriving from a schedule that may since have changed (§14).
+    /// Zero for an unpriced merchant.
+    /// </summary>
+    public BigInteger Fee { get; private set; }
+
     public string TransactionHash { get; private set; } = null!;
     public int OutputIndex { get; private set; }
     public long BlockNumber { get; private set; }
@@ -100,6 +112,7 @@ public sealed class Deposit : Entity<Guid>
         Guid merchantId,
         Guid assetId,
         BigInteger amount,
+        BigInteger fee,
         string transactionHash,
         int outputIndex,
         long blockNumber,
@@ -116,13 +129,16 @@ public sealed class Deposit : Entity<Guid>
         if (amount <= BigInteger.Zero)
             return Result.Failure<Deposit>(DepositErrors.AmountNotPositive);
 
+        if (fee < BigInteger.Zero)
+            return Result.Failure<Deposit>(DepositErrors.FeeNegative);
+
         if (walletId == Guid.Empty || merchantId == Guid.Empty || assetId == Guid.Empty)
             return Result.Failure<Deposit>(DepositErrors.OwnerRequired);
 
         var status = policy.MeetsMinimum(amount) ? DepositStatus.Detected : DepositStatus.Ignored;
 
         return Result.Success(new Deposit(
-            Guid.CreateVersion7(), chain, address.Trim(), walletId, merchantId, assetId, amount,
+            Guid.CreateVersion7(), chain, address.Trim(), walletId, merchantId, assetId, amount, fee,
             transactionHash.Trim(), outputIndex, blockNumber, blockHash, status, now));
     }
 
@@ -144,7 +160,7 @@ public sealed class Deposit : Entity<Guid>
             Status = DepositStatus.Confirmed;
             ConfirmedAt = now;
             Raise(new DepositConfirmed(
-                Guid.CreateVersion7(), now, Id, WalletId, MerchantId, AssetId, AmountString, Chain, TransactionHash, OutputIndex, now));
+                Guid.CreateVersion7(), now, Id, WalletId, MerchantId, AssetId, AmountString, FeeString, Chain, TransactionHash, OutputIndex, now));
         }
 
         return Result.Success();
@@ -187,7 +203,7 @@ public sealed class Deposit : Entity<Guid>
         if (wasCredited)
         {
             Raise(new DepositOrphaned(
-                Guid.CreateVersion7(), now, Id, MerchantId, AssetId, AmountString, Chain, TransactionHash, OutputIndex, now));
+                Guid.CreateVersion7(), now, Id, MerchantId, AssetId, AmountString, FeeString, Chain, TransactionHash, OutputIndex, now));
         }
 
         return Result.Success();
@@ -195,4 +211,7 @@ public sealed class Deposit : Entity<Guid>
 
     /// <summary>Exact base-unit magnitude as an invariant integer string — lossless across the event transport (§14).</summary>
     private string AmountString => Amount.ToString(CultureInfo.InvariantCulture);
+
+    /// <summary>Exact fee magnitude as an invariant integer string — lossless across the event transport (§14).</summary>
+    private string FeeString => Fee.ToString(CultureInfo.InvariantCulture);
 }

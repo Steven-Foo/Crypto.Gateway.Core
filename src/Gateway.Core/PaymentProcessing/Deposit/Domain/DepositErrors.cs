@@ -13,6 +13,9 @@ public static class DepositErrors
     public static readonly Error AmountNotPositive =
         Error.Validation("deposit.amount_not_positive", "A deposit amount must be greater than zero.");
 
+    public static readonly Error FeeNegative =
+        Error.Validation("deposit.fee_negative", "A deposit fee cannot be negative.");
+
     public static readonly Error OwnerRequired =
         Error.Validation("deposit.owner_required", "A deposit must reference the owning wallet, merchant, and asset.");
 

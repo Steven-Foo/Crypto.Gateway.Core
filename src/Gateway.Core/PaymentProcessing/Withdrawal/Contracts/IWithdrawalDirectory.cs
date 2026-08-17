@@ -41,6 +41,7 @@ public sealed record WithdrawalAdminRow(
     Guid AssetId,
     string DestinationAddress,
     string AmountBaseUnits,
+    string FeeBaseUnits,
     string Status,
     string? StatusReason,
     int? Confirmations,

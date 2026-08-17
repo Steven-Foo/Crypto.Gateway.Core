@@ -73,11 +73,12 @@ public sealed class DepositToLedgerTests : IAsyncLifetime
     [Fact]
     public async Task A_confirmed_deposit_credits_the_merchant_in_the_ledger()
     {
-        await DetectAndConfirmAsync();
+        await DetectAndConfirmAsync(new NoFeeSchedule());
 
         var confirmed = await DequeueEventAsync<DepositConfirmed>("DepositConfirmed");
+        confirmed.FeeBaseUnits.ShouldBe("0"); // unpriced merchant ⇒ zero fee on the event
         await using (var ledger = LedgerContext())
-            await new DepositConfirmedHandler(Poster(ledger), new NoFeeSchedule()).HandleAsync(confirmed, Ct);
+            await new DepositConfirmedHandler(Poster(ledger)).HandleAsync(confirmed, Ct);
 
         (await MerchantBalanceAsync()).ShouldBe(Amount); // the deposit landed on the merchant's ledger balance
     }
@@ -85,12 +86,14 @@ public sealed class DepositToLedgerTests : IAsyncLifetime
     [Fact]
     public async Task A_confirmed_deposit_with_a_fee_credits_the_net_and_books_the_fee_as_revenue()
     {
-        await DetectAndConfirmAsync();
         var fee = BigInteger.Parse("6000");
+        await DetectAndConfirmAsync(new FixedDepositFeeSchedule(fee));
 
+        // The fee was snapshotted at detection and travels on the event — the Ledger books it, not re-derives.
         var confirmed = await DequeueEventAsync<DepositConfirmed>("DepositConfirmed");
+        confirmed.FeeBaseUnits.ShouldBe(fee.ToString());
         await using (var ledger = LedgerContext())
-            await new DepositConfirmedHandler(Poster(ledger), new FixedDepositFeeSchedule(fee)).HandleAsync(confirmed, Ct);
+            await new DepositConfirmedHandler(Poster(ledger)).HandleAsync(confirmed, Ct);
 
         (await MerchantBalanceAsync()).ShouldBe(Amount - fee);          // merchant nets gross − fee
         (await FeeRevenueBalanceAsync()).ShouldBe(fee);                 // platform keeps the fee as revenue
@@ -99,11 +102,11 @@ public sealed class DepositToLedgerTests : IAsyncLifetime
     [Fact]
     public async Task An_orphaned_deposit_reverses_the_credit_back_to_zero()
     {
-        await DetectAndConfirmAsync();
+        await DetectAndConfirmAsync(new NoFeeSchedule());
 
         var confirmed = await DequeueEventAsync<DepositConfirmed>("DepositConfirmed");
         await using (var ledger = LedgerContext())
-            await new DepositConfirmedHandler(Poster(ledger), new NoFeeSchedule()).HandleAsync(confirmed, Ct);
+            await new DepositConfirmedHandler(Poster(ledger)).HandleAsync(confirmed, Ct);
 
         // Reorg orphans the confirmed deposit → DepositOrphaned → Ledger reverses.
         var chain = _chain!;
@@ -113,14 +116,42 @@ public sealed class DepositToLedgerTests : IAsyncLifetime
 
         var orphaned = await DequeueEventAsync<DepositOrphaned>("DepositOrphaned");
         await using (var ledger = LedgerContext())
-            await new DepositOrphanedHandler(Poster(ledger), new NoFeeSchedule()).HandleAsync(orphaned, Ct);
+            await new DepositOrphanedHandler(Poster(ledger)).HandleAsync(orphaned, Ct);
 
         (await MerchantBalanceAsync()).ShouldBe(BigInteger.Zero);
     }
 
+    [Fact]
+    public async Task An_orphaned_deposit_with_a_fee_reverses_both_the_net_and_the_fee_to_zero()
+    {
+        // Proves the reorg-drift fix: the reversal uses the fee CARRIED on the event (snapshotted at
+        // detection), so both the merchant credit and the fee revenue unwind exactly — even if the
+        // merchant's schedule had since changed.
+        var fee = BigInteger.Parse("6000");
+        await DetectAndConfirmAsync(new FixedDepositFeeSchedule(fee));
+
+        var confirmed = await DequeueEventAsync<DepositConfirmed>("DepositConfirmed");
+        await using (var ledger = LedgerContext())
+            await new DepositConfirmedHandler(Poster(ledger)).HandleAsync(confirmed, Ct);
+        (await FeeRevenueBalanceAsync()).ShouldBe(fee);
+
+        var chain = _chain!;
+        chain.ReplaceBlock(Chain.Tron, 100, "h100_reorged");
+        await using (var ctx = DepositContext())
+            await Confirmation(ctx, chain).TrackOnceAsync(Chain.Tron, Ct);
+
+        var orphaned = await DequeueEventAsync<DepositOrphaned>("DepositOrphaned");
+        orphaned.FeeBaseUnits.ShouldBe(fee.ToString()); // the exact fee that was charged rides the reversal
+        await using (var ledger = LedgerContext())
+            await new DepositOrphanedHandler(Poster(ledger)).HandleAsync(orphaned, Ct);
+
+        (await MerchantBalanceAsync()).ShouldBe(BigInteger.Zero);
+        (await FeeRevenueBalanceAsync()).ShouldBe(BigInteger.Zero);
+    }
+
     private InMemoryChainSource? _chain;
 
-    private async Task DetectAndConfirmAsync()
+    private async Task DetectAndConfirmAsync(IMerchantFeeSchedule feeSchedule)
     {
         _chain = new InMemoryChainSource();
         var wallets = new StubWalletDirectory();
@@ -132,7 +163,7 @@ public sealed class DepositToLedgerTests : IAsyncLifetime
         {
             var priming = new DepositDetectionService(
                 _chain, _chain, wallets, new DepositRepository(ctx), new ScanCursorStore(ctx, TimeProvider.System),
-                new StubPolicy(), TimeProvider.System, NullLogger<DepositDetectionService>.Instance);
+                new StubPolicy(), feeSchedule, TimeProvider.System, NullLogger<DepositDetectionService>.Instance);
             await priming.ScanOnceAsync(Chain.Tron, Ct);
         }
 
@@ -143,7 +174,7 @@ public sealed class DepositToLedgerTests : IAsyncLifetime
         {
             var detection = new DepositDetectionService(
                 _chain, _chain, wallets, new DepositRepository(ctx), new ScanCursorStore(ctx, TimeProvider.System),
-                new StubPolicy(), TimeProvider.System, NullLogger<DepositDetectionService>.Instance);
+                new StubPolicy(), feeSchedule, TimeProvider.System, NullLogger<DepositDetectionService>.Instance);
             await detection.ScanOnceAsync(Chain.Tron, Ct);
         }
 

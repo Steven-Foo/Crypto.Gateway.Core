@@ -4,9 +4,11 @@
     <ProjectReference Include="../Domain/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Domain.csproj" />
     <ProjectReference Include="../Contracts/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Contracts.csproj" />
     <ProjectReference Include="../../../../SharedKernel/CryptoPaymentEngine.SharedKernel/CryptoPaymentEngine.SharedKernel.csproj" />
-    <!-- Consumes other modules' Contracts only (§4.5): Blockchain read-capabilities + Wallet ownership. -->
+    <!-- Consumes other modules' Contracts only (§4.5): Blockchain read-capabilities + Wallet ownership +
+         Merchant pricing (deposit fee is snapshotted at detection, then carried on the events). -->
     <ProjectReference Include="../../../Blockchain/Contracts/CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.csproj" />
     <ProjectReference Include="../../../AssetManagement/Wallet/Contracts/CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts.csproj" />
+    <ProjectReference Include="../../../Merchant/Contracts/CryptoPaymentEngine.Gateway.Core.Merchant.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -121,7 +121,7 @@ public sealed class OutboxDispatcherTests : IAsyncLifetime
         var context = scope.ServiceProvider.GetRequiredService<DepositDbContext>();
 
         var deposit = DepositEntity.Record(
-            Chain.Tron, "TAddr", Guid.CreateVersion7(), MerchantId, AssetId, Amount, "0xtx", 0, 100, "h100", policy, DateTimeOffset.UtcNow).Value;
+            Chain.Tron, "TAddr", Guid.CreateVersion7(), MerchantId, AssetId, Amount, BigInteger.Zero, "0xtx", 0, 100, "h100", policy, DateTimeOffset.UtcNow).Value;
         deposit.RegisterConfirmations(1, isFinalized: false, policy, DateTimeOffset.UtcNow); // → Confirmed, raises DepositConfirmed
 
         context.Deposits.Add(deposit);

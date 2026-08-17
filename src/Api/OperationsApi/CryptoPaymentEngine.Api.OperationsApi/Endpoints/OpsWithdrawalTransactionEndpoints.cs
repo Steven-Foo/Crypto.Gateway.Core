@@ -87,7 +87,8 @@ public static class OpsWithdrawalTransactionEndpoints
                 network = withdrawal.Chain.ToString(),
                 coin = asset?.Symbol ?? "",
                 expectedAmount = AmountConversion.ToDisplay(BigInteger.Parse(withdrawal.AmountBaseUnits), decimals),
-                fee = "0", // fee logic not implemented yet — hardcoded placeholder
+                // The per-merchant fee the merchant bore, snapshotted on the withdrawal at request (§14).
+                fee = AmountConversion.ToDisplay(BigInteger.Parse(withdrawal.FeeBaseUnits), decimals),
                 confirms = withdrawal.Confirmations,
                 type = "withdrawal",
                 createdAt = withdrawal.CreatedAt,

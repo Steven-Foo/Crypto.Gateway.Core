@@ -62,6 +62,7 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
         withdrawal.AssetId,
         withdrawal.DestinationAddress,
         withdrawal.Amount.ToString(CultureInfo.InvariantCulture),
+        withdrawal.Fee.ToString(CultureInfo.InvariantCulture),
         EffectiveStatus(withdrawal.Status),
         withdrawal.StatusReason,
         withdrawal.Confirmations,

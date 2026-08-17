@@ -546,6 +546,40 @@ decimal math). Both hosts' copies + their `Money/` folders were deleted; the 4 c
 (18 tests: precision-floor, over-precision-rejected-never-truncated, non-positive-rejected, lossless round-trip across
 6/9/18-dp) — SharedKernel's first unit-test project. Solution now **82 projects**.
 
+**Fee declaration path + symmetric deposit-fee snapshot (2026-08-17) — DONE, full suite green.** Closed the real
+gap that the [[hybrid-fee-model]] engine had no *write* path: `Merchant.SetAssetPolicy` (the only fee writer) had
+**zero production callers** (tests only), so every merchant was unpriced → `FeeSchedule.None` → **0 fee on every
+deposit and withdrawal** (the whole flat+% engine was correct but never invoked with a non-zero schedule; the
+platform earned no fee revenue). Also fixed the deposit/withdrawal fee **asymmetry** the user flagged (withdrawal
+snapshots its fee to a column; deposit had none — its fee lived only as a Ledger `FeeRevenue` posting line).
+**Three parts:**
+(1) **Declaration (the core):** new `Merchant.Application/IMerchantAssetPolicyService` (`SetFeesAsync` upsert +
+`ListAsync`), backed by `IMerchantRepository`; validation delegated to the domain `FeeSchedule`. New **Admin-only**
+Ops endpoints `PUT/GET /api/v1/ops/merchants/{id}/fees` (`OpsMerchantFeeEndpoints`) — the "fee declared in the UI"
+surface; display↔base only at the edge (§14; a zero fixed component is valid = pure-% pricing). **v1 is fees-only**:
+the policy's *limit* columns (`SweepThreshold`/`MinimumWithdrawal`/`MaximumWithdrawal`) are **recorded-but-unread**
+today (withdrawal min/max come from config `WithdrawalPolicy`, sweep from `Sweep:Policies`), so the service
+**preserves** existing limits rather than expose numbers the flows ignore — per-merchant limits + wiring them in are
+a deferred Platform-UI follow-up.
+(2) **Symmetric deposit fee (T3 — money-path + event-contract change):** `deposit.Deposit` gained a `Fee` column
+(migration `AddDepositFee`, `60-deposit.sql` regenerated — no QUOTED_IDENTIFIER header, its filtered indexes are
+EXEC-wrapped). The Deposit module now **computes the fee once at detection** (`DepositDetectionService` reads
+`IMerchantFeeSchedule` — Deposit.Application now refs Merchant.Contracts, §4.5, exactly as Withdrawal does at
+request), **snapshots it on the record**, and **carries it on `DepositConfirmed`/`DepositOrphaned`** (new
+backward-compatible `FeeBaseUnits`; a pre-fee in-flight event ⇒ null ⇒ 0). The **Ledger consumes the event's fee**
+instead of re-deriving (`DepositEventHandlers` no longer inject `IMerchantFeeSchedule`) — which also **fixes the
+documented reorg-reversal drift** (the reversal now mirrors the exact fee charged, the "Withdrawal-symmetric"
+fix the code's own comment named). Ledger split logic unchanged; the fee is data on the event, keeping the Ledger
+chain/pricing-agnostic. Fee value is identical to before (same `QuoteDepositFee(received)`), only computed earlier.
+(3) **Display:** `DepositSummaryView`/`WithdrawalAdminRow` gained `FeeBaseUnits`; the two Ops transaction screens now
+emit the **real** fee (deposit fee is null until a deposit matches the invoice) — the hardcoded `fee = "0"`
+placeholders are gone. **Dev:** `DevMerchantSeeder` now applies a sample `%` fee to every active asset (config
+`Merchant:DevSeed:{DepositFeeBps,WithdrawalFeeBps}`, default 100/50 bps; idempotent upsert; `IAssetCatalog` resolved
+softly so Merchant-only test hosts skip it) so the dev round-trip shows a non-zero split. **Deferred (agreed):**
+per-merchant limits + enforcement (Platform UI), a config platform-default fee for unpriced merchants, and a filled
+`Api.IntegrationTests`. New tests: `MerchantAssetPolicyServiceTests` + deposit fee snapshot/round-trip/reorg-fee-
+reversal proofs.
+
 Every other module in the map is a placeholder in this doc, not yet on disk — scaffold a module
 only when real feature work on it starts, creating only the layers it uses (§4.3).
 

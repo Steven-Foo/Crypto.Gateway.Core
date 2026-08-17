@@ -282,7 +282,7 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
 
     private static DepositConfirmed DepositTo(Guid walletId, string amountBaseUnits) =>
         new(Guid.CreateVersion7(), DateTimeOffset.UtcNow, Guid.CreateVersion7(), walletId, Merchant, Asset,
-            amountBaseUnits, Chain.Tron, "0x" + Guid.NewGuid().ToString("N"), 0, DateTimeOffset.UtcNow);
+            amountBaseUnits, "0", Chain.Tron, "0x" + Guid.NewGuid().ToString("N"), 0, DateTimeOffset.UtcNow);
 
     [Fact]
     public async Task A_reserved_busiest_wallet_is_skipped_in_favour_of_the_next_free_one()

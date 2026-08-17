@@ -25,6 +25,10 @@ public sealed class DepositLookup(DepositDbContext context) : IDepositLookup
 
         return deposits.ToDictionary(
             d => d.Id,
-            d => new DepositSummaryView(d.Id, d.Amount.ToString(CultureInfo.InvariantCulture), d.Confirmations));
+            d => new DepositSummaryView(
+                d.Id,
+                d.Amount.ToString(CultureInfo.InvariantCulture),
+                d.Fee.ToString(CultureInfo.InvariantCulture),
+                d.Confirmations));
     }
 }

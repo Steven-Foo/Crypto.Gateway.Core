@@ -19,8 +19,8 @@ public sealed class DepositDomainTests
     private static readonly DepositPolicy ThreeConfs = new(CreditStrategy.Confirmations, 3, BigInteger.Parse("1000"));
     private static readonly DepositPolicy Finality = new(CreditStrategy.Finalized, 0, BigInteger.Zero);
 
-    private static DepositEntity Record(BigInteger amount, DepositPolicy policy) =>
-        DepositEntity.Record(Chain.Tron, "TAddr", Wallet, Merchant, Asset, amount, "0xtx", 0, 100, "hash100", policy, Now).Value;
+    private static DepositEntity Record(BigInteger amount, DepositPolicy policy, BigInteger fee = default) =>
+        DepositEntity.Record(Chain.Tron, "TAddr", Wallet, Merchant, Asset, amount, fee, "0xtx", 0, 100, "hash100", policy, Now).Value;
 
     [Fact]
     public void An_amount_at_or_above_the_minimum_is_detected()
@@ -42,18 +42,40 @@ public sealed class DepositDomainTests
     [InlineData("", "0xtx", "deposit.address_required")]
     [InlineData("TAddr", "", "deposit.tx_hash_required")]
     public void Record_validates_required_fields(string address, string txHash, string expectedCode) =>
-        DepositEntity.Record(Chain.Tron, address, Wallet, Merchant, Asset, Amount, txHash, 0, 100, "h", ThreeConfs, Now)
+        DepositEntity.Record(Chain.Tron, address, Wallet, Merchant, Asset, Amount, BigInteger.Zero, txHash, 0, 100, "h", ThreeConfs, Now)
             .Error!.Code.ShouldBe(expectedCode);
 
     [Fact]
     public void Record_rejects_a_non_positive_amount() =>
-        DepositEntity.Record(Chain.Tron, "TAddr", Wallet, Merchant, Asset, BigInteger.Zero, "0xtx", 0, 100, "h", ThreeConfs, Now)
+        DepositEntity.Record(Chain.Tron, "TAddr", Wallet, Merchant, Asset, BigInteger.Zero, BigInteger.Zero, "0xtx", 0, 100, "h", ThreeConfs, Now)
             .Error!.Code.ShouldBe(DepositErrors.AmountNotPositive.Code);
 
     [Fact]
+    public void Record_rejects_a_negative_fee() =>
+        DepositEntity.Record(Chain.Tron, "TAddr", Wallet, Merchant, Asset, Amount, BigInteger.MinusOne, "0xtx", 0, 100, "h", ThreeConfs, Now)
+            .Error!.Code.ShouldBe(DepositErrors.FeeNegative.Code);
+
+    [Fact]
     public void Record_rejects_a_missing_owner() =>
-        DepositEntity.Record(Chain.Tron, "TAddr", Guid.Empty, Merchant, Asset, Amount, "0xtx", 0, 100, "h", ThreeConfs, Now)
+        DepositEntity.Record(Chain.Tron, "TAddr", Guid.Empty, Merchant, Asset, Amount, BigInteger.Zero, "0xtx", 0, 100, "h", ThreeConfs, Now)
             .Error!.Code.ShouldBe(DepositErrors.OwnerRequired.Code);
+
+    [Fact]
+    public void A_snapshotted_fee_is_carried_on_the_confirmation_event()
+    {
+        var fee = BigInteger.Parse("6000");
+        var deposit = Record(Amount, ThreeConfs, fee);
+        deposit.Fee.ShouldBe(fee);
+
+        deposit.RegisterConfirmations(confirmations: 3, isFinalized: false, ThreeConfs, Now);
+
+        var evt = deposit.DomainEvents.OfType<DepositConfirmed>().ShouldHaveSingleItem();
+        evt.FeeBaseUnits.ShouldBe(fee.ToString()); // the Ledger books exactly this, never re-derives
+
+        deposit.MarkOrphaned(Now.AddMinutes(1));
+        deposit.DomainEvents.OfType<DepositOrphaned>().ShouldHaveSingleItem()
+            .FeeBaseUnits.ShouldBe(fee.ToString()); // and the reversal mirrors it
+    }
 
     [Fact]
     public void Below_the_threshold_it_stays_detected_and_raises_nothing()

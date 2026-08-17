@@ -1,5 +1,6 @@
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
+using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Application.Abstractions;
 using CryptoPaymentEngine.SharedKernel;
 using Microsoft.Extensions.Logging;
@@ -20,6 +21,7 @@ public sealed class DepositDetectionService(
     IDepositRepository repository,
     IScanCursorStore cursors,
     IDepositPolicyProvider policies,
+    IMerchantFeeSchedule feeSchedule,
     TimeProvider timeProvider,
     ILogger<DepositDetectionService> logger)
 {
@@ -59,9 +61,15 @@ public sealed class DepositDetectionService(
             if (owner is null || !owner.IsActive || owner.MerchantId is null || owner.WalletType != "Deposit")
                 continue; // not a merchant deposit address — ignore (platform inflows are handled elsewhere)
 
+            // Price the deposit once, here, from the amount that actually arrived — the fee is then frozen on
+            // the record and carried on the confirmation/orphan events, so the Ledger books exactly this value
+            // and never re-derives from a schedule that could change during the confirmation wait (§14).
+            var fee = await feeSchedule.QuoteDepositFeeAsync(
+                owner.MerchantId.Value, transfer.AssetId, transfer.Amount, cancellationToken);
+
             var deposit = DepositEntity.Record(
                 transfer.Chain, transfer.Address, owner.WalletId, owner.MerchantId.Value, transfer.AssetId,
-                transfer.Amount, transfer.TransactionHash, transfer.OutputIndex, transfer.BlockNumber, transfer.BlockHash,
+                transfer.Amount, fee, transfer.TransactionHash, transfer.OutputIndex, transfer.BlockNumber, transfer.BlockHash,
                 policy, timeProvider.GetUtcNow());
 
             if (deposit.IsFailure)

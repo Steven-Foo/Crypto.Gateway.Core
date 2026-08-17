@@ -32,4 +32,13 @@ public sealed class DevMerchantSeedOptions
 
     /// <summary>The HMAC key the client signs with — 64 lower-case hex chars (a 32-byte key), matching the partner scheme.</summary>
     public string SigningSecret { get; init; } = string.Empty;
+
+    /// <summary>DEV sample pricing so the round-trip shows a <b>non-zero</b> fee. Deposit percentage in basis
+    /// points (1bp = 0.01%; e.g. 100 = 1%), applied to every active asset on the seeded merchant. Zero (the
+    /// default) leaves the merchant unpriced — the real Ops fee endpoint is the production path. Fixed
+    /// components are intentionally not seeded here (set them via the Ops endpoint if you want to demo them).</summary>
+    public int DepositFeeBps { get; init; }
+
+    /// <summary>DEV sample withdrawal percentage in basis points. See <see cref="DepositFeeBps"/>.</summary>
+    public int WithdrawalFeeBps { get; init; }
 }

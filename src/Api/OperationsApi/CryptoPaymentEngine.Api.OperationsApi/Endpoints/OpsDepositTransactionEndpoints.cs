@@ -96,7 +96,9 @@ public static class OpsDepositTransactionEndpoints
                 coin = asset?.Symbol ?? "",
                 expectedAmount = AmountConversion.ToDisplay(BigInteger.Parse(intent.ExpectedAmountBaseUnits), decimals),
                 receivedAmount = matched is null ? (decimal?)null : AmountConversion.ToDisplay(BigInteger.Parse(matched.AmountBaseUnits), decimals),
-                fee = "0", // fee logic not implemented yet — hardcoded placeholder
+                // The platform fee actually charged, snapshotted on the matched deposit at detection (§14). Null
+                // until a deposit matches this invoice — no deposit, no fee charged yet.
+                fee = matched is null ? (decimal?)null : AmountConversion.ToDisplay(BigInteger.Parse(matched.FeeBaseUnits), decimals),
                 confirms = matched?.Confirmations,
                 type = "deposit",
                 createdAt = intent.CreatedAt,

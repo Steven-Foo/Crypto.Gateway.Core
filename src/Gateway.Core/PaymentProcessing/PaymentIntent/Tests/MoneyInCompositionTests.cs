@@ -135,7 +135,7 @@ public sealed class MoneyInCompositionTests : IAsyncLifetime
         // One confirmed deposit, published as the Deposit outbox would.
         var deposit = new DepositConfirmed(
             Guid.CreateVersion7(), now, DepositId: Guid.CreateVersion7(), walletId, Merchant, Asset,
-            AmountBaseUnits: "1000000", Chain.Tron, TransactionHash: "0xdeadbeef", OutputIndex: 0, ConfirmedAt: now);
+            AmountBaseUnits: "1000000", FeeBaseUnits: "0", Chain.Tron, TransactionHash: "0xdeadbeef", OutputIndex: 0, ConfirmedAt: now);
 
         await using (var scope = _provider.CreateAsyncScope())
             await scope.ServiceProvider.GetRequiredService<IEventBus>().PublishAsync(deposit, Ct);

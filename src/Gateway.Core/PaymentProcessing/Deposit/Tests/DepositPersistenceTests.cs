@@ -58,6 +58,23 @@ public sealed class DepositPersistenceTests : DepositTestHost
     }
 
     [Fact]
+    public async Task Detection_snapshots_the_deposit_fee_on_the_record()
+    {
+        var fee = BigInteger.Parse("6000");
+        var chain = new InMemoryChainSource();
+        chain.AddBlock(Chain.Tron, 99, "h99"); // prime past cold start
+        await using (var ctx = Context())
+            await Detection(ctx, chain, WalletsWithWatchedAddress(), Policy, new FixedFeeSchedule(fee)).ScanOnceAsync(Chain.Tron, Ct);
+
+        chain.AddBlock(Chain.Tron, 100, "h100", Transfer(OneUsdt, 100, "h100"));
+        await using (var ctx = Context())
+            await Detection(ctx, chain, WalletsWithWatchedAddress(), Policy, new FixedFeeSchedule(fee)).ScanOnceAsync(Chain.Tron, Ct);
+
+        await using var verify = Context();
+        (await verify.Deposits.SingleAsync(Ct)).Fee.ShouldBe(fee); // priced at detection, round-trips through SQL
+    }
+
+    [Fact]
     public async Task Cold_start_seeds_the_cursor_to_the_current_tip_instead_of_crawling_from_genesis()
     {
         // Simulate a chain far into its history (a real chain's tip is never near block 1) with a transfer
@@ -106,9 +123,9 @@ public sealed class DepositPersistenceTests : DepositTestHost
     public async Task The_same_on_chain_output_is_recorded_only_once()
     {
         var deposit = DepositEntity.Record(
-            Chain.Tron, Address, WalletId, MerchantId, AssetId, OneUsdt, "0xdup", 0, 100, "h100", Policy, DateTimeOffset.UtcNow).Value;
+            Chain.Tron, Address, WalletId, MerchantId, AssetId, OneUsdt, BigInteger.Zero, "0xdup", 0, 100, "h100", Policy, DateTimeOffset.UtcNow).Value;
         var again = DepositEntity.Record(
-            Chain.Tron, Address, WalletId, MerchantId, AssetId, OneUsdt, "0xdup", 0, 100, "h100", Policy, DateTimeOffset.UtcNow).Value;
+            Chain.Tron, Address, WalletId, MerchantId, AssetId, OneUsdt, BigInteger.Zero, "0xdup", 0, 100, "h100", Policy, DateTimeOffset.UtcNow).Value;
 
         await using var ctx = Context();
         var repo = new DepositRepository(ctx);

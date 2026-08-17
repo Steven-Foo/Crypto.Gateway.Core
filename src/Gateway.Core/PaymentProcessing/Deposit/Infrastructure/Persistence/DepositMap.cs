@@ -24,6 +24,10 @@ public sealed class DepositMap : IEntityTypeConfiguration<DepositEntity>
         // BigInteger -> decimal(38,0) via UseBigIntegerMoney. Unsigned base units.
         builder.Property(d => d.Amount).IsRequired();
 
+        // The platform deposit fee snapshotted at detection (base units). NOT NULL, default 0 — existing
+        // rows were all unpriced, and an unpriced deposit is a zero-fee deposit. BigInteger → decimal(38,0).
+        builder.Property(d => d.Fee).IsRequired().HasDefaultValueSql("0");
+
         builder.Property(d => d.TransactionHash).IsUnicode(false).HasMaxLength(128).IsRequired();
         builder.Property(d => d.OutputIndex).IsRequired();
         builder.Property(d => d.BlockNumber).IsRequired();

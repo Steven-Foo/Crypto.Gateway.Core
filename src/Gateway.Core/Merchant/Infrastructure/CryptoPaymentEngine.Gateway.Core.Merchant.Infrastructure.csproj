@@ -4,6 +4,8 @@
     <ProjectReference Include="../Application/CryptoPaymentEngine.Gateway.Core.Merchant.Application.csproj" />
     <ProjectReference Include="../Contracts/CryptoPaymentEngine.Gateway.Core.Merchant.Contracts.csproj" />
     <ProjectReference Include="../Domain/CryptoPaymentEngine.Gateway.Core.Merchant.Domain.csproj" />
+    <!-- Blockchain.Contracts (§4.5): the dev merchant seeder resolves active assets to price a sample fee. -->
+    <ProjectReference Include="../../Blockchain/Contracts/CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.csproj" />
     <ProjectReference Include="../../../SharedKernel/CryptoPaymentEngine.SharedKernel/CryptoPaymentEngine.SharedKernel.csproj" />
     <ProjectReference Include="../../../Infrastructure/CryptoPaymentEngine.Infrastructure/CryptoPaymentEngine.Infrastructure.csproj" />
   </ItemGroup>

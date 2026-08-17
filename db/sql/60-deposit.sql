@@ -197,3 +197,24 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [deposit].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260817095208_AddDepositFee'
+)
+BEGIN
+    ALTER TABLE [deposit].[Deposit] ADD [Fee] decimal(38,0) NOT NULL DEFAULT (0);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [deposit].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260817095208_AddDepositFee'
+)
+BEGIN
+    INSERT INTO [deposit].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260817095208_AddDepositFee', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

@@ -91,6 +91,7 @@ app.UseMiddleware<StaffBearerAuthMiddleware>();
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 app.MapOpsAuthApi();
 app.MapOpsMerchantApi();
+app.MapOpsMerchantFeeApi();
 app.MapOpsPaymentIntentApi();
 app.MapOpsTransactionApi();
 app.MapOpsDepositTransactionApi();
