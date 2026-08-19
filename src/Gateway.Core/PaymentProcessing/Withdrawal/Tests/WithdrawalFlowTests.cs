@@ -91,6 +91,8 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
         // Withdrawal + fakes
         services.AddScoped<IWithdrawalRepository, WithdrawalRepository>();
         services.AddScoped<IWithdrawalDirectory, WithdrawalDirectory>();
+        services.AddScoped<ILedgerQuery, LedgerQuery>();
+        services.AddScoped<SettledBalanceGate>();
         services.AddScoped<IWithdrawalRequestService, WithdrawalRequestService>();
         services.AddScoped<IWithdrawalApprovalService, WithdrawalApprovalService>();
         services.AddScoped<IWithdrawalFundingService, WithdrawalFundingService>();
@@ -104,6 +106,7 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
         services.AddScoped<IHotWalletAllocator, HotWalletAllocator>();
         services.AddSingleton<IMerchantDirectory>(new FakeMerchants());
         services.AddSingleton<IMerchantFeeSchedule>(new FakeFees(Fee));
+        services.AddSingleton<IMerchantWithdrawalLimits>(new UnsetWithdrawalLimits());
         services.AddSingleton<InMemoryTransactionEngine>();
         services.AddSingleton<ITransactionBuilder>(sp => sp.GetRequiredService<InMemoryTransactionEngine>());
         services.AddSingleton<ITransactionBroadcaster>(sp => sp.GetRequiredService<InMemoryTransactionEngine>());
@@ -593,6 +596,12 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
     }
 
     /// <summary>Per-merchant pricing: a flat withdrawal fee, matching this suite's expectations.</summary>
+    private sealed class UnsetWithdrawalLimits : IMerchantWithdrawalLimits
+    {
+        public Task<MerchantWithdrawalLimits> GetAsync(Guid merchantId, Guid assetId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(MerchantWithdrawalLimits.None);
+    }
+
     private sealed class FakeFees(BigInteger withdrawalFee) : IMerchantFeeSchedule
     {
         public Task<BigInteger> QuoteDepositFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>

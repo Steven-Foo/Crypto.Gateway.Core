@@ -1,8 +1,4 @@
-﻿SET QUOTED_IDENTIFIER ON;
-SET ANSI_NULLS ON;
-GO
-
-IF OBJECT_ID(N'[withdrawal].[__EFMigrationsHistory]') IS NULL
+﻿IF OBJECT_ID(N'[withdrawal].[__EFMigrationsHistory]') IS NULL
 BEGIN
     IF SCHEMA_ID(N'withdrawal') IS NULL EXEC(N'CREATE SCHEMA [withdrawal];');
     CREATE TABLE [withdrawal].[__EFMigrationsHistory] (
@@ -297,6 +293,43 @@ IF NOT EXISTS (
 BEGIN
     INSERT INTO [withdrawal].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
     VALUES (N'20260814080834_RenameWithdrawalIdempotencyKeyToMerchantTransactionId', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260818061933_AddWithdrawalKind'
+)
+BEGIN
+    DROP INDEX [UX_Withdrawal_MerchantTxn] ON [withdrawal].[Withdrawal];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260818061933_AddWithdrawalKind'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [Kind] nvarchar(16) NOT NULL DEFAULT ('User');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260818061933_AddWithdrawalKind'
+)
+BEGIN
+    CREATE UNIQUE INDEX [UX_Withdrawal_MerchantTxn] ON [withdrawal].[Withdrawal] ([MerchantId], [Kind], [MerchantTransactionId]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260818061933_AddWithdrawalKind'
+)
+BEGIN
+    INSERT INTO [withdrawal].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260818061933_AddWithdrawalKind', N'10.0.9');
 END;
 
 COMMIT;

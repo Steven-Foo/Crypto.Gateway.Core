@@ -1,12 +1,14 @@
 using System.Numerics;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Application;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Domain;
+using CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Security;
 using CryptoPaymentEngine.Infrastructure.Persistence.Money;
 using CryptoPaymentEngine.SharedKernel;
 using Microsoft.Data.SqlClient;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Shouldly;
 using Xunit;
@@ -332,6 +334,70 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
                 [merchantId], Ct));
 
             exception.Message.ShouldContain("CK_MerchantAssetPolicy_NonNegative");
+        }
+    }
+
+    // ── Platform-default fee (unpriced merchants) ─────────────────────────────
+
+    private static MerchantFeeSchedule NewFeeSchedule(MerchantDbContext context, int depositBps = 0, int withdrawalBps = 0) =>
+        new(context, new MerchantDefaultFee(
+            Options.Create(new MerchantDefaultFeeOptions { DepositFeeBps = depositBps, WithdrawalFeeBps = withdrawalBps }),
+            NullLogger<MerchantDefaultFee>.Instance));
+
+    [Fact]
+    public async Task An_unpriced_merchant_is_charged_the_platform_default_fee()
+    {
+        var asset = Guid.CreateVersion7();
+        Guid merchantId;
+        await using (var context = NewContext())
+            merchantId = (await NewRegistrar(context).RegisterAsync("DEFFEE-1", "Acme", null, Ct)).Value.MerchantId;
+
+        await using (var verify = NewContext())
+        {
+            var fees = NewFeeSchedule(verify, withdrawalBps: 50); // 0.5% platform default
+            // No policy for the merchant ⇒ the default applies: 0.5% of 1,000,000 = 5,000.
+            (await fees.QuoteWithdrawalFeeAsync(merchantId, asset, new BigInteger(1_000_000), Ct))
+                .ShouldBe(new BigInteger(5_000));
+        }
+    }
+
+    [Fact]
+    public async Task An_explicit_fee_overrides_the_platform_default()
+    {
+        var asset = Guid.CreateVersion7();
+        Guid merchantId;
+        await using (var context = NewContext())
+            merchantId = (await NewRegistrar(context).RegisterAsync("DEFFEE-2", "Acme", null, Ct)).Value.MerchantId;
+
+        await using (var context = NewContext())
+        {
+            var merchant = await context.Merchants.Include(m => m.AssetPolicies).SingleAsync(m => m.Id == merchantId, Ct);
+            merchant.SetAssetPolicy(asset, BigInteger.Zero, null, null, FeeSchedule.Create(0, 0, 0, 100).Value, DateTimeOffset.UtcNow);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using (var verify = NewContext())
+        {
+            var fees = NewFeeSchedule(verify, withdrawalBps: 50); // default 0.5% would give 5,000...
+            // ...but the merchant's own 1% fee wins: 1% of 1,000,000 = 10,000.
+            (await fees.QuoteWithdrawalFeeAsync(merchantId, asset, new BigInteger(1_000_000), Ct))
+                .ShouldBe(new BigInteger(10_000));
+        }
+    }
+
+    [Fact]
+    public async Task With_no_configured_default_an_unpriced_merchant_stays_free()
+    {
+        var asset = Guid.CreateVersion7();
+        Guid merchantId;
+        await using (var context = NewContext())
+            merchantId = (await NewRegistrar(context).RegisterAsync("DEFFEE-3", "Acme", null, Ct)).Value.MerchantId;
+
+        await using (var verify = NewContext())
+        {
+            var fees = NewFeeSchedule(verify); // 0/0 = no platform default
+            (await fees.QuoteWithdrawalFeeAsync(merchantId, asset, new BigInteger(1_000_000), Ct))
+                .ShouldBe(BigInteger.Zero);
         }
     }
 

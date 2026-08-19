@@ -37,6 +37,19 @@ public interface ILedgerQuery
     Task<BigInteger> GetMerchantBalanceAsync(Guid merchantId, Guid assetId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// The merchant's <em>settled</em> (withdrawable) balance for one asset, in base units — the available
+    /// balance minus the deposit inflow that has not yet matured past the merchant's settlement period (T+N).
+    /// A deposit whose journal is dated on/after <paramref name="unmaturedCutoffUtc"/> is still maturing and is
+    /// excluded; everything older is settled and withdrawable. Computed as the authoritative cache balance
+    /// minus the net (credit − debit) of the merchant's liability line across <c>Deposit</c>/<c>DepositReversal</c>
+    /// journals in the unmatured window — so releases, reversals and fees already folded into the cache stay
+    /// correct, and a deposit plus its reorg-reversal (both recent) net to zero. Clamped at zero; never negative,
+    /// and always ≤ <see cref="GetMerchantBalanceAsync"/> for the same merchant/asset.
+    /// </summary>
+    Task<BigInteger> GetMerchantSettledBalanceAsync(
+        Guid merchantId, Guid assetId, DateTimeOffset unmaturedCutoffUtc, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// The ledger's total on-chain holding for one asset, in base units — the balance of the platform's
     /// <c>TreasuryAsset</c> account. This is the ledger's <em>claim</em> of how much of the asset it custodies
     /// across every address it controls: it rises by the gross of every confirmed deposit and falls by every

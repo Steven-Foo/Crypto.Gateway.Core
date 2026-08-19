@@ -34,7 +34,7 @@ public sealed class MerchantAssetPolicyServiceTests
     }
 
     [Fact]
-    public async Task Setting_a_fee_for_a_new_asset_prices_it_with_zero_limits()
+    public async Task Setting_a_fee_for_a_new_asset_prices_it_with_unset_limits()
     {
         var merchant = ActiveMerchant();
         var (service, repo) = Compose(merchant);
@@ -49,9 +49,60 @@ public sealed class MerchantAssetPolicyServiceTests
         policy.DepositFeeBps.ShouldBe(100);
         policy.WithdrawalFee.ShouldBe(new BigInteger(3));
         policy.WithdrawalFeeBps.ShouldBe(50);
-        policy.SweepThreshold.ShouldBe(BigInteger.Zero);   // benign defaults — v1 sets price, not limits
-        policy.MinimumWithdrawal.ShouldBe(BigInteger.Zero);
+        policy.SweepThreshold.ShouldBe(BigInteger.Zero);   // benign default
+        policy.MinimumWithdrawal.ShouldBeNull();           // limits unset ⇒ the flow uses the config default
         policy.MaximumWithdrawal.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Setting_withdrawal_limits_persists_and_is_listed()
+    {
+        var merchant = ActiveMerchant();
+        var (service, repo) = Compose(merchant);
+
+        var result = await service.SetWithdrawalLimitsAsync(
+            merchant.Id, Asset, new BigInteger(1_000), new BigInteger(5_000_000), Ct);
+
+        result.IsSuccess.ShouldBeTrue();
+        repo.Saves.ShouldBe(1);
+        var policy = merchant.AssetPolicies.ShouldHaveSingleItem();
+        policy.MinimumWithdrawal.ShouldBe(new BigInteger(1_000));
+        policy.MaximumWithdrawal.ShouldBe(new BigInteger(5_000_000));
+
+        var view = (await service.ListAsync(merchant.Id, Ct)).Value.ShouldHaveSingleItem();
+        view.MinimumWithdrawal.ShouldBe("1000");
+        view.MaximumWithdrawal.ShouldBe("5000000");
+    }
+
+    [Fact]
+    public async Task Setting_limits_preserves_an_existing_fee_and_null_leaves_a_bound_unset()
+    {
+        var merchant = ActiveMerchant();
+        var (service, _) = Compose(merchant);
+        await service.SetFeesAsync(merchant.Id, Asset, new BigInteger(5), 100, new BigInteger(3), 50, Ct);
+
+        // Set only a maximum; minimum stays unset (null ⇒ config default).
+        await service.SetWithdrawalLimitsAsync(merchant.Id, Asset, null, new BigInteger(9_000), Ct);
+
+        var policy = merchant.AssetPolicies.ShouldHaveSingleItem();
+        policy.DepositFeeBps.ShouldBe(100);                 // fee untouched by a limits change
+        policy.WithdrawalFeeBps.ShouldBe(50);
+        policy.MinimumWithdrawal.ShouldBeNull();
+        policy.MaximumWithdrawal.ShouldBe(new BigInteger(9_000));
+    }
+
+    [Fact]
+    public async Task A_minimum_above_the_maximum_is_rejected_by_the_domain()
+    {
+        var merchant = ActiveMerchant();
+        var (service, repo) = Compose(merchant);
+
+        var result = await service.SetWithdrawalLimitsAsync(
+            merchant.Id, Asset, new BigInteger(1_000), new BigInteger(100), Ct);
+
+        result.IsFailure.ShouldBeTrue();
+        result.Error!.Code.ShouldBe(MerchantErrors.WithdrawalRangeInvalid.Code);
+        repo.Saves.ShouldBe(0);
     }
 
     [Fact]
@@ -129,6 +180,66 @@ public sealed class MerchantAssetPolicyServiceTests
         view.DepositFeeBps.ShouldBe(100);
         view.WithdrawalFee.ShouldBe("3");
         view.WithdrawalFeeBps.ShouldBe(50);
+    }
+
+    [Fact]
+    public async Task Setting_a_cash_out_cap_persists_and_is_listed()
+    {
+        var merchant = ActiveMerchant();
+        var (service, repo) = Compose(merchant);
+
+        var result = await service.SetMerchantWithdrawalCapAsync(merchant.Id, Asset, new BigInteger(1_000_000), 5000, Ct);
+
+        result.IsSuccess.ShouldBeTrue();
+        repo.Saves.ShouldBe(1);
+        var policy = merchant.AssetPolicies.ShouldHaveSingleItem();
+        policy.MerchantWithdrawalFlatCap.ShouldBe(new BigInteger(1_000_000));
+        policy.MerchantWithdrawalPercentBps.ShouldBe(5000);
+
+        var view = (await service.ListAsync(merchant.Id, Ct)).Value.ShouldHaveSingleItem();
+        view.MerchantWithdrawalFlatCap.ShouldBe("1000000");
+        view.MerchantWithdrawalPercentBps.ShouldBe(5000);
+    }
+
+    [Fact]
+    public async Task A_percent_only_cap_leaves_the_flat_cap_null()
+    {
+        var merchant = ActiveMerchant();
+        var (service, _) = Compose(merchant);
+
+        await service.SetMerchantWithdrawalCapAsync(merchant.Id, Asset, null, 2500, Ct);
+
+        var view = (await service.ListAsync(merchant.Id, Ct)).Value.ShouldHaveSingleItem();
+        view.MerchantWithdrawalFlatCap.ShouldBeNull();
+        view.MerchantWithdrawalPercentBps.ShouldBe(2500);
+    }
+
+    [Fact]
+    public async Task Setting_a_cap_preserves_an_existing_fee()
+    {
+        var merchant = ActiveMerchant();
+        var (service, _) = Compose(merchant);
+        await service.SetFeesAsync(merchant.Id, Asset, new BigInteger(5), 100, new BigInteger(3), 50, Ct);
+
+        await service.SetMerchantWithdrawalCapAsync(merchant.Id, Asset, null, 5000, Ct);
+
+        var policy = merchant.AssetPolicies.ShouldHaveSingleItem();
+        policy.DepositFeeBps.ShouldBe(100);                 // fee untouched by a cap change
+        policy.WithdrawalFeeBps.ShouldBe(50);
+        policy.MerchantWithdrawalPercentBps.ShouldBe(5000); // cap applied
+    }
+
+    [Fact]
+    public async Task An_out_of_range_cap_bps_is_rejected_by_the_domain()
+    {
+        var merchant = ActiveMerchant();
+        var (service, repo) = Compose(merchant);
+
+        var result = await service.SetMerchantWithdrawalCapAsync(merchant.Id, Asset, null, 10_001, Ct);
+
+        result.IsFailure.ShouldBeTrue();
+        result.Error!.Code.ShouldBe(MerchantErrors.WithdrawalCapBpsInvalid.Code);
+        repo.Saves.ShouldBe(0);
     }
 
     private sealed class FakeClock : TimeProvider

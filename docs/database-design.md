@@ -167,7 +167,8 @@ Unique: `(Chain, Symbol, ContractAddress)`.
 | MerchantCode | nvarchar(64) | unique |
 | Name | nvarchar(256) | |
 | CallbackUrl | nvarchar(512)? | webhook target |
-| Status | nvarchar(16) | Pending / Active / Suspended / Closed |
+| Status | nvarchar(16) | Pending / Active / Frozen / Closed (Frozen = reversible admin risk-hold; Activate unfreezes) |
+| SettlementDelayDays | int | Settlement period T+N in whole days (0 = T+0). Gates withdrawable balance. |
 | CreatedAt / UpdatedAt | datetimeoffset | |
 | RowVersion | rowversion | |
 

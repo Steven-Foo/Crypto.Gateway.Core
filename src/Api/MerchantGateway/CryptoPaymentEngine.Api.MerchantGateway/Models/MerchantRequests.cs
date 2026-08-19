@@ -33,3 +33,15 @@ public sealed class WithdrawRequest
     public decimal Amount { get; init; }
     [Required, Url] public string CallbackUrl { get; init; } = null!;
 }
+
+/// <summary>Merchant-withdrawal (earnings cash-out) request — the merchant pulling its own balance. There is
+/// deliberately <b>no destination</b>: funds always go to the merchant's pre-registered settlement wallet
+/// (§10). <see cref="Amount"/> is a display decimal.</summary>
+public sealed class MerchantWithdrawRequest
+{
+    [Required] public string PaymentMethod { get; init; } = "usdt";
+    [Required] public string TransactionId { get; init; } = null!;
+    [Required, Range(0.000001, double.MaxValue, ErrorMessage = "Amount must be greater than 0.")]
+    public decimal Amount { get; init; }
+    [Url] public string? CallbackUrl { get; init; }
+}

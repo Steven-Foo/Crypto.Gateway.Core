@@ -1,6 +1,22 @@
 namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Domain;
 
 /// <summary>
+/// What kind of money-out this is. Both kinds share the identical execution pipeline (reserve → sign →
+/// broadcast → confirm → settle) and ledger impact; they differ only in the <em>request</em> controls,
+/// destination, and reporting — so they're one aggregate with a discriminator, never mixed.
+/// </summary>
+public enum WithdrawalKind
+{
+    /// <summary>A payout the merchant creates, typically for its own end-user. Gated by the per-transaction
+    /// min/max withdrawal limits; destination is supplied per request.</summary>
+    User = 0,
+
+    /// <summary>The merchant cashing out its own accumulated earnings to its pre-registered settlement wallet.
+    /// Gated by a flat/% liquidity cap; destination is the whitelisted settlement address, not client-supplied.</summary>
+    Merchant = 1,
+}
+
+/// <summary>
 /// The withdrawal lifecycle. Funds are reserved in the ledger the moment a withdrawal is created;
 /// they leave custody only at <see cref="Confirmed"/>, and return to the merchant on
 /// <see cref="Rejected"/>/<see cref="Failed"/> (both pre-broadcast, so nothing left the chain).

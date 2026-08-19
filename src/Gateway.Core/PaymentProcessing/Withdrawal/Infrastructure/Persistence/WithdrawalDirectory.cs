@@ -11,9 +11,14 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
     public async Task<WithdrawalView?> FindByMerchantReferenceAsync(
         Guid merchantId, string merchantTransactionId, CancellationToken cancellationToken = default)
     {
+        // The merchant transaction-query endpoint is the (frozen) partner contract — it looks up USER payouts.
+        // Kind is in the filter so a merchant cash-out reusing the same reference can't turn this into a
+        // multiple-match (the idempotency key is unique only per (merchant, kind, reference)). Merchant cash-out
+        // lookup is a Phase-2 addition.
         var withdrawal = await context.Withdrawals.AsNoTracking()
             .SingleOrDefaultAsync(
-                w => w.MerchantId == merchantId && w.MerchantTransactionId == merchantTransactionId, cancellationToken);
+                w => w.MerchantId == merchantId && w.Kind == WithdrawalKind.User && w.MerchantTransactionId == merchantTransactionId,
+                cancellationToken);
 
         if (withdrawal is null)
             return null;
@@ -43,6 +48,12 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
             .Where(w => filter.FromDate == null || w.CreatedAt >= filter.FromDate)
             .Where(w => filter.ToDate == null || w.CreatedAt <= filter.ToDate);
 
+        // Optional kind filter ("User" | "Merchant"). An unrecognised value is ignored (no narrowing) — the host
+        // pre-validates the query param, so this is just defensive.
+        if (!string.IsNullOrWhiteSpace(filter.Kind)
+            && Enum.TryParse<WithdrawalKind>(filter.Kind, ignoreCase: true, out var kind))
+            query = query.Where(w => w.Kind == kind);
+
         var totalCount = await query.CountAsync(cancellationToken);
 
         var items = await query
@@ -66,7 +77,8 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
         EffectiveStatus(withdrawal.Status),
         withdrawal.StatusReason,
         withdrawal.Confirmations,
-        withdrawal.CreatedAt);
+        withdrawal.CreatedAt,
+        withdrawal.Kind.ToString());
 
     /// <summary>"pending" | "pending_approval" | "insufficient_balance" | "awaiting_release" | "confirmed" |
     /// "failed" — withdrawals have no "expired" state. The states that need a human, not the worker, to move

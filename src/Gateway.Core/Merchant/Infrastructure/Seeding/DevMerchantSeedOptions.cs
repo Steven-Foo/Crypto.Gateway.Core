@@ -41,4 +41,18 @@ public sealed class DevMerchantSeedOptions
 
     /// <summary>DEV sample withdrawal percentage in basis points. See <see cref="DepositFeeBps"/>.</summary>
     public int WithdrawalFeeBps { get; init; }
+
+    /// <summary>DEV: the merchant's settlement (cash-out) wallet address on TRON. When set, the seeder registers
+    /// it so the <b>merchant-withdrawal</b> (earnings cash-out) flow has a destination. Empty = not registered
+    /// (a cash-out then returns <c>settlement_wallet_not_registered</c>).</summary>
+    public string? SettlementAddress { get; init; }
+
+    /// <summary>DEV: merchant-withdrawal (cash-out) liquidity cap as a % of available balance, in basis points
+    /// (e.g. 5000 = 50%). 0 (default) = no cap, so the dev cash-out happy path can drain the full balance.</summary>
+    public int MerchantWithdrawalPercentBps { get; init; }
+
+    /// <summary>DEV: the merchant's settlement period (T+N) in whole days. 0 (default) = T+0 so deposits are
+    /// immediately withdrawable and the dev happy path isn't blocked. Set to 1/2 to demo the settled-balance
+    /// gate (a fresh deposit then can't be withdrawn until it matures). Max 30.</summary>
+    public int SettlementDelayDays { get; init; }
 }

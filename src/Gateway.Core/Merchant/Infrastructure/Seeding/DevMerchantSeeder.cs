@@ -2,6 +2,7 @@ using System.Numerics;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Domain;
+using CryptoPaymentEngine.SharedKernel;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -81,7 +82,7 @@ public sealed class DevMerchantSeeder(
             // DEV sample pricing so the round-trip shows a NON-ZERO fee. Idempotent upsert, applied whether the
             // merchant was just created or already existed. A no-op when no sample bps are configured, or when no
             // asset catalog is composed (e.g. a Merchant-only test host — resolved softly, never a hard dep).
-            await ApplySampleFeesAsync(scope, merchant, seed, now, cancellationToken);
+            await ApplyDevPolicyAsync(scope, merchant, seed, now, cancellationToken);
 
             await repository.SaveChangesAsync(cancellationToken);
 
@@ -108,37 +109,53 @@ public sealed class DevMerchantSeeder(
     }
 
     /// <summary>
-    /// Sets a sample <c>%</c> fee on every active asset for the seeded merchant, so the dev round-trip shows a
-    /// real fee split instead of the unpriced zero. Uses the same domain path as production
-    /// (<see cref="Domain.Merchant.SetAssetPolicy"/>) — validated, idempotent. Resolved softly: absent an asset
-    /// catalog (a Merchant-only test host) or a configured fee, it does nothing.
+    /// Applies the dev merchant's policy so the round-trip is testable: a sample <c>%</c> fee on every active
+    /// asset (so the split is non-zero), the settlement (cash-out) wallet, and an optional merchant-withdrawal
+    /// liquidity cap. Uses the same domain paths as production — validated, idempotent. Resolved softly: absent
+    /// an asset catalog (a Merchant-only test host) the fee/cap steps are skipped.
     /// </summary>
-    private async Task ApplySampleFeesAsync(
+    private async Task ApplyDevPolicyAsync(
         AsyncServiceScope scope, Domain.Merchant merchant, DevMerchantSeedOptions seed, DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        if (seed.DepositFeeBps <= 0 && seed.WithdrawalFeeBps <= 0)
+        // Settlement (cash-out) wallet — the Merchant Withdrawal destination. No asset catalog needed.
+        if (!string.IsNullOrWhiteSpace(seed.SettlementAddress))
+            merchant.SetSettlementWallet(Chain.Tron, seed.SettlementAddress.Trim(), now);
+
+        // Settlement period (T+N). Applied unconditionally so a re-seed reflects a changed config value;
+        // 0 (default) = T+0 so the dev happy path cashes out immediately.
+        merchant.SetSettlementDelay(seed.SettlementDelayDays, now);
+
+        var needsAssets = seed.DepositFeeBps > 0 || seed.WithdrawalFeeBps > 0 || seed.MerchantWithdrawalPercentBps > 0;
+        if (!needsAssets)
             return;
 
         var assetCatalog = scope.ServiceProvider.GetService<IAssetCatalog>();
         if (assetCatalog is null)
             return;
 
-        var fees = FeeSchedule.Create(BigInteger.Zero, seed.DepositFeeBps, BigInteger.Zero, seed.WithdrawalFeeBps);
-        if (fees.IsFailure)
+        var assets = await assetCatalog.GetActiveAsync(cancellationToken);
+
+        if (seed.DepositFeeBps > 0 || seed.WithdrawalFeeBps > 0)
         {
-            logger.LogWarning("Dev sample fee skipped: {Error}.", fees.Error!.Message);
-            return;
+            var fees = FeeSchedule.Create(BigInteger.Zero, seed.DepositFeeBps, BigInteger.Zero, seed.WithdrawalFeeBps);
+            if (fees.IsFailure)
+                logger.LogWarning("Dev sample fee skipped: {Error}.", fees.Error!.Message);
+            else
+                foreach (var asset in assets)
+                    merchant.SetAssetPolicy(asset.AssetId, BigInteger.Zero, null, null, fees.Value, now);
         }
 
-        var assets = await assetCatalog.GetActiveAsync(cancellationToken);
-        foreach (var asset in assets)
-            merchant.SetAssetPolicy(asset.AssetId, BigInteger.Zero, BigInteger.Zero, null, fees.Value, now);
+        if (seed.MerchantWithdrawalPercentBps > 0)
+            foreach (var asset in assets)
+                merchant.SetMerchantWithdrawalCap(asset.AssetId, null, seed.MerchantWithdrawalPercentBps, now);
 
         if (assets.Count > 0)
             logger.LogInformation(
-                "Priced dev merchant '{Code}' at {DepositBps}bps deposit / {WithdrawalBps}bps withdrawal on {AssetCount} asset(s).",
-                merchant.MerchantCode, seed.DepositFeeBps, seed.WithdrawalFeeBps, assets.Count);
+                "Applied dev merchant policy for '{Code}': {DepositBps}bps deposit / {WithdrawalBps}bps withdrawal fee, "
+                + "{CapBps}bps cash-out cap, settlement wallet {HasSettlement} on {AssetCount} asset(s).",
+                merchant.MerchantCode, seed.DepositFeeBps, seed.WithdrawalFeeBps, seed.MerchantWithdrawalPercentBps,
+                string.IsNullOrWhiteSpace(seed.SettlementAddress) ? "not set" : "set", assets.Count);
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;

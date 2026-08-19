@@ -9,8 +9,10 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastr
 
 public sealed class WithdrawalRepository(WithdrawalDbContext context) : IWithdrawalRepository
 {
-    public Task<WithdrawalEntity?> FindByMerchantTransactionIdAsync(Guid merchantId, string merchantTransactionId, CancellationToken cancellationToken = default) =>
-        context.Withdrawals.SingleOrDefaultAsync(w => w.MerchantId == merchantId && w.MerchantTransactionId == merchantTransactionId, cancellationToken);
+    public Task<WithdrawalEntity?> FindByMerchantTransactionIdAsync(
+        Guid merchantId, WithdrawalKind kind, string merchantTransactionId, CancellationToken cancellationToken = default) =>
+        context.Withdrawals.SingleOrDefaultAsync(
+            w => w.MerchantId == merchantId && w.Kind == kind && w.MerchantTransactionId == merchantTransactionId, cancellationToken);
 
     public Task<WithdrawalEntity?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default) =>
         context.Withdrawals.SingleOrDefaultAsync(w => w.Id == id, cancellationToken);
@@ -90,7 +92,7 @@ public sealed class WithdrawalRepository(WithdrawalDbContext context) : IWithdra
 
     private static bool IsIdempotencyViolation(DbUpdateException ex) =>
         ex.InnerException is SqlException { Number: 2601 or 2627 } sql
-        && sql.Message.Contains("UX_Withdrawal_Idempotency", StringComparison.Ordinal);
+        && sql.Message.Contains("UX_Withdrawal_MerchantTxn", StringComparison.Ordinal);
 
     private static bool IsSourceWalletConflict(DbUpdateException ex) =>
         ex.InnerException is SqlException { Number: 2601 or 2627 } sql

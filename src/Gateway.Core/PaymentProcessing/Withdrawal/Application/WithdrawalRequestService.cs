@@ -32,13 +32,15 @@ public sealed class WithdrawalRequestService(
     IWithdrawalPolicyProvider policies,
     IMerchantDirectory merchants,
     IMerchantFeeSchedule feeSchedule,
+    IMerchantWithdrawalLimits merchantLimits,
+    SettledBalanceGate settledBalance,
     IWithdrawalLedger ledger,
     TimeProvider timeProvider) : IWithdrawalRequestService
 {
     public async Task<Result<WithdrawalResult>> RequestAsync(RequestWithdrawalCommand command, CancellationToken cancellationToken = default)
     {
         var policy = policies.For(command.Chain);
-        var withdrawal = await repository.FindByMerchantTransactionIdAsync(command.MerchantId, command.MerchantTransactionId, cancellationToken);
+        var withdrawal = await repository.FindByMerchantTransactionIdAsync(command.MerchantId, WithdrawalKind.User, command.MerchantTransactionId, cancellationToken);
 
         // Reject a resent merchant transaction id — we never pay the same reference twice (the merchant may
         // resubmit after a timeout). The sole exception is a record still in Reserving: that is a crash/partial
@@ -55,10 +57,28 @@ public sealed class WithdrawalRequestService(
             if (merchant is null || !merchant.CanTransact)
                 return Result.Failure<WithdrawalResult>(WithdrawalErrors.MerchantCannotTransact);
 
-            if (policy.IsBelowMinimum(command.Amount))
+            // Per-merchant min/max override the platform config default when set; an unset (null) bound falls
+            // back to config. The merchant value fully overrides — staff can raise or lower a merchant's limits.
+            var limits = await merchantLimits.GetAsync(command.MerchantId, command.AssetId, cancellationToken);
+            var effectiveMinimum = limits.Minimum ?? policy.Minimum;
+            var effectiveMaximum = limits.Maximum ?? policy.Maximum;
+
+            if (command.Amount < effectiveMinimum)
                 return Result.Failure<WithdrawalResult>(WithdrawalErrors.BelowMinimum);
-            if (policy.ExceedsMaximum(command.Amount))
+            if (effectiveMaximum is { } max && command.Amount > max)
                 return Result.Failure<WithdrawalResult>(WithdrawalErrors.AboveMaximum);
+
+            // Settlement period (T+N): only funds matured past it may leave. Skipped entirely at T+0, where the
+            // ledger reserve is the sole balance guard (behaviour unchanged for merchants with no settlement
+            // period). Best-effort pre-check — the reserve below stays the atomic overdraw guard on the total
+            // balance (settled ≤ total, so a within-settled amount never fails the reserve for lack of funds).
+            if (merchant.SettlementDelayDays > 0)
+            {
+                var settled = await settledBalance.GetSettledAvailableAsync(
+                    command.MerchantId, command.AssetId, merchant.SettlementDelayDays, cancellationToken);
+                if (command.Amount > settled)
+                    return Result.Failure<WithdrawalResult>(WithdrawalErrors.ExceedsSettledBalance);
+            }
 
             // Pricing is per-merchant (fixed + %), resolved from the Merchant module — the source of truth,
             // superseding the config policy's flat fee. The merchant bears this fee; the platform bears gas.
@@ -75,7 +95,7 @@ public sealed class WithdrawalRequestService(
             {
                 // Lost a concurrent create race — adopt the winner. If it already advanced past Reserving it is
                 // a genuine duplicate; reject rather than return it, matching the resend rule above.
-                var winner = await repository.FindByMerchantTransactionIdAsync(command.MerchantId, command.MerchantTransactionId, cancellationToken)
+                var winner = await repository.FindByMerchantTransactionIdAsync(command.MerchantId, WithdrawalKind.User, command.MerchantTransactionId, cancellationToken)
                     ?? throw new DomainException("Duplicate withdrawal with no surviving record — impossible state.");
                 if (winner.Status != WithdrawalStatus.Reserving)
                     return Result.Failure<WithdrawalResult>(WithdrawalErrors.DuplicateReference);

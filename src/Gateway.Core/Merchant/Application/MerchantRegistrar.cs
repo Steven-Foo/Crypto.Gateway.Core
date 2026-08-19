@@ -20,9 +20,14 @@ public sealed record MerchantAdminView(
     string MerchantCode,
     string Name,
     string Status,
+    int SettlementDelayDays,
     DateTimeOffset CreatedAt,
     bool HasActiveCredential,
-    IReadOnlyList<string> AllowedIps);
+    IReadOnlyList<string> AllowedIps,
+    IReadOnlyList<MerchantSettlementWalletView> SettlementWallets);
+
+/// <summary>A merchant's whitelisted cash-out destination for a chain, for staff read-back.</summary>
+public sealed record MerchantSettlementWalletView(string Chain, string Address);
 
 public interface IMerchantRegistrar
 {
@@ -39,9 +44,18 @@ public interface IMerchantRegistrar
     /// </summary>
     Task<Result> ActivateAsync(Guid merchantId, CancellationToken cancellationToken = default);
 
-    /// <summary>Reversible — a suspended merchant can be Activated again. Matches APIGateway's
-    /// merchant status toggle, expressed against this project's richer status enum.</summary>
-    Task<Result> SuspendAsync(Guid merchantId, CancellationToken cancellationToken = default);
+    /// <summary>Admin risk-hold — blocks all transacting for the merchant. Reversible: <see cref="ActivateAsync"/>
+    /// unfreezes it. Matches APIGateway's merchant status toggle, expressed against this project's status enum.</summary>
+    Task<Result> FreezeAsync(Guid merchantId, CancellationToken cancellationToken = default);
+
+    /// <summary>Sets the merchant's settlement period (T+N) in whole days (0 = T+0). Gates the withdrawable
+    /// balance for BOTH user payouts and the merchant cash-out. The domain validates the 0–30 range.</summary>
+    Task<Result> SetSettlementDelayAsync(Guid merchantId, int days, CancellationToken cancellationToken = default);
+
+    /// <summary>Registers/updates the merchant's settlement (cash-out) wallet for a chain — the whitelisted
+    /// destination of a Merchant Withdrawal, never client-supplied (§10). One per chain.</summary>
+    Task<Result> SetSettlementWalletAsync(
+        Guid merchantId, Chain chain, string address, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// The "change password" equivalent for a merchant: merchants don't log in here, they authenticate by
@@ -117,13 +131,42 @@ public sealed class MerchantRegistrar(
         return Result.Success();
     }
 
-    public async Task<Result> SuspendAsync(Guid merchantId, CancellationToken cancellationToken = default)
+    public async Task<Result> FreezeAsync(Guid merchantId, CancellationToken cancellationToken = default)
     {
         var merchant = await repository.GetByIdAsync(merchantId, cancellationToken);
         if (merchant is null)
             return Result.Failure(MerchantErrors.NotFound);
 
-        var result = merchant.Suspend(timeProvider.GetUtcNow());
+        var result = merchant.Freeze(timeProvider.GetUtcNow());
+        if (result.IsFailure)
+            return result;
+
+        await repository.SaveChangesAsync(cancellationToken);
+        return Result.Success();
+    }
+
+    public async Task<Result> SetSettlementDelayAsync(Guid merchantId, int days, CancellationToken cancellationToken = default)
+    {
+        var merchant = await repository.GetByIdAsync(merchantId, cancellationToken);
+        if (merchant is null)
+            return Result.Failure(MerchantErrors.NotFound);
+
+        var result = merchant.SetSettlementDelay(days, timeProvider.GetUtcNow());
+        if (result.IsFailure)
+            return result;
+
+        await repository.SaveChangesAsync(cancellationToken);
+        return Result.Success();
+    }
+
+    public async Task<Result> SetSettlementWalletAsync(
+        Guid merchantId, Chain chain, string address, CancellationToken cancellationToken = default)
+    {
+        var merchant = await repository.GetByIdAsync(merchantId, cancellationToken);
+        if (merchant is null)
+            return Result.Failure(MerchantErrors.NotFound);
+
+        var result = merchant.SetSettlementWallet(chain, address, timeProvider.GetUtcNow());
         if (result.IsFailure)
             return result;
 
@@ -198,7 +241,9 @@ public sealed class MerchantRegistrar(
         merchant.MerchantCode,
         merchant.Name,
         merchant.Status.ToString(),
+        merchant.SettlementDelayDays,
         merchant.CreatedAt,
         merchant.Credentials.Any(c => c.IsActive),
-        merchant.Configuration.AllowedIps);
+        merchant.Configuration.AllowedIps,
+        merchant.SettlementWallets.Select(w => new MerchantSettlementWalletView(w.Chain.ToString(), w.Address)).ToList());
 }

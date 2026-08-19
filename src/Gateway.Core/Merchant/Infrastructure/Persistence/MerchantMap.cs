@@ -18,6 +18,7 @@ public sealed class MerchantMap : IEntityTypeConfiguration<Domain.Merchant>
         builder.Property(m => m.Name).HasMaxLength(256).IsRequired();
         builder.Property(m => m.CallbackUrl).HasMaxLength(512);
         builder.Property(m => m.Status).HasConversion<string>().HasMaxLength(16).IsRequired();
+        builder.Property(m => m.SettlementDelayDays).HasDefaultValue(0).IsRequired();
         builder.Property<byte[]>("RowVersion").IsRowVersion();
 
         builder.Ignore(m => m.CanTransact);
@@ -40,6 +41,10 @@ public sealed class MerchantMap : IEntityTypeConfiguration<Domain.Merchant>
             .FindNavigation(nameof(Domain.Merchant.AssetPolicies))!
             .SetPropertyAccessMode(PropertyAccessMode.Field);
 
+        builder.Metadata
+            .FindNavigation(nameof(Domain.Merchant.SettlementWallets))!
+            .SetPropertyAccessMode(PropertyAccessMode.Field);
+
         builder.HasMany(m => m.Credentials)
             .WithOne()
             .HasForeignKey(c => c.MerchantId)
@@ -48,6 +53,11 @@ public sealed class MerchantMap : IEntityTypeConfiguration<Domain.Merchant>
         builder.HasMany(m => m.AssetPolicies)
             .WithOne()
             .HasForeignKey(p => p.MerchantId)
+            .OnDelete(DeleteBehavior.Restrict);
+
+        builder.HasMany(m => m.SettlementWallets)
+            .WithOne()
+            .HasForeignKey(w => w.MerchantId)
             .OnDelete(DeleteBehavior.Restrict);
     }
 }

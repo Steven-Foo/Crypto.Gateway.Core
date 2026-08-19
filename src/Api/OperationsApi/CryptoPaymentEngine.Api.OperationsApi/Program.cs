@@ -92,6 +92,7 @@ app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 app.MapOpsAuthApi();
 app.MapOpsMerchantApi();
 app.MapOpsMerchantFeeApi();
+app.MapOpsMerchantSettlementApi();
 app.MapOpsPaymentIntentApi();
 app.MapOpsTransactionApi();
 app.MapOpsDepositTransactionApi();

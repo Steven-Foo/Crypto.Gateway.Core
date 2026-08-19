@@ -1,3 +1,4 @@
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Domain;
 using CryptoPaymentEngine.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
@@ -17,6 +18,10 @@ public sealed class WithdrawalMap : IEntityTypeConfiguration<WithdrawalEntity>
         builder.Property(w => w.MerchantId).IsRequired();
         builder.Property(w => w.AssetId).IsRequired();
         builder.Property(w => w.Chain).HasConversion<string>().HasMaxLength(16).IsRequired();
+
+        // User payout vs merchant earnings cash-out. Default 'User' — every pre-existing row is a user payout.
+        builder.Property(w => w.Kind).HasConversion<string>().HasMaxLength(16).IsRequired().HasDefaultValueSql("'User'");
+
         builder.Property(w => w.DestinationAddress).IsUnicode(false).HasMaxLength(128).IsRequired();
 
         // BigInteger -> decimal(38,0) via UseBigIntegerMoney. Unsigned base units.
@@ -54,9 +59,11 @@ public sealed class WithdrawalMap : IEntityTypeConfiguration<WithdrawalEntity>
         // Append-heavy: non-clustered GUID PK + monotonic clustered Seq.
         builder.HasSeqClusteredIndex();
 
-        // Idempotency arbiter (§7.3): one withdrawal per (merchant, merchant transaction id) — a resent
-        // reference is rejected, never paid twice. The id is unique per merchant, not globally.
-        builder.HasIndex(w => new { w.MerchantId, w.MerchantTransactionId })
+        // Idempotency arbiter (§7.3): one withdrawal per (merchant, kind, merchant transaction id) — a resent
+        // reference is rejected, never paid twice. Kind is in the key so user payouts and merchant cash-outs
+        // have SEPARATE id spaces (a merchant may reuse a reference across the two without colliding); the id is
+        // unique per merchant, not globally.
+        builder.HasIndex(w => new { w.MerchantId, w.Kind, w.MerchantTransactionId })
             .IsUnique()
             .HasDatabaseName("UX_Withdrawal_MerchantTxn");
 

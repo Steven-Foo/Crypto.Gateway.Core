@@ -66,7 +66,7 @@ public static class OpsMerchantEndpoints
     {
         var result = request.Active
             ? await registrar.ActivateAsync(id, http.RequestAborted)
-            : await registrar.SuspendAsync(id, http.RequestAborted);
+            : await registrar.FreezeAsync(id, http.RequestAborted);
 
         if (result.IsFailure)
             return Results.Json(new { isSuccess = false, error = result.Error!.Message }, statusCode: StatusCodes.Status400BadRequest);

@@ -25,6 +25,7 @@ public static class MerchantApiEndpoints
         var group = app.MapGroup("/api/v1");
         group.MapPost("/deposit", DepositAsync);
         group.MapPost("/withdraw", WithdrawAsync);
+        group.MapPost("/merchant-withdraw", MerchantWithdrawAsync);
         group.MapPost("/balance", BalanceAsync);
         group.MapPost("/transactions/query", TransactionQueryAsync);
     }
@@ -88,6 +89,42 @@ public static class MerchantApiEndpoints
             amount = request.Amount,
             tokenType = asset.Symbol,
             toAddress = request.ToAddress,
+            status = MapWithdrawalStatus(result.Value.Status),
+        }));
+    }
+
+    /// <summary>
+    /// The merchant cashing out its own earnings to its pre-registered settlement wallet (a Merchant
+    /// Withdrawal). No destination is accepted — it is resolved server-side (§10). Gated by the flat/%
+    /// liquidity cap, not the user min/max; charges the same withdrawal fee. Duplicate reference ⇒ 409.
+    /// </summary>
+    private static async Task<IResult> MerchantWithdrawAsync(
+        MerchantWithdrawRequest request, HttpContext http, IAssetCatalog assets, IMerchantWithdrawalService merchantWithdrawals)
+    {
+        var asset = await assets.FindAsync(Chain.Tron, SymbolFor(request.PaymentMethod), http.RequestAborted);
+        if (asset is null)
+            return Fail(StatusCodes.Status400BadRequest, "Unsupported payment method.");
+
+        if (!AmountConversion.TryToBaseUnits(request.Amount, asset.Decimals, out var amount))
+            return Fail(StatusCodes.Status400BadRequest, "Invalid amount for this asset's precision.");
+
+        var result = await merchantWithdrawals.RequestAsync(
+            new MerchantWithdrawalCommand(MerchantId(http), asset.AssetId, asset.Chain, amount, request.TransactionId, request.CallbackUrl),
+            http.RequestAborted);
+        if (result.IsFailure)
+        {
+            var status = result.Error!.Code == "withdrawal.duplicate_reference"
+                ? StatusCodes.Status409Conflict
+                : StatusCodes.Status400BadRequest;
+            return Fail(status, result.Error!.Message);
+        }
+
+        return Results.Ok(ApiResponse.Ok(new
+        {
+            referenceNo = result.Value.WithdrawalId,
+            txHash = (string?)null,
+            amount = request.Amount,
+            tokenType = asset.Symbol,
             status = MapWithdrawalStatus(result.Value.Status),
         }));
     }

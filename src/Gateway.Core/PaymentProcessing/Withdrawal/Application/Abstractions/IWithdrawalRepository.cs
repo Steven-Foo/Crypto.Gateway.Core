@@ -14,8 +14,10 @@ public enum WithdrawalRecordOutcome
 
 public interface IWithdrawalRepository
 {
-    /// <summary>The idempotency arbiter: one withdrawal per client key per merchant (§7.3).</summary>
-    Task<WithdrawalEntity?> FindByMerchantTransactionIdAsync(Guid merchantId, string merchantTransactionId, CancellationToken cancellationToken = default);
+    /// <summary>The idempotency arbiter: one withdrawal per client key per merchant, per kind (§7.3). Kind is
+    /// part of the key so a user payout and a merchant cash-out may reuse the same reference without colliding.</summary>
+    Task<WithdrawalEntity?> FindByMerchantTransactionIdAsync(
+        Guid merchantId, WithdrawalKind kind, string merchantTransactionId, CancellationToken cancellationToken = default);
 
     Task<WithdrawalEntity?> GetByIdAsync(Guid id, CancellationToken cancellationToken = default);
 

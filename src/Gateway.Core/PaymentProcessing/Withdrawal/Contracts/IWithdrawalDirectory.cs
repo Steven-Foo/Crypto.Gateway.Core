@@ -18,7 +18,8 @@ public sealed record WithdrawalView(
     DateTimeOffset CreatedAt);
 
 /// <summary>Ops search filters — every field optional and AND-combined. <see cref="AssetId"/> is resolved
-/// from a "coin" symbol by the caller (the host owns <c>IAssetCatalog</c>, Withdrawal does not — §4.5).</summary>
+/// from a "coin" symbol by the caller (the host owns <c>IAssetCatalog</c>, Withdrawal does not — §4.5).
+/// <see cref="Kind"/> is the withdrawal-kind name ("User" | "Merchant"); an unrecognised value is ignored.</summary>
 public sealed record WithdrawalAdminFilter(
     Guid? MerchantId,
     Guid? SystemOrderNumber,
@@ -27,7 +28,8 @@ public sealed record WithdrawalAdminFilter(
     Chain? Network,
     Guid? AssetId,
     DateTimeOffset? FromDate,
-    DateTimeOffset? ToDate);
+    DateTimeOffset? ToDate,
+    string? Kind = null);
 
 /// <summary>The Ops transaction-search read model for one withdrawal. <see cref="Status"/> is the effective,
 /// already-collapsed vocabulary ("pending" | "pending_approval" | "insufficient_balance" | "awaiting_release" |
@@ -45,7 +47,8 @@ public sealed record WithdrawalAdminRow(
     string Status,
     string? StatusReason,
     int? Confirmations,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    string Kind);
 
 public interface IWithdrawalDirectory
 {

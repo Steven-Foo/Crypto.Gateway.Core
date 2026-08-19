@@ -28,6 +28,7 @@ public static class OpsWithdrawalTransactionEndpoints
         string? receivingAddress = null,
         Chain? network = null,
         string? coin = null,
+        string? kind = null,
         DateTimeOffset? fromDate = null,
         DateTimeOffset? toDate = null,
         int page = 1,
@@ -36,6 +37,22 @@ public static class OpsWithdrawalTransactionEndpoints
         if (page < 1) page = 1;
         if (pageSize < 1) pageSize = 50;
         if (pageSize > 200) pageSize = 200;
+
+        // Optional withdrawal-kind filter: "user" (end-user payout) or "merchant" (earnings cash-out).
+        string? normalisedKind = null;
+        if (!string.IsNullOrWhiteSpace(kind))
+        {
+            normalisedKind = kind.Trim().ToLowerInvariant() switch
+            {
+                "user" => "User",
+                "merchant" => "Merchant",
+                _ => null,
+            };
+            if (normalisedKind is null)
+                return Results.Json(
+                    new { isSuccess = false, error = "kind must be 'user' or 'merchant'." },
+                    statusCode: StatusCodes.Status400BadRequest);
+        }
 
         Guid? assetId = null;
         if (!string.IsNullOrWhiteSpace(coin))
@@ -58,7 +75,8 @@ public static class OpsWithdrawalTransactionEndpoints
         }
 
         var filter = new WithdrawalAdminFilter(
-            merchantId, systemOrderNumber, merchantOrderNumber, receivingAddress, network, assetId, fromDate, toDate);
+            merchantId, systemOrderNumber, merchantOrderNumber, receivingAddress, network, assetId, fromDate, toDate,
+            normalisedKind);
         var (items, total) = await withdrawals.SearchAsync(filter, page, pageSize, http.RequestAborted);
 
         var callbackStatuses = await callbacks.GetStatusesAsync(
@@ -91,6 +109,9 @@ public static class OpsWithdrawalTransactionEndpoints
                 fee = AmountConversion.ToDisplay(BigInteger.Parse(withdrawal.FeeBaseUnits), decimals),
                 confirms = withdrawal.Confirmations,
                 type = "withdrawal",
+                // "User" (end-user payout) vs "Merchant" (earnings cash-out) — the two share the pipeline but
+                // are distinct money-out kinds; the screen can now filter/label them.
+                kind = withdrawal.Kind,
                 createdAt = withdrawal.CreatedAt,
                 status = withdrawal.Status,
                 callback = callback?.Status,

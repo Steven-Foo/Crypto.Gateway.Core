@@ -24,6 +24,7 @@ public sealed class Withdrawal : Entity<Guid>
         Guid merchantId,
         Guid assetId,
         Chain chain,
+        WithdrawalKind kind,
         string destinationAddress,
         BigInteger amount,
         BigInteger fee,
@@ -35,6 +36,7 @@ public sealed class Withdrawal : Entity<Guid>
         MerchantId = merchantId;
         AssetId = assetId;
         Chain = chain;
+        Kind = kind;
         DestinationAddress = destinationAddress;
         Amount = amount;
         Fee = fee;
@@ -52,6 +54,11 @@ public sealed class Withdrawal : Entity<Guid>
     public Guid MerchantId { get; private set; }
     public Guid AssetId { get; private set; }
     public Chain Chain { get; private set; }
+
+    /// <summary>User payout vs merchant earnings cash-out — see <see cref="WithdrawalKind"/>. The execution
+    /// pipeline and ledger impact are identical; this only separates the request controls and reporting.</summary>
+    public WithdrawalKind Kind { get; private set; }
+
     public string DestinationAddress { get; private set; } = null!;
     public BigInteger Amount { get; private set; }
     public BigInteger Fee { get; private set; }
@@ -125,7 +132,8 @@ public sealed class Withdrawal : Entity<Guid>
         BigInteger fee,
         string merchantTransactionId,
         string? callbackUrl,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        WithdrawalKind kind = WithdrawalKind.User)
     {
         if (merchantId == Guid.Empty || assetId == Guid.Empty)
             return Result.Failure<Withdrawal>(WithdrawalErrors.OwnerRequired);
@@ -140,7 +148,7 @@ public sealed class Withdrawal : Entity<Guid>
             return Result.Failure<Withdrawal>(WithdrawalErrors.MerchantTransactionIdRequired);
 
         return Result.Success(new Withdrawal(
-            Guid.CreateVersion7(), merchantId, assetId, chain, destinationAddress.Trim(), amount, fee,
+            Guid.CreateVersion7(), merchantId, assetId, chain, kind, destinationAddress.Trim(), amount, fee,
             merchantTransactionId.Trim(), string.IsNullOrWhiteSpace(callbackUrl) ? null : callbackUrl.Trim(),
             WithdrawalStatus.Reserving, now));
     }
