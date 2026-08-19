@@ -1,8 +1,4 @@
-﻿SET QUOTED_IDENTIFIER ON;
-SET ANSI_NULLS ON;
-GO
-
-IF OBJECT_ID(N'[merchant].[__EFMigrationsHistory]') IS NULL
+﻿IF OBJECT_ID(N'[merchant].[__EFMigrationsHistory]') IS NULL
 BEGIN
     IF SCHEMA_ID(N'merchant') IS NULL EXEC(N'CREATE SCHEMA [merchant];');
     CREATE TABLE [merchant].[__EFMigrationsHistory] (
@@ -333,6 +329,165 @@ IF NOT EXISTS (
 BEGIN
     INSERT INTO [merchant].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
     VALUES (N'20260716055049_AddMerchantAllowedIps', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260818061948_AddMerchantSettlementAndCashOutCap'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantAssetPolicy] ADD [MerchantWithdrawalFlatCap] decimal(38,0) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260818061948_AddMerchantSettlementAndCashOutCap'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantAssetPolicy] ADD [MerchantWithdrawalPercentBps] int NOT NULL DEFAULT 0;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260818061948_AddMerchantSettlementAndCashOutCap'
+)
+BEGIN
+    CREATE TABLE [merchant].[MerchantSettlementWallet] (
+        [Id] uniqueidentifier NOT NULL,
+        [MerchantId] uniqueidentifier NOT NULL,
+        [Chain] nvarchar(16) NOT NULL,
+        [Address] varchar(128) NOT NULL,
+        [CreatedAt] datetimeoffset NOT NULL,
+        [UpdatedAt] datetimeoffset NOT NULL,
+        [RowVersion] rowversion NULL,
+        CONSTRAINT [PK_MerchantSettlementWallet] PRIMARY KEY ([Id]),
+        CONSTRAINT [FK_MerchantSettlementWallet_Merchant_MerchantId] FOREIGN KEY ([MerchantId]) REFERENCES [merchant].[Merchant] ([Id]) ON DELETE NO ACTION
+    );
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260818061948_AddMerchantSettlementAndCashOutCap'
+)
+BEGIN
+    EXEC(N'ALTER TABLE [merchant].[MerchantAssetPolicy] ADD CONSTRAINT [CK_MerchantAssetPolicy_MerchantWithdrawalCap] CHECK ([MerchantWithdrawalPercentBps] >= 0 AND [MerchantWithdrawalPercentBps] <= 10000 AND ([MerchantWithdrawalFlatCap] IS NULL OR [MerchantWithdrawalFlatCap] >= 0))');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260818061948_AddMerchantSettlementAndCashOutCap'
+)
+BEGIN
+    CREATE UNIQUE INDEX [IX_MerchantSettlementWallet_MerchantId_Chain] ON [merchant].[MerchantSettlementWallet] ([MerchantId], [Chain]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260818061948_AddMerchantSettlementAndCashOutCap'
+)
+BEGIN
+    INSERT INTO [merchant].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260818061948_AddMerchantSettlementAndCashOutCap', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260818085303_AddMerchantSettlementDelay'
+)
+BEGIN
+    ALTER TABLE [merchant].[Merchant] ADD [SettlementDelayDays] int NOT NULL DEFAULT 0;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260818085303_AddMerchantSettlementDelay'
+)
+BEGIN
+    UPDATE [merchant].[Merchant] SET [Status] = 'Frozen' WHERE [Status] = 'Suspended';
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260818085303_AddMerchantSettlementDelay'
+)
+BEGIN
+    INSERT INTO [merchant].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260818085303_AddMerchantSettlementDelay', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260818105609_AddNullableWithdrawalMinimum'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantAssetPolicy] DROP CONSTRAINT [CK_MerchantAssetPolicy_NonNegative];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260818105609_AddNullableWithdrawalMinimum'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantAssetPolicy] DROP CONSTRAINT [CK_MerchantAssetPolicy_WithdrawalRange];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260818105609_AddNullableWithdrawalMinimum'
+)
+BEGIN
+    DECLARE @var nvarchar(max);
+    SELECT @var = QUOTENAME([d].[name])
+    FROM [sys].[default_constraints] [d]
+    INNER JOIN [sys].[columns] [c] ON [d].[parent_column_id] = [c].[column_id] AND [d].[parent_object_id] = [c].[object_id]
+    WHERE ([d].[parent_object_id] = OBJECT_ID(N'[merchant].[MerchantAssetPolicy]') AND [c].[name] = N'MinimumWithdrawal');
+    IF @var IS NOT NULL EXEC(N'ALTER TABLE [merchant].[MerchantAssetPolicy] DROP CONSTRAINT ' + @var + ';');
+    ALTER TABLE [merchant].[MerchantAssetPolicy] ALTER COLUMN [MinimumWithdrawal] decimal(38,0) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260818105609_AddNullableWithdrawalMinimum'
+)
+BEGIN
+    UPDATE [merchant].[MerchantAssetPolicy] SET [MinimumWithdrawal] = NULL WHERE [MinimumWithdrawal] = 0;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260818105609_AddNullableWithdrawalMinimum'
+)
+BEGIN
+    EXEC(N'ALTER TABLE [merchant].[MerchantAssetPolicy] ADD CONSTRAINT [CK_MerchantAssetPolicy_NonNegative] CHECK ([SweepThreshold] >= 0 AND [WithdrawalFee] >= 0 AND [DepositFeeFixed] >= 0 AND ([MinimumWithdrawal] IS NULL OR [MinimumWithdrawal] >= 0) AND ([MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= 0))');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260818105609_AddNullableWithdrawalMinimum'
+)
+BEGIN
+    EXEC(N'ALTER TABLE [merchant].[MerchantAssetPolicy] ADD CONSTRAINT [CK_MerchantAssetPolicy_WithdrawalRange] CHECK ([MaximumWithdrawal] IS NULL OR [MinimumWithdrawal] IS NULL OR [MaximumWithdrawal] >= [MinimumWithdrawal])');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260818105609_AddNullableWithdrawalMinimum'
+)
+BEGIN
+    INSERT INTO [merchant].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260818105609_AddNullableWithdrawalMinimum', N'10.0.9');
 END;
 
 COMMIT;

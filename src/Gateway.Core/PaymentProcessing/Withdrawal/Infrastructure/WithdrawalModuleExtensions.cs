@@ -49,7 +49,9 @@ public static class WithdrawalModuleExtensions
 
         services.AddScoped<IWithdrawalRepository, WithdrawalRepository>();
         services.AddScoped<IWithdrawalDirectory, WithdrawalDirectory>();
+        services.AddScoped<SettledBalanceGate>();
         services.AddScoped<IWithdrawalRequestService, WithdrawalRequestService>();
+        services.AddScoped<IMerchantWithdrawalService, MerchantWithdrawalService>();
         services.AddScoped<IWithdrawalApprovalService, WithdrawalApprovalService>();
         services.AddScoped<IWithdrawalFundingService, WithdrawalFundingService>();
 

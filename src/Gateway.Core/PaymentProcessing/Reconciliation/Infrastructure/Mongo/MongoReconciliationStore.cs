@@ -34,6 +34,12 @@ public sealed class MongoReconciliationStore : IReconciliationStore
         var document = await _collection.Find(d => d.Id == id).FirstOrDefaultAsync(cancellationToken);
         return document is null ? null : ReconciliationDocumentMapper.FromCurrent(document);
     }
+
+    public async Task<IReadOnlyList<ReconciliationSnapshot>> ListAsync(CancellationToken cancellationToken = default)
+    {
+        var documents = await _collection.Find(FilterDefinition<ReconciliationDocument>.Empty).ToListAsync(cancellationToken);
+        return documents.Select(ReconciliationDocumentMapper.FromCurrent).ToList();
+    }
 }
 
 /// <summary>Append-only reconciliation history (MongoDB) — the custody-drift audit trail. Never money truth (§2).</summary>

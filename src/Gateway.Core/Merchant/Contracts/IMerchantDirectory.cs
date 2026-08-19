@@ -10,7 +10,8 @@ public sealed record MerchantSummary(
     string MerchantCode,
     string Name,
     string? CallbackUrl,
-    bool CanTransact);
+    bool CanTransact,
+    int SettlementDelayDays = 0);
 
 public interface IMerchantDirectory
 {

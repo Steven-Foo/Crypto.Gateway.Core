@@ -29,6 +29,38 @@ public sealed class LedgerQuery(LedgerDbContext context) : ILedgerQuery
             .FirstOrDefaultAsync(cancellationToken);
     }
 
+    public async Task<BigInteger> GetMerchantSettledBalanceAsync(
+        Guid merchantId, Guid assetId, DateTimeOffset unmaturedCutoffUtc, CancellationToken cancellationToken = default)
+    {
+        var total = await GetMerchantBalanceAsync(merchantId, assetId, cancellationToken);
+
+        // Still-maturing deposit inflow: the merchant-liability lines of Deposit / DepositReversal journals
+        // dated on/after the cutoff. Subtracting their net from the authoritative cache balance yields the
+        // settled (withdrawable) amount, with releases/reversals/fees already handled by the cache; a deposit
+        // and its reorg-reversal (both recent) net to zero. Pulled and summed in memory because the money
+        // columns are BigInteger (decimal(38,0) via a custom mapping) — SUM is not provider-translatable — and
+        // the window is bounded to one merchant's deposits over the settlement period, an infrequent read.
+        var unmaturedLines = await (
+            from account in context.Accounts.AsNoTracking()
+            where account.AccountType == AccountType.MerchantLiability
+               && account.OwnerType == OwnerType.Merchant
+               && account.OwnerId == merchantId
+               && account.AssetId == assetId
+            join entry in context.JournalEntries.AsNoTracking() on account.Id equals entry.AccountId
+            join journal in context.Journals.AsNoTracking() on entry.JournalId equals journal.Id
+            where (journal.ReferenceType == JournalReferenceType.Deposit
+                || journal.ReferenceType == JournalReferenceType.DepositReversal)
+               && journal.CreatedAt >= unmaturedCutoffUtc
+            select new { entry.Debit, entry.Credit })
+            .ToListAsync(cancellationToken);
+
+        var unmaturedNet = unmaturedLines.Aggregate(
+            BigInteger.Zero, (sum, line) => sum + line.Credit - line.Debit);
+
+        var settled = total - unmaturedNet;
+        return settled > BigInteger.Zero ? settled : BigInteger.Zero;
+    }
+
     public async Task<BigInteger> GetTreasuryHoldingAsync(Guid assetId, CancellationToken cancellationToken = default)
     {
         // TreasuryAsset(asset) is the debit-normal custody account (OwnerType.Treasury, no owner id); its

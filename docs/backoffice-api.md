@@ -105,17 +105,21 @@ Any authenticated role. Query params: `page` (default 1), `pageSize` (default 50
         "merchantCode": "ACME-1",
         "name": "Acme Payments",
         "status": "Active",
+        "settlementDelayDays": 0,
         "createdAt": "2026-07-20T06:00:00Z",
         "hasActiveCredential": true,
-        "allowedIps": ["1.2.3.4"]
+        "allowedIps": ["1.2.3.4"],
+        "settlementWallets": [{ "chain": "Tron", "address": "T..." }]
       }
     ]
   },
   "error": null
 }
 ```
-`status` is the merchant's status enum as a string (e.g. `Pending`, `Active`, `Suspended`, `Closed` —
-confirm exact values against `Merchant.Domain.MerchantStatus` if you need a fixed dropdown list).
+`status` is the merchant's status enum as a string (e.g. `Pending`, `Active`, `Frozen`, `Closed` —
+confirm exact values against `Merchant.Domain.MerchantStatus` if you need a fixed dropdown list). `Frozen`
+is the reversible admin risk-hold; the status toggle (`PATCH .../status` with `active: false`) freezes,
+`active: true` unfreezes (returns to `Active`). A frozen merchant is blocked from all transacting.
 
 ### `GET /api/v1/ops/merchants/{id}`
 Any authenticated role. `{id}` is a GUID.
@@ -178,19 +182,72 @@ worth handling — show a generic error and tell the user to check with engineer
 exist in a half-set-up state).
 
 ### `PATCH /api/v1/ops/merchants/{id}/status` 🔒 Admin
-Activate or suspend a merchant.
+Activate or **freeze** a merchant. Freezing is a reversible admin risk-hold: a frozen merchant is blocked
+from all transacting (new deposit addresses, user payouts, and earnings cash-out) until re-activated. Funds
+already sent on-chain to an issued deposit address are still credited — freeze stops new activity, not recording.
 
 **Request**
 ```json
 { "active": true }
 ```
-`true` → activate, `false` → suspend.
+`true` → activate (also **unfreezes**), `false` → **freeze**.
 
 **Response 200**
 ```json
 { "isSuccess": true, "data": { "merchantId": "guid", "status": "Active" }, "error": null }
 ```
-**Response 400**: invalid transition (e.g. trying to activate a Closed merchant) — `{ isSuccess: false, error: "<message>" }`.
+`status` is `Active` or `Frozen` (or `Pending`/`Closed`). **Response 400**: invalid transition (e.g. trying
+to activate a Closed merchant) — `{ isSuccess: false, error: "<message>" }`.
+
+### `PUT /api/v1/ops/merchants/{id}/settlement-period` 🔒 Admin
+Sets the merchant's settlement period **T+N** in whole days (`0` = T+0, immediately withdrawable). Deposits
+mature into withdrawable funds N days after confirmation (UTC calendar day). Gates the withdrawable balance
+for **both** user payouts and the merchant's own cash-out. Read it back from `GET /ops/merchants/{id}`
+(`settlementDelayDays`).
+
+**Request** `{ "days": 1 }` — validated 0–30.
+**Response 200** `{ "isSuccess": true, "data": { "merchantId": "guid", "settlementDelayDays": 1 }, "error": null }`.
+
+### `PUT /api/v1/ops/merchants/{id}/settlement-wallet` 🔒 Admin
+Registers/updates the merchant's whitelisted **cash-out (settlement) wallet** for a chain — the fixed
+destination of a merchant earnings cash-out (never client-supplied). One per chain. Read them back from
+`GET /ops/merchants/{id}` (`settlementWallets: [{ chain, address }]`).
+
+**Request** `{ "chain": "Tron", "address": "T..." }`.
+**Response 200** `{ "isSuccess": true, "data": { "merchantId": "guid", "network": "Tron", "address": "T..." }, "error": null }`.
+
+### `PUT /api/v1/ops/merchants/{id}/fees` 🔒 Admin
+Declares the merchant's per-asset **flat + %** fee for deposits and withdrawals. Fixed components are in
+**display** units (converted to base units at the edge; a zero fixed component = pure-% pricing); percentages
+are basis points (`100` = 1%). Read back at `GET /ops/merchants/{id}/fees`.
+
+**Request**
+```json
+{ "chain": "Tron", "coin": "USDT",
+  "depositFeeFixed": 0, "depositFeeBps": 100,
+  "withdrawalFeeFixed": 1, "withdrawalFeeBps": 50 }
+```
+**Response 200** `{ "isSuccess": true, "data": { "merchantId": "guid", "assetId": "guid", "coin": "USDT", "network": "Tron" }, "error": null }`.
+
+### `PUT /api/v1/ops/merchants/{id}/withdrawal-cap` 🔒 Admin
+Sets the **merchant-withdrawal (cash-out) liquidity cap** for one asset — distinct from user min/max. An
+optional flat cap (display units; omit or `null` = no flat cap) plus a percentage-of-settled-balance cap in
+basis points (`0` = no percent cap). Both unset ⇒ no cap (cash out up to the settled balance). Read back
+alongside the fees at `GET /ops/merchants/{id}/fees` (`merchantWithdrawalFlatCap`, `merchantWithdrawalPercentBps`).
+
+**Request** `{ "chain": "Tron", "coin": "USDT", "flatCap": 1000, "percentBps": 5000 }` (here: min(1000 USDT, 50% of settled)).
+**Response 200** `{ "isSuccess": true, "data": { "merchantId": "guid", "assetId": "guid", "coin": "USDT", "network": "Tron" }, "error": null }`.
+
+### `PUT /api/v1/ops/merchants/{id}/withdrawal-limits` 🔒 Admin
+Sets the per-merchant **user-withdrawal min/max** for one asset (the limits gating an *end-user payout*, distinct
+from the cash-out cap). Values are display units. Each bound is an **override** of the platform config limit
+(`Withdrawal:Policies`): omit or `null` = unset ⇒ config applies for that bound; a set value (including `0` = "no
+minimum") fully overrides — staff can raise or lower a merchant's limits. Read back alongside the fees at
+`GET /ops/merchants/{id}/fees` (`minimumWithdrawal`, `maximumWithdrawal`; `null` = using config).
+
+**Request** `{ "chain": "Tron", "coin": "USDT", "minimum": 5, "maximum": 10000 }` (either may be null).
+**Response 200** `{ "isSuccess": true, "data": { "merchantId": "guid", "assetId": "guid", "coin": "USDT", "network": "Tron" }, "error": null }`.
+**Response 400**: `minimum > maximum`, a negative/over-precise value, or unknown chain/coin.
 
 ### `POST /api/v1/ops/merchants/{id}/regenerate-key` 🔒 Admin
 Revokes the merchant's current credential and issues a new one. No request body.
@@ -381,7 +438,9 @@ filters on `createdAt`), `page` (default 1), `pageSize` (default 50, max 200).
 ### `GET /api/v1/ops/transactions/withdrawals`
 Same auth, same pagination, same filter set as the deposit endpoint above (`merchantId`,
 `systemOrderNumber` — matches `Withdrawal.Id` — `merchantOrderNumber`, `receivingAddress`, `network`,
-`coin`, `fromDate`/`toDate`, `page`, `pageSize`).
+`coin`, `fromDate`/`toDate`, `page`, `pageSize`), **plus** `kind` — `user` (end-user payout) or `merchant`
+(earnings cash-out); omit for both. An unrecognized `kind` returns `400`. Each row carries a `kind` field
+(`"User"` / `"Merchant"`) so the two money-out kinds are distinguishable.
 
 **Response 200**
 ```json
@@ -404,6 +463,7 @@ Same auth, same pagination, same filter set as the deposit endpoint above (`merc
         "fee": "0",
         "confirms": 2,
         "type": "withdrawal",
+        "kind": "User",
         "createdAt": "2026-07-29T06:00:00Z",
         "status": "pending",
         "callback": "Notified",
@@ -568,7 +628,10 @@ flag it back rather than guessing an API shape:
   "set your own threshold" screen against anything today.
 - **Staff user management** (create/list/deactivate staff, assign roles) — staff accounts exist only via
   a dev seeder; no CRUD endpoint.
-- **Merchant fee schedule / asset policy management** — no endpoint; presumably DB-only today.
+- **Per-merchant approval threshold** — the fee, settlement period, settlement wallet, cash-out cap, and the
+  user-withdrawal min/max are all now settable per-merchant (see the Merchants section), but the withdrawal
+  **approval threshold** is still the single platform-wide config value (`Withdrawal:Policies`) — no per-merchant
+  override yet.
 - **Wallet / treasury / sweep visibility** — nothing in Ops surfaces `AssetManagement/Wallet` data.
 - **Energy / resource monitoring visibility** — `AssetManagement/Energy` writes to MongoDB but nothing
   in Ops reads it back out.
@@ -578,6 +641,8 @@ flag it back rather than guessing an API shape:
 
 - `src/Api/OperationsApi/CryptoPaymentEngine.Api.OperationsApi/Endpoints/OpsAuthEndpoints.cs`
 - `src/Api/OperationsApi/CryptoPaymentEngine.Api.OperationsApi/Endpoints/OpsMerchantEndpoints.cs`
+- `src/Api/OperationsApi/CryptoPaymentEngine.Api.OperationsApi/Endpoints/OpsMerchantFeeEndpoints.cs` (per-asset fees)
+- `src/Api/OperationsApi/CryptoPaymentEngine.Api.OperationsApi/Endpoints/OpsMerchantSettlementEndpoints.cs` (settlement period/wallet + cash-out cap)
 - `src/Api/OperationsApi/CryptoPaymentEngine.Api.OperationsApi/Endpoints/OpsPaymentIntentEndpoints.cs`
 - `src/Api/OperationsApi/CryptoPaymentEngine.Api.OperationsApi/Endpoints/OpsTransactionEndpoints.cs` (ledger view)
 - `src/Api/OperationsApi/CryptoPaymentEngine.Api.OperationsApi/Endpoints/OpsDepositTransactionEndpoints.cs`

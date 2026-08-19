@@ -31,6 +31,10 @@ public static class MerchantModuleExtensions
         services.Configure<ApiCredentialOptions>(configuration.GetSection(ApiCredentialOptions.SectionName));
         services.Configure<SigningSecretOptions>(configuration.GetSection(SigningSecretOptions.SectionName));
 
+        // Platform-default fee for unpriced merchants — resolved once from config (None unless configured).
+        services.Configure<MerchantDefaultFeeOptions>(configuration.GetSection(MerchantDefaultFeeOptions.SectionName));
+        services.AddSingleton<MerchantDefaultFee>();
+
         // TryAdd: a host (or a test) may supply a fake clock; the module must not stomp on it.
         services.TryAddSingleton(TimeProvider.System);
 
@@ -40,6 +44,9 @@ public static class MerchantModuleExtensions
         services.AddScoped<IMerchantRepository, MerchantRepository>();
         services.AddScoped<IMerchantDirectory, MerchantDirectory>();
         services.AddScoped<IMerchantFeeSchedule, MerchantFeeSchedule>();
+        services.AddScoped<IMerchantSettlementDirectory, MerchantSettlementDirectory>();
+        services.AddScoped<IMerchantWithdrawalCap, MerchantWithdrawalCapReader>();
+        services.AddScoped<IMerchantWithdrawalLimits, MerchantWithdrawalLimitsReader>();
         services.AddScoped<IMerchantRegistrar, MerchantRegistrar>();
         services.AddScoped<IMerchantAssetPolicyService, MerchantAssetPolicyService>();
         services.AddScoped<IMerchantAuthenticator, MerchantAuthenticator>();

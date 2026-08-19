@@ -334,7 +334,9 @@ Blockchain `IBalanceReader` (the §8-planned port — `InMemoryBalanceReader` fo
 TRC-20 via `eth_call balanceOf`/`TronAbi.EncodeBalanceOf`, native TRX via `eth_getBalance`; live round-trip
 deferred to staging); `IWalletDirectory.ListReceivingDepositAddressesAsync` (funded Deposit wallets, all merchants,
 `DepositsReceivedCount>0`). In dev the in-memory `IBalanceReader` reads 0, so drift == the ledger holding until the
-real TRON adapter is live. **Deferred:** ops read API, per-asset tolerance, sustained-vs-transient drift detection;
+real TRON adapter is live. **Ops read API — since built** (`GET /api/v1/ops/reconciliation` in OperationsApi; see the
+reconciliation-ops milestone below). **Deferred:** per-asset tolerance, sustained-vs-transient drift detection, and a
+history/time-series read (the snapshot store's `ListAsync` returns only the current per-(chain,asset) snapshots);
 reconciliation simplifies greatly post-Sweep (deposit addresses drain to ~0, custody concentrates in the hot wallet).
 
 **`AssetManagement/Sweep` (concentrate deposit balances → hot wallet) — DONE, 511 tests green.** Third in the
@@ -429,10 +431,10 @@ hot wallet's float rises on-chain → the withdrawal allocator sees it next pass
 address in the custody sum (else it would report a huge false drift once sweeping concentrates funds cold). **Cold
 registration:** dev config seed (`Treasury:ColdWallets`, watch-only address — no key) + `ITreasuryColdWalletRegistrar`
 (the seam a prod staff ops action reuses). **Real TRON tx-build/broadcast + real browser signing deferred** like
-everything else (in-memory engine in dev; inert in prod until the adapters land). **Deferred/known:** the reload +
-cold-register endpoints are **dev-only** (`/dev/treasury/*` in MerchantGateway) — the production **staff-auth Ops
-endpoints in OperationsApi are a follow-up** (that host must first gain the transaction builder); a per-chain reload
-confirmation depth (currently one `TreasuryReloadOptions.Confirmations`, dev=1); and the client-side signing UI.
+everything else (in-memory engine in dev; inert in prod until the adapters land). **Deferred/known:** a per-chain
+reload confirmation depth (currently one `TreasuryReloadOptions.Confirmations`, dev=1); and the client-side signing UI.
+(The production **staff-auth Ops endpoints in OperationsApi** were since built — see the Treasury-reload-Ops milestone
+below; the dev `/dev/treasury/*` helpers in MerchantGateway remain for local testing.)
 
 **Production KMS-envelope seed custody (§10) — DONE, 567 tests green (0 failed, 5 known skips).** The seam that flips
 withdrawal + sweep + address-provisioning from "inert in prod" to live money-out. **Key simplification:** because
@@ -520,8 +522,39 @@ Contracts only** — no workers/dispatchers, so the host scans/processes/broadca
 login/logout, merchant admin, transaction search (deposit/withdrawal/paymentintent/callback), withdrawal
 **approval** (§10 above-threshold) and **funding release/cancel** (`Ops*Endpoints`). **Known placeholders:** the two
 transaction screens hardcode `fee = "0"` and `userId = null` (real per-merchant fee + user attribution not yet
-surfaced — `§ docs/backoffice-api.md`). No Treasury/Energy/Sweep/Reconciliation ops surface yet; prod treasury
-reload/cold-register stay the dev-only `/dev/treasury/*` in MerchantGateway.
+surfaced — `§ docs/backoffice-api.md`). Energy/Sweep still have no ops surface; **Treasury cold-reload and
+Reconciliation now do** (see the next two milestones).
+
+**Reconciliation custody-status Ops read (`Api/OperationsApi`) — BUILT, full suite green.** The go-live surface for the
+ledger-vs-on-chain custody audit, which was log-and-Mongo-only. New `OpsReconciliationEndpoints`: `GET
+/api/v1/ops/reconciliation` (optional `?chain=`) returns the latest snapshot per (chain, asset) — ledger
+`TreasuryAsset` holding vs summed on-chain total vs drift, plus status (Balanced/Drift/Incomplete),
+addresses-scanned/unreadable, observed-at — with **non-Balanced rows sorted first** so an operator sees problems at the
+top. Authenticated staff only (no Admin gate — it moves nothing). Amounts are base→display via `AmountConversion`
+(asset decimals, §14) **plus** an exact `driftBaseUnits` string (a custody audit needs the precise integer). A pure
+**read** over the snapshots the money host's `ReconciliationWorker` writes to Mongo (§2) — this host neither computes
+nor writes them: new read-only `IReconciliationStore.ListAsync` + a `AddReconciliationReadModel` composition that
+registers ONLY the Mongo read store (shared client), NOT the compute `ReconciliationService`/worker (which needs
+`IBalanceReader` etc. the ops host lacks and must never run, §4.7). OperationsApi gained `Mongo:ConnectionString` config
+(same instance as MerchantGateway). **Deferred:** a history/time-series read + per-asset tolerance (as above).
+
+**Treasury cold-reload — production staff-auth Ops endpoints (`Api/OperationsApi`) — BUILT, full suite green.** The
+go-live surface for the three-tier custody cold-reload, promoting the dev-only `/dev/treasury/*` helpers to real
+Admin endpoints. New `OpsTreasuryEndpoints` (all `.RequireAdmin()`): `GET /api/v1/ops/treasury/hot-pool` (list pool
+wallets to pick a reload target — never returns the signing `KeyReference`, §10), `POST .../cold-wallet` (register the
+watch-only cold address via `ITreasuryColdWalletRegistrar`), `POST .../reload` (`ITreasuryReloadService.InitiateAsync`
+→ builds the **unsigned** treasury→hot transfer, returns `{reloadId, unsignedTransactionHex}`), `POST
+.../reload/{id}/submit` (stores the operator's client-signed blob). **Keyless + human-in-the-loop (§10):** the ops host
+builds unsigned only — the operator signs the cold key **client-side** (never sent to any backend), and the money
+host's `TreasuryReloadWorker` broadcasts + confirms (OperationsApi runs no workers). **No ledger entry** (custody-internal,
+§14). Composition: OperationsApi gained `AddTreasuryModule` + a **keyless `ITransactionBuilder`** — tiered
+`AddInMemoryTransactionEngine` (Development/Staging) ↔ `AddTronTransactionEngine` (Production, registered
+**unconditionally**, NOT gated on KMS, since the reload is human-signed not KMS-signed; the builder never crosses a key).
+Amount is display→base at the edge via `AmountConversion` (asset decimals, §14) — not the dev endpoint's hardcoded
+`×1e6`. Endpoints are thin wrappers over the already-tested `TreasuryReloadService`/registrar/directory (Ops endpoints
+follow the service-tested, not host-tested convention — no OperationsApi test project). **Deferred:** USDT-only first cut
+(multi-asset later); dev testing needs a hot pool seeded by MerchantGateway on the shared DB; the per-chain reload depth
++ client-side signing UI stay as noted above.
 
 **Callback delivery completion — BUILT.** `Platform/Notification` now also consumes **`WithdrawalConfirmed` /
 `WithdrawalFailed`** (merchant withdrawal callbacks) alongside `PaymentIntentMatched` / `PaymentIntentFailed`,
@@ -579,6 +612,102 @@ softly so Merchant-only test hosts skip it) so the dev round-trip shows a non-ze
 per-merchant limits + enforcement (Platform UI), a config platform-default fee for unpriced merchants, and a filled
 `Api.IntegrationTests`. New tests: `MerchantAssetPolicyServiceTests` + deposit fee snapshot/round-trip/reorg-fee-
 reversal proofs.
+
+**Merchant Withdrawal (earnings cash-out) — Phase 1 (money path) DONE, full suite green.** A SECOND, distinct
+money-out kind: the merchant cashing out its own earnings, vs the existing user-payout `Withdrawal`. Kept strictly
+separate from the user flow (the user flagged the earlier conflation): the two share the **identical execution
+pipeline + ledger impact** (reserve `MerchantLiability` → sign → broadcast → confirm → settle; the Ledger never
+learns the kind), so it's ONE aggregate with a **`WithdrawalKind {User, Merchant}`** discriminator, not a duplicate
+module — the divergence lives only in the request layer, destination, and (future) reporting. **One shared balance:**
+both kinds debit `MerchantLiability`; "earnings" = the residual, which also floats user payouts, so the cap is a
+liquidity guard. Decisions locked with the user: merchant-initiated via **signed `POST /api/v1/merchant-withdraw`**
+(no destination — resolved from a pre-registered **settlement wallet**, staff-whitelisted so a compromised API key
+can't redirect earnings, §10); **charges the same withdrawal fee** as a user payout (platform still bears gas);
+per-withdrawal **flat/% liquidity cap** = `min(flat, ⌊available·bps/10000⌋)`, unset ⇒ cash out up to balance.
+**Domain:** `Withdrawal.Kind` (+`Request(kind)`); the idempotency index widened to **`(MerchantId, Kind,
+MerchantTransactionId)`** so user/merchant reuse the same reference without colliding (migration `AddWithdrawalKind`);
+new `MerchantSettlementWallet` entity (per `(MerchantId, Chain)`) + `MerchantAssetPolicy` cap columns
+`MerchantWithdrawalFlatCap`/`MerchantWithdrawalPercentBps` — **distinct** from the user `Min/MaxWithdrawal` (migration
+`AddMerchantSettlementAndCashOutCap`; `70-withdrawal.sql`/`20-merchant.sql` regenerated). **Contracts (§4.5):**
+`IMerchantSettlementDirectory` + `IMerchantWithdrawalCap`. **`MerchantWithdrawalService`** resolves the settlement
+address, applies the cap (reads `ILedgerQuery` balance only when a % cap is set — best-effort; the reserve stays the
+atomic overdraw guard), charges `IMerchantFeeSchedule.QuoteWithdrawalFee`, and reserves. **Also fixed a latent bug:**
+`WithdrawalRepository.IsIdempotencyViolation` still checked the stale index name `UX_Withdrawal_Idempotency` (renamed
+to `UX_Withdrawal_MerchantTxn` long ago) — the concurrent-duplicate race path wasn't being caught. Dev:
+`DevMerchantSeeder` now also registers a settlement wallet (`Merchant:DevSeed:SettlementAddress`) + optional cap
+(`MerchantWithdrawalPercentBps`, default 0 = no cap). Tests: `MerchantWithdrawalServiceTests` (settlement-not-
+registered, flat/%/min caps, dedup, fee, reserve-fail). **Phase 2 — DONE** (staff Ops endpoints to register the
+settlement wallet + set the cap, and `Kind`-differentiated Ops reporting; see the merchant-admin Ops milestone below).
+The merchant-facing `/transactions/query` **now looks up merchant cash-outs too** — an optional `kind` ("user" |
+"merchant") narrows the withdrawal side (a user payout and a cash-out can share a reference under the `(merchant, kind,
+reference)` key), auto-detecting deposit → user payout → cash-out when omitted; cash-outs return the additive
+`type:"merchant_withdraw"` while the frozen user `type:"withdraw"` shape is unchanged (`IWithdrawalDirectory.FindByMerchantReferenceAsync`
+gained a `kind` param; tests: `WithdrawalDirectoryTests`). Only a **paged history list** (browse all records, not a
+single lookup) stays deferred — to be applied uniformly across every transaction-record endpoint at once.
+
+**Settlement period (T+N) + merchant freeze (A1 money-path + domain) — DONE, full suite green.** Two admin controls
+added ahead of Merchant-Withdrawal Phase 2. **(1) Settlement period (T+N):** a per-merchant `SettlementDelayDays`
+(int, default 0 = T+0; on `Merchant`, migration `AddMerchantSettlementDelay`, `20-merchant.sql` regenerated) gates a
+**second, tighter balance — "settled/withdrawable"** — applied to **BOTH** user payouts and the merchant cash-out
+(user chose gate-both). A deposit confirmed on UTC calendar day *D* matures at `00:00Z` of *D+N*; cutoff =
+`StartOfUtcDay(now).AddDays(1−N)`, a deposit is unmatured iff its journal `CreatedAt ≥ cutoff`. New
+**`ILedgerQuery.GetMerchantSettledBalanceAsync(merchant, asset, cutoff)`** = `max(0, cacheBalance −
+UnmaturedNetDeposits)`, where `UnmaturedNetDeposits = Σ(MerchantLiability lines of Deposit/DepositReversal journals
+dated ≥ cutoff, credit−debit)` — computed as *total minus still-unmatured inflows* so releases/reversals/fees folded
+into the cache stay correct and a deposit + its reorg-reversal (both recent) **net to zero** (the money-critical
+subtlety; proven by `LedgerQueryTests`). A shared `SettledBalanceGate` (Withdrawal.Application) resolves the cutoff;
+both money-out services **reject** an over-settled amount with `WithdrawalErrors.ExceedsSettledBalance`. The merchant
+cash-out's **% cap now applies to settled** (not total). **T+0 is a deliberate no-op** — the gate is skipped and the
+ledger reserve stays the sole balance guard (unchanged `InsufficientBalance` semantics for the common case). The
+settled check is **best-effort**; the reserve remains the atomic overdraw guard on total balance (settled ≤ total).
+A hard atomic settled ceiling (teach the reserve to net unmatured deposits) is a documented follow-up. **(2) Freeze:**
+the merchant lifecycle value `Suspended` was **renamed to `Frozen`** (`Merchant.Suspend()→Freeze()`,
+`IMerchantRegistrar.SuspendAsync→FreezeAsync`; migration also rewrites any stored `'Suspended'→'Frozen'`). It's the
+existing `CanTransact` gate (blocks deposit-address requests + user payouts + cash-out); **`Activate` unfreezes** (the
+existing Ops `PATCH .../status` `active:false/true` toggle now freezes/unfreezes — no new endpoint). **Money-correctness
+(§14):** a frozen merchant's on-chain deposits **still credit the ledger** — freeze stops issuing/withdrawing, never
+recording (no reconciliation drift). `SettlementDelayDays` surfaced on `MerchantSummary` (Contract) + `MerchantAdminView`.
+Dev: `Merchant:DevSeed:SettlementDelayDays` (default 0). The staff Ops setter now exists (see the merchant-admin Ops
+milestone below).
+
+**Merchant-admin Ops surface (Phase 2 — settlement period / wallet / cap setters + `Kind` reporting) — DONE, full suite
+green.** The staff write paths that were dev-seed-only are now real Admin endpoints in `Api/OperationsApi` (T2, over
+domain methods already built + tested; no schema change). **Setters (`OpsMerchantSettlementEndpoints`, all `.RequireAdmin()`):**
+`PUT /ops/merchants/{id}/settlement-period` (→ `IMerchantRegistrar.SetSettlementDelayAsync`), `PUT .../settlement-wallet`
+(→ `SetSettlementWalletAsync` — whitelists the cash-out destination, §10), `PUT .../withdrawal-cap`
+(→ `IMerchantAssetPolicyService.SetMerchantWithdrawalCapAsync`, flat display→base at the edge §14, null flat = no flat cap).
+**Read-back (no new endpoints):** `GET /ops/merchants/{id}` now returns `settlementDelayDays` + `settlementWallets`
+(added to `MerchantAdminView`), and `GET /ops/merchants/{id}/fees` returns the cap alongside fees (added to
+`MerchantAssetPolicyView`). **`Kind` reporting:** `WithdrawalAdminRow` gained `Kind` ("User"/"Merchant") + `WithdrawalAdminFilter`
+a string `Kind` filter (Contracts stay Domain-free — parsed to the enum in the directory); the Ops withdrawal screen
+(`OpsWithdrawalTransactionEndpoints`) takes a `kind` query param and emits `kind` per row, so user payouts and merchant
+cash-outs are now distinguishable/filterable (was hardcoded `type:"withdrawal"`). Tests: `MerchantAssetPolicyServiceTests`
+cap round-trip/preserve-fee/invalid-bps. **Still deferred:** a per-merchant withdrawal approval threshold (still the
+platform-wide config value). (The merchant-facing cash-out **lookup** in `/transactions/query` was since built — see the
+`kind`-aware query note in the Merchant-Withdrawal milestone above; a paged history list across all transaction-record
+endpoints remains the deferred piece.)
+
+**Per-merchant user-withdrawal min/max (enforced) + platform-default fee (T3) — DONE, full suite green.** Two money-path
+features. **(1) Per-merchant min/max, now ENFORCED (not just recorded):** `MerchantAssetPolicy.MinimumWithdrawal` became
+**nullable** (like `MaximumWithdrawal`) so `null` = unset ⇒ the flow uses the platform config limit and a set value fully
+overrides (raise OR lower) — the user's "config default, admin overrides per merchant". Migration `AddNullableWithdrawalMinimum`
+(alters the column + rewrites the two CHECK constraints to be NULL-aware + backfills existing `0`→`NULL` as "unset";
+`20-merchant.sql` regenerated). `WithdrawalRequestService` (USER flow only — cash-out uses the cap, not min/max) now reads a new
+Merchant Contract **`IMerchantWithdrawalLimits`** and gates on `effectiveMin = merchantMin ?? configMin` / `effectiveMax =
+merchantMax ?? configMax`. Setter: `IMerchantAssetPolicyService.SetWithdrawalLimitsAsync` + Admin `PUT /ops/merchants/{id}/withdrawal-limits`
+(null = unset; 0 = explicit "no min"); read-back on `GET .../fees` (`minimumWithdrawal`/`maximumWithdrawal` added to
+`MerchantAssetPolicyView`). Fee/cap setters now leave min **unset** (null) instead of 0, so pricing a merchant no longer
+silently forces a 0 minimum. **(2) Platform-default fee for unpriced merchants:** config `Merchant:DefaultFee`
+(`{DepositFeeBps, WithdrawalFeeBps}`, **percentage-only** — a platform-wide flat is meaningless across assets; 0/0 = no
+default) resolved once into a `MerchantDefaultFee` holder; `MerchantFeeSchedule` substitutes it whenever a merchant's
+resolved schedule is `None` (no explicit fee) — so an unpriced merchant is never silently free, while ANY explicit fee
+(even partial) suppresses the default. Flows through deposit gross-up + withdrawal + the Ledger split unchanged (they all
+resolve via `IMerchantFeeSchedule`). **Account opening stays free** (no onboarding fee anywhere). Tests:
+`WithdrawalRequestServiceTests` (override raise/lower/config-fallback), `MerchantDefaultFeeTests` (config→schedule, zero/
+invalid→None), `MerchantPersistenceTests` (unpriced→default, explicit-overrides-default, no-config→free),
+`MerchantAssetPolicyServiceTests` (limits round-trip/preserve-fee/min>max). **Deferred:** per-asset flat default fees;
+per-merchant approval-threshold override; the "explicitly zero-rated" merchant (a fully-zero explicit fee is
+indistinguishable from unpriced, so it also gets the default — a future zero-rated flag if needed).
 
 Every other module in the map is a placeholder in this doc, not yet on disk — scaffold a module
 only when real feature work on it starts, creating only the layers it uses (§4.3).

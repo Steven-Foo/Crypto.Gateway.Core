@@ -73,8 +73,36 @@ public sealed class MerchantDomainTests
         merchant.Activate(Now).IsSuccess.ShouldBeTrue();
         merchant.CanTransact.ShouldBeTrue();
 
-        merchant.Suspend(Now).IsSuccess.ShouldBeTrue();
+        merchant.Freeze(Now).IsSuccess.ShouldBeTrue();
         merchant.CanTransact.ShouldBeFalse();
+
+        // Activate unfreezes — the reversible risk-hold returns the merchant to transactable.
+        merchant.Activate(Now).IsSuccess.ShouldBeTrue();
+        merchant.CanTransact.ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Settlement_delay_defaults_to_zero_and_accepts_the_valid_range()
+    {
+        var merchant = NewMerchant();
+        merchant.SettlementDelayDays.ShouldBe(0); // T+0 by default
+
+        merchant.SetSettlementDelay(2, Now).IsSuccess.ShouldBeTrue();
+        merchant.SettlementDelayDays.ShouldBe(2);
+
+        merchant.SetSettlementDelay(MerchantEntity.MaxSettlementDelayDays, Now).IsSuccess.ShouldBeTrue();
+        merchant.SetSettlementDelay(0, Now).IsSuccess.ShouldBeTrue(); // back to T+0
+        merchant.SettlementDelayDays.ShouldBe(0);
+    }
+
+    [Theory]
+    [InlineData(-1)]
+    [InlineData(31)]
+    public void Settlement_delay_rejects_out_of_range_values(int days)
+    {
+        var merchant = NewMerchant();
+        merchant.SetSettlementDelay(days, Now).Error!.Code.ShouldBe(MerchantErrors.SettlementDelayInvalid.Code);
+        merchant.SettlementDelayDays.ShouldBe(0); // unchanged
     }
 
     [Fact]

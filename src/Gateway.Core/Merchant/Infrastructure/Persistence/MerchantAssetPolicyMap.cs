@@ -15,8 +15,8 @@ public sealed class MerchantAssetPolicyMap : IEntityTypeConfiguration<MerchantAs
 
         // BigInteger -> decimal(38,0) via BigIntegerTypeMapping (UseBigIntegerMoney).
         builder.Property(p => p.SweepThreshold).IsRequired();
-        builder.Property(p => p.MinimumWithdrawal).IsRequired();
-        builder.Property(p => p.MaximumWithdrawal); // null = no upper bound
+        builder.Property(p => p.MinimumWithdrawal); // null = unset (fall back to the platform config minimum)
+        builder.Property(p => p.MaximumWithdrawal); // null = unset (fall back to the platform config maximum)
 
         // Pricing: fixed base-unit components + basis-point percentages (§14). Defaults keep existing
         // rows (and unpriced merchants) at zero fee.
@@ -24,6 +24,11 @@ public sealed class MerchantAssetPolicyMap : IEntityTypeConfiguration<MerchantAs
         builder.Property(p => p.DepositFeeBps).IsRequired().HasDefaultValue(0);
         builder.Property(p => p.WithdrawalFee).IsRequired();
         builder.Property(p => p.WithdrawalFeeBps).IsRequired().HasDefaultValue(0);
+
+        // Merchant-withdrawal (earnings cash-out) liquidity cap — distinct from the user Min/MaxWithdrawal.
+        // Null flat + 0 bps = no cap. BigInteger? → decimal(38,0) nullable.
+        builder.Property(p => p.MerchantWithdrawalFlatCap);
+        builder.Property(p => p.MerchantWithdrawalPercentBps).IsRequired().HasDefaultValue(0);
 
         builder.Property<byte[]>("RowVersion").IsRowVersion();
 
@@ -37,7 +42,7 @@ public sealed class MerchantAssetPolicyMap : IEntityTypeConfiguration<MerchantAs
         {
             t.HasCheckConstraint(
                 "CK_MerchantAssetPolicy_NonNegative",
-                "[SweepThreshold] >= 0 AND [MinimumWithdrawal] >= 0 AND [WithdrawalFee] >= 0 AND [DepositFeeFixed] >= 0 AND ([MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= 0)");
+                "[SweepThreshold] >= 0 AND [WithdrawalFee] >= 0 AND [DepositFeeFixed] >= 0 AND ([MinimumWithdrawal] IS NULL OR [MinimumWithdrawal] >= 0) AND ([MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= 0)");
 
             // Deposit bps stays below 100% so the payer-on-top gross-up is always solvable; withdrawal bps ≤ 100%.
             t.HasCheckConstraint(
@@ -46,7 +51,11 @@ public sealed class MerchantAssetPolicyMap : IEntityTypeConfiguration<MerchantAs
 
             t.HasCheckConstraint(
                 "CK_MerchantAssetPolicy_WithdrawalRange",
-                "[MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= [MinimumWithdrawal]");
+                "[MaximumWithdrawal] IS NULL OR [MinimumWithdrawal] IS NULL OR [MaximumWithdrawal] >= [MinimumWithdrawal]");
+
+            t.HasCheckConstraint(
+                "CK_MerchantAssetPolicy_MerchantWithdrawalCap",
+                "[MerchantWithdrawalPercentBps] >= 0 AND [MerchantWithdrawalPercentBps] <= 10000 AND ([MerchantWithdrawalFlatCap] IS NULL OR [MerchantWithdrawalFlatCap] >= 0)");
         });
     }
 }

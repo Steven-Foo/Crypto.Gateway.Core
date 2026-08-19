@@ -44,6 +44,15 @@ public static class MerchantErrors
     public static readonly Error FeeBpsInvalid =
         Error.Validation("merchant.fee_bps_invalid", "Fee basis points are out of range (deposit 0-9999, withdrawal 0-10000).");
 
+    public static readonly Error SettlementAddressRequired =
+        Error.Validation("merchant.settlement_address_required", "A settlement wallet address is required.");
+
+    public static readonly Error WithdrawalCapBpsInvalid =
+        Error.Validation("merchant.withdrawal_cap_bps_invalid", "Merchant-withdrawal percent cap must be 0-10000 basis points (0 = no cap).");
+
+    public static readonly Error SettlementDelayInvalid =
+        Error.Validation("merchant.settlement_delay_invalid", "Settlement period must be 0-30 days (T+N; 0 = T+0, immediate).");
+
     public static readonly Error WebhookRetryCountInvalid =
         Error.Validation("merchant.webhook_retry_count_invalid", "Webhook retry count must be between 0 and 20.");
 

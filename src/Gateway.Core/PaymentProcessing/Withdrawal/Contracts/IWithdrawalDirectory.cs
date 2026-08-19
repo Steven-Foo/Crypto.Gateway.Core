@@ -18,7 +18,8 @@ public sealed record WithdrawalView(
     DateTimeOffset CreatedAt);
 
 /// <summary>Ops search filters — every field optional and AND-combined. <see cref="AssetId"/> is resolved
-/// from a "coin" symbol by the caller (the host owns <c>IAssetCatalog</c>, Withdrawal does not — §4.5).</summary>
+/// from a "coin" symbol by the caller (the host owns <c>IAssetCatalog</c>, Withdrawal does not — §4.5).
+/// <see cref="Kind"/> is the withdrawal-kind name ("User" | "Merchant"); an unrecognised value is ignored.</summary>
 public sealed record WithdrawalAdminFilter(
     Guid? MerchantId,
     Guid? SystemOrderNumber,
@@ -27,7 +28,8 @@ public sealed record WithdrawalAdminFilter(
     Chain? Network,
     Guid? AssetId,
     DateTimeOffset? FromDate,
-    DateTimeOffset? ToDate);
+    DateTimeOffset? ToDate,
+    string? Kind = null);
 
 /// <summary>The Ops transaction-search read model for one withdrawal. <see cref="Status"/> is the effective,
 /// already-collapsed vocabulary ("pending" | "pending_approval" | "insufficient_balance" | "awaiting_release" |
@@ -51,14 +53,18 @@ public sealed record WithdrawalAdminRow(
     string? TransactionHash,
     Guid? SourceWalletId,
     DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    string Kind);
 
 public interface IWithdrawalDirectory
 {
-    /// <summary>Looks up a withdrawal by the merchant's own transaction id — the merchant-facing
-    /// transaction-query endpoint's withdrawal-side lookup. Scoped to <paramref name="merchantId"/>: this
-    /// id is only unique per-merchant, never globally.</summary>
+    /// <summary>Looks up a withdrawal by the merchant's own transaction id, scoped to
+    /// <paramref name="merchantId"/> and a specific <paramref name="kind"/> ("User" | "Merchant"). The id is
+    /// unique only per <c>(merchant, kind, reference)</c>, so a user payout and a merchant cash-out can reuse
+    /// the same reference — the kind disambiguates which one to return. An unrecognised kind falls back to
+    /// "User".</summary>
     Task<WithdrawalView?> FindByMerchantReferenceAsync(
-        Guid merchantId, string merchantTransactionId, CancellationToken cancellationToken = default);
+        Guid merchantId, string merchantTransactionId, string kind = "User", CancellationToken cancellationToken = default);
 
     /// <summary>Paged, filtered search behind the Ops withdrawal-transactions screen — newest first.</summary>
     Task<(IReadOnlyList<WithdrawalAdminRow> Items, int TotalCount)> SearchAsync(

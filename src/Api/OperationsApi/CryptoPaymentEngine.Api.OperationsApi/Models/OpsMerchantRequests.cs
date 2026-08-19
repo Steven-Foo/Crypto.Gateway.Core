@@ -39,3 +39,39 @@ public sealed class SetMerchantFeeRequest
     public decimal WithdrawalFeeFixed { get; init; }
     public int WithdrawalFeeBps { get; init; }
 }
+
+/// <summary>Sets a merchant's settlement period (T+N) in whole days (0 = T+0). Gates the withdrawable balance
+/// on both user payouts and the merchant cash-out. Domain-validated 0–30.</summary>
+public sealed class SetSettlementPeriodRequest
+{
+    [Range(0, 30)] public int Days { get; init; }
+}
+
+/// <summary>Registers/updates the merchant's whitelisted cash-out (settlement) wallet for a chain.</summary>
+public sealed class SetSettlementWalletRequest
+{
+    [Required, MaxLength(16)] public string Chain { get; init; } = null!;
+    [Required, MaxLength(128)] public string Address { get; init; } = null!;
+}
+
+/// <summary>Sets the merchant-withdrawal (cash-out) liquidity cap for one asset: an optional flat cap in
+/// <b>display</b> units (null = no flat cap) plus a percentage cap in basis points (0 = no percent cap). Both
+/// unset ⇒ no cap. Distinct from the user Min/MaxWithdrawal.</summary>
+public sealed class SetWithdrawalCapRequest
+{
+    [Required, MaxLength(16)] public string Chain { get; init; } = null!;
+    [Required, MaxLength(16)] public string Coin { get; init; } = null!;
+    public decimal? FlatCap { get; init; }
+    public int PercentBps { get; init; }
+}
+
+/// <summary>Sets the per-merchant <b>user-withdrawal</b> min/max for one asset, in <b>display</b> units. Null on
+/// a bound = unset ⇒ the platform config limit (<c>Withdrawal:Policies</c>) applies for that bound; a set value
+/// (including 0 = "no minimum") overrides. Distinct from the cash-out cap.</summary>
+public sealed class SetWithdrawalLimitsRequest
+{
+    [Required, MaxLength(16)] public string Chain { get; init; } = null!;
+    [Required, MaxLength(16)] public string Coin { get; init; } = null!;
+    public decimal? Minimum { get; init; }
+    public decimal? Maximum { get; init; }
+}

@@ -9,11 +9,19 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastr
 public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdrawalDirectory
 {
     public async Task<WithdrawalView?> FindByMerchantReferenceAsync(
-        Guid merchantId, string merchantTransactionId, CancellationToken cancellationToken = default)
+        Guid merchantId, string merchantTransactionId, string kind = "User", CancellationToken cancellationToken = default)
     {
+        // The (merchant, kind, reference) idempotency key means a user payout and a merchant cash-out can share
+        // one reference, so the lookup is scoped to a single kind — never a multiple-match. An unrecognised kind
+        // falls back to User (the host validates it upstream, so this is just defensive).
+        var withdrawalKind = Enum.TryParse<WithdrawalKind>(kind, ignoreCase: true, out var parsed)
+            ? parsed
+            : WithdrawalKind.User;
+
         var withdrawal = await context.Withdrawals.AsNoTracking()
             .SingleOrDefaultAsync(
-                w => w.MerchantId == merchantId && w.MerchantTransactionId == merchantTransactionId, cancellationToken);
+                w => w.MerchantId == merchantId && w.Kind == withdrawalKind && w.MerchantTransactionId == merchantTransactionId,
+                cancellationToken);
 
         if (withdrawal is null)
             return null;
@@ -43,6 +51,12 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
             .Where(w => filter.FromDate == null || w.CreatedAt >= filter.FromDate)
             .Where(w => filter.ToDate == null || w.CreatedAt <= filter.ToDate);
 
+        // Optional kind filter ("User" | "Merchant"). An unrecognised value is ignored (no narrowing) — the host
+        // pre-validates the query param, so this is just defensive.
+        if (!string.IsNullOrWhiteSpace(filter.Kind)
+            && Enum.TryParse<WithdrawalKind>(filter.Kind, ignoreCase: true, out var kind))
+            query = query.Where(w => w.Kind == kind);
+
         var totalCount = await query.CountAsync(cancellationToken);
 
         var items = await query
@@ -66,6 +80,8 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
         EffectiveStatus(withdrawal.Status),
         withdrawal.StatusReason,
         withdrawal.Confirmations,
+        withdrawal.CreatedAt,
+        withdrawal.Kind.ToString());
         withdrawal.TransactionHash,
         withdrawal.SourceWalletId,
         withdrawal.CreatedAt);

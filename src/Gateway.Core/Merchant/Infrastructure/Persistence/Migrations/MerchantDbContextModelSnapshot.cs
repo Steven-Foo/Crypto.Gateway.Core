@@ -52,6 +52,11 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
                         .ValueGeneratedOnAddOrUpdate()
                         .HasColumnType("rowversion");
 
+                    b.Property<int>("SettlementDelayDays")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
+
                     b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(16)
@@ -145,7 +150,15 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
                     b.Property<Guid>("MerchantId")
                         .HasColumnType("uniqueidentifier");
 
-                    b.Property<BigInteger>("MinimumWithdrawal")
+                    b.Property<BigInteger?>("MerchantWithdrawalFlatCap")
+                        .HasColumnType("decimal(38,0)");
+
+                    b.Property<int>("MerchantWithdrawalPercentBps")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
+
+                    b.Property<BigInteger?>("MinimumWithdrawal")
                         .HasColumnType("decimal(38,0)");
 
                     b.Property<byte[]>("RowVersion")
@@ -176,9 +189,11 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
                         {
                             t.HasCheckConstraint("CK_MerchantAssetPolicy_FeeBps", "[DepositFeeBps] >= 0 AND [DepositFeeBps] < 10000 AND [WithdrawalFeeBps] >= 0 AND [WithdrawalFeeBps] <= 10000");
 
-                            t.HasCheckConstraint("CK_MerchantAssetPolicy_NonNegative", "[SweepThreshold] >= 0 AND [MinimumWithdrawal] >= 0 AND [WithdrawalFee] >= 0 AND [DepositFeeFixed] >= 0 AND ([MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= 0)");
+                            t.HasCheckConstraint("CK_MerchantAssetPolicy_MerchantWithdrawalCap", "[MerchantWithdrawalPercentBps] >= 0 AND [MerchantWithdrawalPercentBps] <= 10000 AND ([MerchantWithdrawalFlatCap] IS NULL OR [MerchantWithdrawalFlatCap] >= 0)");
 
-                            t.HasCheckConstraint("CK_MerchantAssetPolicy_WithdrawalRange", "[MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= [MinimumWithdrawal]");
+                            t.HasCheckConstraint("CK_MerchantAssetPolicy_NonNegative", "[SweepThreshold] >= 0 AND [WithdrawalFee] >= 0 AND [DepositFeeFixed] >= 0 AND ([MinimumWithdrawal] IS NULL OR [MinimumWithdrawal] >= 0) AND ([MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= 0)");
+
+                            t.HasCheckConstraint("CK_MerchantAssetPolicy_WithdrawalRange", "[MaximumWithdrawal] IS NULL OR [MinimumWithdrawal] IS NULL OR [MaximumWithdrawal] >= [MinimumWithdrawal]");
                         });
                 });
 
@@ -224,6 +239,44 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
                         {
                             t.HasCheckConstraint("CK_MerchantConfiguration_WebhookRetryCount", "[WebhookRetryCount] >= 0 AND [WebhookRetryCount] <= 20");
                         });
+                });
+
+            modelBuilder.Entity("CryptoPaymentEngine.Gateway.Core.Merchant.Domain.MerchantSettlementWallet", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Address")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(128)");
+
+                    b.Property<string>("Chain")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<Guid>("MerchantId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("MerchantId", "Chain")
+                        .IsUnique();
+
+                    b.ToTable("MerchantSettlementWallet", "merchant");
                 });
 
             modelBuilder.Entity("CryptoPaymentEngine.Gateway.Core.Merchant.Domain.MerchantWebhook", b =>
@@ -370,6 +423,15 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
                         .IsRequired();
                 });
 
+            modelBuilder.Entity("CryptoPaymentEngine.Gateway.Core.Merchant.Domain.MerchantSettlementWallet", b =>
+                {
+                    b.HasOne("CryptoPaymentEngine.Gateway.Core.Merchant.Domain.Merchant", null)
+                        .WithMany("SettlementWallets")
+                        .HasForeignKey("MerchantId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
+                });
+
             modelBuilder.Entity("CryptoPaymentEngine.Gateway.Core.Merchant.Domain.Merchant", b =>
                 {
                     b.Navigation("AssetPolicies");
@@ -378,6 +440,8 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
                         .IsRequired();
 
                     b.Navigation("Credentials");
+
+                    b.Navigation("SettlementWallets");
                 });
 #pragma warning restore 612, 618
         }

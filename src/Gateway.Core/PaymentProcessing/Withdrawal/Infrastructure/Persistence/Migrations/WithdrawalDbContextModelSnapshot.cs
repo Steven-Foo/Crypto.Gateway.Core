@@ -67,6 +67,13 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastr
                     b.Property<BigInteger>("Fee")
                         .HasColumnType("decimal(38,0)");
 
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)")
+                        .HasDefaultValueSql("'User'");
+
                     b.Property<Guid>("MerchantId")
                         .HasColumnType("uniqueidentifier");
 
@@ -140,7 +147,7 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastr
                     b.HasIndex("Status")
                         .HasDatabaseName("IX_Withdrawal_Status");
 
-                    b.HasIndex("MerchantId", "MerchantTransactionId")
+                    b.HasIndex("MerchantId", "Kind", "MerchantTransactionId")
                         .IsUnique()
                         .HasDatabaseName("UX_Withdrawal_MerchantTxn");
 

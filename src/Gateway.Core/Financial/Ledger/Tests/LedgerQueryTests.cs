@@ -62,6 +62,86 @@ public sealed class LedgerQueryTests : LedgerTestHost
         (await query.GetMerchantBalanceAsync(Guid.CreateVersion7(), Asset, Ct)).ShouldBe(BigInteger.Zero);    // other merchant
     }
 
+    // ── settled (T+N withdrawable) balance ──
+
+    [Fact]
+    public async Task Settled_balance_equals_total_when_every_deposit_has_matured()
+    {
+        await using (var ctx = Context())
+            await Poster(ctx).CreditDepositAsync(new CreditDepositCommand(Guid.CreateVersion7(), Merchant, Asset, Deposited), Ct);
+
+        // Cutoff in the future ⇒ nothing is still-maturing ⇒ the whole balance is settled.
+        await using var verify = Context();
+        (await new LedgerQuery(verify).GetMerchantSettledBalanceAsync(Merchant, Asset, DateTimeOffset.UtcNow.AddDays(1), Ct))
+            .ShouldBe(Deposited);
+    }
+
+    [Fact]
+    public async Task A_still_maturing_deposit_is_excluded_from_the_settled_balance()
+    {
+        await using (var ctx = Context())
+            await Poster(ctx).CreditDepositAsync(new CreditDepositCommand(Guid.CreateVersion7(), Merchant, Asset, Deposited), Ct);
+
+        // Cutoff in the past ⇒ the just-made deposit is dated on/after it ⇒ unmatured ⇒ nothing settled yet.
+        await using var verify = Context();
+        (await new LedgerQuery(verify).GetMerchantSettledBalanceAsync(Merchant, Asset, DateTimeOffset.UtcNow.AddDays(-1), Ct))
+            .ShouldBe(BigInteger.Zero);
+    }
+
+    [Fact]
+    public async Task Only_matured_deposits_count_toward_settled_a_recent_one_does_not()
+    {
+        var old = new FixedTime(DateTimeOffset.UtcNow.AddDays(-5));
+        var recent = new FixedTime(DateTimeOffset.UtcNow);
+
+        await using (var ctx = Context())
+            await Poster(ctx, old).CreditDepositAsync(new CreditDepositCommand(Guid.CreateVersion7(), Merchant, Asset, Deposited), Ct);
+        await using (var ctx = Context())
+            await Poster(ctx, recent).CreditDepositAsync(new CreditDepositCommand(Guid.CreateVersion7(), Merchant, Asset, Amount), Ct);
+
+        // Cutoff between the two ⇒ the 5-day-old deposit is settled, the just-now one is not.
+        await using var verify = Context();
+        (await new LedgerQuery(verify).GetMerchantSettledBalanceAsync(Merchant, Asset, DateTimeOffset.UtcNow.AddDays(-1), Ct))
+            .ShouldBe(Deposited);
+    }
+
+    [Fact]
+    public async Task A_reversed_recent_deposit_nets_to_zero_and_does_not_reduce_matured_settled_funds()
+    {
+        var reorgedId = Guid.CreateVersion7();
+        var old = new FixedTime(DateTimeOffset.UtcNow.AddDays(-5));
+        var recent = new FixedTime(DateTimeOffset.UtcNow);
+
+        await using (var ctx = Context())
+            await Poster(ctx, old).CreditDepositAsync(new CreditDepositCommand(Guid.CreateVersion7(), Merchant, Asset, Deposited), Ct);
+        await using (var ctx = Context())
+            await Poster(ctx, recent).CreditDepositAsync(new CreditDepositCommand(reorgedId, Merchant, Asset, Amount), Ct);
+        await using (var ctx = Context())
+            await Poster(ctx, recent).ReverseDepositAsync(new ReverseDepositCommand(reorgedId, Merchant, Asset, Amount), Ct);
+
+        // The recent deposit + its reversal both fall in the unmatured window and net to zero, so settled stays
+        // the matured 10M — NOT 7M (which a gross-only "subtract recent credits" rule would wrongly produce).
+        await using var verify = Context();
+        (await new LedgerQuery(verify).GetMerchantSettledBalanceAsync(Merchant, Asset, DateTimeOffset.UtcNow.AddDays(-1), Ct))
+            .ShouldBe(Deposited);
+    }
+
+    [Fact]
+    public async Task Settled_never_goes_negative_when_outflows_exceed_matured_inflows()
+    {
+        // A matured deposit, then a reserve larger relative to what stays matured: settled clamps at zero.
+        await using (var ctx = Context())
+            await Poster(ctx).CreditDepositAsync(new CreditDepositCommand(Guid.CreateVersion7(), Merchant, Asset, Deposited), Ct);
+        await using (var ctx = Context())
+            await ((IWithdrawalLedger)Poster(ctx)).ReserveAsync(new ReserveWithdrawalRequest(Guid.CreateVersion7(), Merchant, Asset, Amount, Fee), Ct);
+
+        // Cutoff in the past ⇒ the deposit is treated as unmatured, but the reserve already left the balance:
+        // total = 10M − (3M+0.1M); unmaturedNet = 10M ⇒ settled = negative ⇒ clamped to zero.
+        await using var verify = Context();
+        (await new LedgerQuery(verify).GetMerchantSettledBalanceAsync(Merchant, Asset, DateTimeOffset.UtcNow.AddDays(-1), Ct))
+            .ShouldBe(BigInteger.Zero);
+    }
+
     [Fact]
     public async Task Treasury_holding_is_zero_when_the_asset_has_never_been_custodied()
     {

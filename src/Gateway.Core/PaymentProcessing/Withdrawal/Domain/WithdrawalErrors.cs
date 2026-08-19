@@ -22,6 +22,15 @@ public static class WithdrawalErrors
     public static readonly Error AboveMaximum =
         Error.Validation("withdrawal.above_maximum", "The amount exceeds the maximum withdrawal for this asset.");
 
+    public static readonly Error SettlementWalletNotRegistered =
+        Error.Conflict("withdrawal.settlement_wallet_not_registered", "No settlement wallet is registered for this merchant and chain.");
+
+    public static readonly Error ExceedsMerchantWithdrawalLimit =
+        Error.Validation("withdrawal.exceeds_merchant_withdrawal_limit", "The amount exceeds your merchant withdrawal (cash-out) limit.");
+
+    public static readonly Error ExceedsSettledBalance =
+        Error.Validation("withdrawal.exceeds_settled_balance", "The amount exceeds the settled (withdrawable) balance; some funds are still within the settlement period (T+N).");
+
     public static readonly Error MerchantCannotTransact =
         Error.Conflict("withdrawal.merchant_cannot_transact", "The merchant is not active and cannot withdraw.");
 

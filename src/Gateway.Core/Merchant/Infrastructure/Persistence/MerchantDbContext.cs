@@ -14,6 +14,7 @@ public sealed class MerchantDbContext(DbContextOptions<MerchantDbContext> option
     public DbSet<MerchantApiCredential> Credentials => Set<MerchantApiCredential>();
     public DbSet<MerchantConfiguration> Configurations => Set<MerchantConfiguration>();
     public DbSet<MerchantAssetPolicy> AssetPolicies => Set<MerchantAssetPolicy>();
+    public DbSet<MerchantSettlementWallet> SettlementWallets => Set<MerchantSettlementWallet>();
     public DbSet<MerchantWebhook> Webhooks => Set<MerchantWebhook>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
@@ -23,6 +24,7 @@ public sealed class MerchantDbContext(DbContextOptions<MerchantDbContext> option
         modelBuilder.ApplyConfiguration(new MerchantApiCredentialMap());
         modelBuilder.ApplyConfiguration(new MerchantConfigurationMap());
         modelBuilder.ApplyConfiguration(new MerchantAssetPolicyMap());
+        modelBuilder.ApplyConfiguration(new MerchantSettlementWalletMap());
         modelBuilder.ApplyConfiguration(new MerchantWebhookMap());
     }
 }

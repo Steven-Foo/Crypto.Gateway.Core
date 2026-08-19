@@ -30,12 +30,22 @@ public abstract class LedgerTestHost : IAsyncLifetime
         new(new DbContextOptionsBuilder<LedgerDbContext>().UseSqlServer(ConnectionString).UseBigIntegerMoney().Options);
 
     /// <summary>A fully-wired poster over a fresh context, with the lock disabled so rowversion is the guard.</summary>
-    protected static ILedgerPoster Poster(LedgerDbContext context)
+    protected static ILedgerPoster Poster(LedgerDbContext context) => Poster(context, TimeProvider.System);
+
+    /// <summary>As <see cref="Poster(LedgerDbContext)"/>, but with an explicit clock so a test can date journals
+    /// (matured vs still-maturing) — the settled-balance query filters on <c>Journal.CreatedAt</c>.</summary>
+    protected static ILedgerPoster Poster(LedgerDbContext context, TimeProvider time)
     {
         var postingStore = new LedgerPostingStore(
-            context, new NoOpDistributedLockFactory(), TimeProvider.System, NullLogger<LedgerPostingStore>.Instance);
-        var accountStore = new LedgerAccountStore(context, TimeProvider.System);
-        return new LedgerPoster(accountStore, postingStore, TimeProvider.System);
+            context, new NoOpDistributedLockFactory(), time, NullLogger<LedgerPostingStore>.Instance);
+        var accountStore = new LedgerAccountStore(context, time);
+        return new LedgerPoster(accountStore, postingStore, time);
+    }
+
+    /// <summary>A fixed clock, so a posting lands on a chosen date.</summary>
+    protected sealed class FixedTime(DateTimeOffset now) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => now;
     }
 
     public async ValueTask InitializeAsync()

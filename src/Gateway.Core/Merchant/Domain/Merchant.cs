@@ -14,8 +14,13 @@ public sealed partial class Merchant : Entity<Guid>
     public const int MinCodeLength = 3;
     public const int MaxCodeLength = 64;
 
+    /// <summary>Upper bound on the settlement delay (T+N). Deposits mature into withdrawable funds at most
+    /// this many days after confirmation; a larger value is almost certainly a misconfiguration.</summary>
+    public const int MaxSettlementDelayDays = 30;
+
     private readonly List<MerchantApiCredential> _credentials = [];
     private readonly List<MerchantAssetPolicy> _assetPolicies = [];
+    private readonly List<MerchantSettlementWallet> _settlementWallets = [];
 
     private Merchant(Guid id, string merchantCode, string name, string? callbackUrl, DateTimeOffset createdAt)
         : base(id)
@@ -24,6 +29,7 @@ public sealed partial class Merchant : Entity<Guid>
         Name = name;
         CallbackUrl = callbackUrl;
         Status = MerchantStatus.Pending;
+        SettlementDelayDays = 0;
         CreatedAt = createdAt;
         UpdatedAt = createdAt;
         Configuration = MerchantConfiguration.CreateDefault(id, createdAt);
@@ -37,12 +43,20 @@ public sealed partial class Merchant : Entity<Guid>
     public string Name { get; private set; } = null!;
     public string? CallbackUrl { get; private set; }
     public MerchantStatus Status { get; private set; }
+
+    /// <summary>The merchant's settlement period, in whole days (T+N). Deposits confirmed on calendar day D
+    /// (UTC) become withdrawable at 00:00 UTC of day D+N. 0 = T+0 (immediately withdrawable). Gates BOTH the
+    /// merchant's earnings cash-out and the user payouts it sends — only settled funds may leave. The
+    /// maturity math lives in the Ledger's settled-balance query; this is just the admin-set policy value.</summary>
+    public int SettlementDelayDays { get; private set; }
+
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
 
     public MerchantConfiguration Configuration { get; private set; } = null!;
     public IReadOnlyList<MerchantApiCredential> Credentials => _credentials;
     public IReadOnlyList<MerchantAssetPolicy> AssetPolicies => _assetPolicies;
+    public IReadOnlyList<MerchantSettlementWallet> SettlementWallets => _settlementWallets;
 
     public bool CanTransact => Status == MerchantStatus.Active;
 
@@ -72,9 +86,26 @@ public sealed partial class Merchant : Entity<Guid>
 
     public Result Activate(DateTimeOffset now) => TransitionTo(MerchantStatus.Active, now);
 
-    public Result Suspend(DateTimeOffset now) => TransitionTo(MerchantStatus.Suspended, now);
+    /// <summary>Admin risk-hold — blocks all transacting via <c>CanTransact</c>. Reversible: <see cref="Activate"/>
+    /// unfreezes. Does not stop crediting funds already sent on-chain (§14) — it stops new activity.</summary>
+    public Result Freeze(DateTimeOffset now) => TransitionTo(MerchantStatus.Frozen, now);
 
     public Result Close(DateTimeOffset now) => TransitionTo(MerchantStatus.Closed, now);
+
+    /// <summary>Sets the settlement period (T+N) in whole days. 0 = T+0. Rejects a negative value or one
+    /// beyond <see cref="MaxSettlementDelayDays"/> (near-certain misconfiguration).</summary>
+    public Result SetSettlementDelay(int days, DateTimeOffset now)
+    {
+        if (Status == MerchantStatus.Closed)
+            return Result.Failure(MerchantErrors.Closed);
+
+        if (days < 0 || days > MaxSettlementDelayDays)
+            return Result.Failure(MerchantErrors.SettlementDelayInvalid);
+
+        SettlementDelayDays = days;
+        UpdatedAt = now;
+        return Result.Success();
+    }
 
     public Result UpdateCallbackUrl(string? callbackUrl, DateTimeOffset now)
     {
@@ -150,7 +181,7 @@ public sealed partial class Merchant : Entity<Guid>
     public Result SetAssetPolicy(
         Guid assetId,
         BigInteger sweepThreshold,
-        BigInteger minimumWithdrawal,
+        BigInteger? minimumWithdrawal,
         BigInteger? maximumWithdrawal,
         FeeSchedule fees,
         DateTimeOffset now)
@@ -177,6 +208,85 @@ public sealed partial class Merchant : Entity<Guid>
         _assetPolicies.Add(createResult.Value);
         UpdatedAt = now;
         return Result.Success();
+    }
+
+    /// <summary>Registers or updates the merchant's settlement (cash-out) wallet for a chain — the fixed
+    /// destination of a Merchant Withdrawal. One per chain; re-registering updates the address.</summary>
+    public Result SetSettlementWallet(Chain chain, string address, DateTimeOffset now)
+    {
+        if (Status == MerchantStatus.Closed)
+            return Result.Failure(MerchantErrors.Closed);
+
+        var existing = _settlementWallets.SingleOrDefault(w => w.Chain == chain);
+        if (existing is not null)
+        {
+            var updateResult = existing.Update(address, now);
+            if (updateResult.IsSuccess)
+                UpdatedAt = now;
+
+            return updateResult;
+        }
+
+        var createResult = MerchantSettlementWallet.Create(Id, chain, address, now);
+        if (createResult.IsFailure)
+            return Result.Failure(createResult.Error!);
+
+        _settlementWallets.Add(createResult.Value);
+        UpdatedAt = now;
+        return Result.Success();
+    }
+
+    /// <summary>Sets the per-merchant user-withdrawal min/max override for an asset. Null = unset (the flow uses
+    /// the platform config default). Creates an unpriced policy (limits only) if none exists, otherwise updates
+    /// just the limits — fees and the cash-out cap are preserved.</summary>
+    public Result SetWithdrawalLimits(Guid assetId, BigInteger? minimum, BigInteger? maximum, DateTimeOffset now)
+    {
+        if (Status == MerchantStatus.Closed)
+            return Result.Failure(MerchantErrors.Closed);
+
+        var policy = _assetPolicies.SingleOrDefault(p => p.AssetId == assetId);
+        if (policy is null)
+        {
+            var createResult = MerchantAssetPolicy.Create(
+                Id, assetId, BigInteger.Zero, null, null, FeeSchedule.None, now);
+            if (createResult.IsFailure)
+                return Result.Failure(createResult.Error!);
+
+            policy = createResult.Value;
+            _assetPolicies.Add(policy);
+        }
+
+        var result = policy.SetWithdrawalLimits(minimum, maximum, now);
+        if (result.IsSuccess)
+            UpdatedAt = now;
+
+        return result;
+    }
+
+    /// <summary>Sets the merchant-withdrawal (cash-out) liquidity cap for an asset. Creates an unpriced policy
+    /// (cap only) if none exists, otherwise updates just the cap — fees and user limits are preserved.</summary>
+    public Result SetMerchantWithdrawalCap(Guid assetId, BigInteger? flatCap, int percentBps, DateTimeOffset now)
+    {
+        if (Status == MerchantStatus.Closed)
+            return Result.Failure(MerchantErrors.Closed);
+
+        var policy = _assetPolicies.SingleOrDefault(p => p.AssetId == assetId);
+        if (policy is null)
+        {
+            var createResult = MerchantAssetPolicy.Create(
+                Id, assetId, BigInteger.Zero, null, null, FeeSchedule.None, now);
+            if (createResult.IsFailure)
+                return Result.Failure(createResult.Error!);
+
+            policy = createResult.Value;
+            _assetPolicies.Add(policy);
+        }
+
+        var capResult = policy.SetMerchantWithdrawalCap(flatCap, percentBps, now);
+        if (capResult.IsSuccess)
+            UpdatedAt = now;
+
+        return capResult;
     }
 
     private Result TransitionTo(MerchantStatus target, DateTimeOffset now)

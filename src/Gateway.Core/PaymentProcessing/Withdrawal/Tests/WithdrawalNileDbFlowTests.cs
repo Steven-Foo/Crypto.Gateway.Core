@@ -103,6 +103,8 @@ public sealed class WithdrawalNileDbFlowTests : IAsyncLifetime
         services.AddScoped<IEventBus, InProcessEventBus>();
 
         services.AddScoped<IWithdrawalRepository, WithdrawalRepository>();
+        services.AddScoped<ILedgerQuery, LedgerQuery>();
+        services.AddScoped<SettledBalanceGate>();
         services.AddScoped<IWithdrawalRequestService, WithdrawalRequestService>();
         services.AddScoped<WithdrawalProcessingService>();
         services.AddScoped<WithdrawalConfirmationService>();
@@ -113,6 +115,7 @@ public sealed class WithdrawalNileDbFlowTests : IAsyncLifetime
         services.AddScoped<IHotWalletAllocator, HotWalletAllocator>();
         services.AddSingleton<IMerchantDirectory>(new FakeMerchants());
         services.AddSingleton<IMerchantFeeSchedule>(new FakeFees(Fee));
+        services.AddSingleton<IMerchantWithdrawalLimits>(new UnsetWithdrawalLimits());
 
         // Ample hot-wallet float so the physical gate always clears — this live test exercises the real RPC
         // build/sign/broadcast, not the insufficient-balance park.
@@ -295,6 +298,12 @@ public sealed class WithdrawalNileDbFlowTests : IAsyncLifetime
             Task.FromResult<MerchantSummary?>(new MerchantSummary(merchantId, "ACME", "Acme", null, CanTransact: true));
         public Task<MerchantSummary?> FindByCodeAsync(string merchantCode, CancellationToken cancellationToken = default) =>
             Task.FromResult<MerchantSummary?>(null);
+    }
+
+    private sealed class UnsetWithdrawalLimits : IMerchantWithdrawalLimits
+    {
+        public Task<MerchantWithdrawalLimits> GetAsync(Guid merchantId, Guid assetId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(MerchantWithdrawalLimits.None);
     }
 
     private sealed class FakeFees(BigInteger withdrawalFee) : IMerchantFeeSchedule
