@@ -1,4 +1,5 @@
 using System.Numerics;
+using CryptoPaymentEngine.Api.OperationsApi.Security;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Application;
@@ -15,7 +16,7 @@ namespace CryptoPaymentEngine.Api.OperationsApi.Endpoints;
 public static class OpsWithdrawalTransactionEndpoints
 {
     public static void MapOpsWithdrawalTransactionApi(this IEndpointRouteBuilder app) =>
-        app.MapGet("/api/v1/ops/transactions/withdrawals", ListAsync);
+        app.MapGet("/api/v1/ops/transactions/withdrawals", ListAsync).RequirePermission(OpsPermissions.Withdrawals.View);
 
     private static async Task<IResult> ListAsync(
         IWithdrawalDirectory withdrawals,
@@ -90,6 +91,8 @@ public static class OpsWithdrawalTransactionEndpoints
                 // The per-merchant fee the merchant bore, snapshotted on the withdrawal at request (§14).
                 fee = AmountConversion.ToDisplay(BigInteger.Parse(withdrawal.FeeBaseUnits), decimals),
                 confirms = withdrawal.Confirmations,
+                txHash = withdrawal.TransactionHash,
+                sourceWalletId = withdrawal.SourceWalletId,
                 type = "withdrawal",
                 createdAt = withdrawal.CreatedAt,
                 status = withdrawal.Status,

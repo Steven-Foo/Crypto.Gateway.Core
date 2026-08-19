@@ -7,10 +7,14 @@ namespace CryptoPaymentEngine.Gateway.Core.Platform.Identity.Application;
 
 public sealed record LoginCommand(string Username, string Password);
 
-public sealed record LoginResult(string Token, DateTimeOffset ExpiresAt, StaffRole Role);
+public sealed record LoginResult(
+    string Token, DateTimeOffset ExpiresAt, string Username, Guid RoleId, string RoleName, IReadOnlyList<string> Permissions);
 
-/// <summary>A validated bearer session — what the host middleware needs to authorize a request.</summary>
-public sealed record StaffPrincipal(Guid StaffUserId, StaffRole Role);
+/// <summary>A validated bearer session — what the host middleware needs to authorize a request. Permissions
+/// are exactly what was snapshotted onto the session at login (§ StaffSession) — re-resolving them from the
+/// live Role on every request would defeat the point of snapshotting. <see cref="Username"/> is plain data a
+/// caller (e.g. the audit log) can attribute an action to, without depending on Identity itself (§4.5).</summary>
+public sealed record StaffPrincipal(Guid StaffUserId, string Username, Guid RoleId, string RoleName, IReadOnlyList<string> Permissions);
 
 public interface IStaffAuthService
 {
@@ -32,6 +36,7 @@ public interface IStaffSessionValidator
 public sealed class StaffAuthService(
     IStaffUserRepository userRepository,
     IStaffSessionRepository sessionRepository,
+    IRoleRepository roleRepository,
     IStaffPasswordHasher passwordHasher,
     IBearerTokenGenerator tokenGenerator,
     IOptions<StaffAuthOptions> options,
@@ -48,14 +53,25 @@ public sealed class StaffAuthService(
         if (user is null || !passwordHasher.Verify(command.Password, user.PasswordHash))
             return Result.Failure<LoginResult>(StaffUserErrors.InvalidCredentials);
 
+        if (!user.CanLogIn)
+            return Result.Failure<LoginResult>(StaffUserErrors.AccountDisabled);
+
+        // The role's permission set is resolved here, once, and snapshotted onto the session — a role's
+        // permissions changing takes effect on the account's next login, not mid-session (§ StaffSession).
+        var role = await roleRepository.GetByIdAsync(user.RoleId, cancellationToken);
+        if (role is null)
+            return Result.Failure<LoginResult>(RoleErrors.NotFound);
+
         var now = timeProvider.GetUtcNow();
         var token = tokenGenerator.Generate();
-        var session = StaffSession.Issue(user.Id, token.Hash, user.Role, TimeSpan.FromHours(_options.SessionTtlHours), now);
+        var session = StaffSession.Issue(
+            user.Id, user.Username, token.Hash, role.Id, role.Name, role.PermissionCodes,
+            TimeSpan.FromHours(_options.SessionTtlHours), now);
 
         sessionRepository.Add(session);
         await sessionRepository.SaveChangesAsync(cancellationToken);
 
-        return Result.Success(new LoginResult(token.RawToken, session.ExpiresAt, user.Role));
+        return Result.Success(new LoginResult(token.RawToken, session.ExpiresAt, user.Username, role.Id, role.Name, role.PermissionCodes));
     }
 
     public async Task<Result> LogoutAsync(string rawToken, CancellationToken cancellationToken = default)
@@ -75,6 +91,6 @@ public sealed class StaffAuthService(
         if (session is null || !session.IsValid(timeProvider.GetUtcNow()))
             return Result.Failure<StaffPrincipal>(StaffUserErrors.SessionExpiredOrRevoked);
 
-        return Result.Success(new StaffPrincipal(session.StaffUserId, session.Role));
+        return Result.Success(new StaffPrincipal(session.StaffUserId, session.Username, session.RoleId, session.RoleName, session.PermissionCodes));
     }
 }

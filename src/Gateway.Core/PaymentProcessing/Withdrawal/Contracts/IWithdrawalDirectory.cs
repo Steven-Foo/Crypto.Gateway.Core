@@ -32,7 +32,10 @@ public sealed record WithdrawalAdminFilter(
 /// <summary>The Ops transaction-search read model for one withdrawal. <see cref="Status"/> is the effective,
 /// already-collapsed vocabulary ("pending" | "pending_approval" | "insufficient_balance" | "awaiting_release" |
 /// "confirmed" | "failed"). <see cref="StatusReason"/> carries the parked-hold detail ("needs X, has Y") so ops
-/// can trace a stalled payout without opening the record; null unless the withdrawal is on a funding hold.</summary>
+/// can trace a stalled payout without opening the record; null unless the withdrawal is on a funding hold.
+/// <see cref="TransactionHash"/> is null until broadcast. <see cref="SourceWalletId"/> is the hot-pool wallet
+/// leased at signing (see <c>Withdrawal.SourceWalletId</c>) — null until the withdrawal reaches Signing —
+/// lets ops cross-reference a stalled/insufficient-balance payout to the exact pool wallet it's waiting on.</summary>
 public sealed record WithdrawalAdminRow(
     Guid MerchantId,
     Guid WithdrawalId,
@@ -45,6 +48,8 @@ public sealed record WithdrawalAdminRow(
     string Status,
     string? StatusReason,
     int? Confirmations,
+    string? TransactionHash,
+    Guid? SourceWalletId,
     DateTimeOffset CreatedAt);
 
 public interface IWithdrawalDirectory

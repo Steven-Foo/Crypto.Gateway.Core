@@ -66,6 +66,8 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
         EffectiveStatus(withdrawal.Status),
         withdrawal.StatusReason,
         withdrawal.Confirmations,
+        withdrawal.TransactionHash,
+        withdrawal.SourceWalletId,
         withdrawal.CreatedAt);
 
     /// <summary>"pending" | "pending_approval" | "insufficient_balance" | "awaiting_release" | "confirmed" |

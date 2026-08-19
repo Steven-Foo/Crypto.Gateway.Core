@@ -12,11 +12,13 @@ public sealed class IdentityDbContext(DbContextOptions<IdentityDbContext> option
 
     public DbSet<StaffUser> StaffUsers => Set<StaffUser>();
     public DbSet<StaffSession> StaffSessions => Set<StaffSession>();
+    public DbSet<Role> Roles => Set<Role>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
         base.OnModelCreating(modelBuilder);
         modelBuilder.ApplyConfiguration(new StaffUserMap());
         modelBuilder.ApplyConfiguration(new StaffSessionMap());
+        modelBuilder.ApplyConfiguration(new RoleMap());
     }
 }

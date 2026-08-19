@@ -5,35 +5,34 @@ using CryptoPaymentEngine.Api.OperationsApi.Services;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Application;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Application.Abstractions;
+using CryptoPaymentEngine.Gateway.Core.Platform.Audit.Application;
 using CryptoPaymentEngine.SharedKernel;
 
 namespace CryptoPaymentEngine.Api.OperationsApi.Endpoints;
 
 /// <summary>
-/// Staff-facing merchant management. Creating a merchant also eagerly provisions a fixed-size pool of
-/// deposit wallets (matches the proven APIGateway design: pre-create N wallets so the deposit flow always
-/// has a free address ready — the reuse/overflow-mint logic already lives in PaymentIntent and is
-/// unaffected by whether a wallet was pre-created or minted on demand). Pool size is configurable
-/// (<c>Operations:WalletPoolSize</c>, default 10). A single wallet failing to provision does not roll back
-/// the merchant — it's logged loudly so ops can top up the pool manually rather than losing the whole
-/// merchant over one bad derivation.
+/// Staff-facing merchant management. Creating a merchant seeds exactly ONE deposit wallet — enough that
+/// the merchant's very first <c>/deposit</c> call doesn't pay the provisioning cost synchronously — not a
+/// pre-minted pool (PaymentIntent's on-demand allocate-or-mint logic, unaffected by this, covers every
+/// wallet after the first: it reuses a free one or mints a new one when none is free, so nothing here is
+/// pre-creating addresses that may never see a deposit). A failed seed does not roll back the merchant —
+/// it just means the first deposit call provisions synchronously instead, same as before this endpoint
+/// touched wallets at all.
 /// </summary>
 public static class OpsMerchantEndpoints
 {
-    private const int DefaultWalletPoolSize = 10;
-
     public static void MapOpsMerchantApi(this IEndpointRouteBuilder app)
     {
-        // Reads — any authenticated staff (Admin or Viewer).
-        app.MapGet("/api/v1/ops/merchants", ListMerchantsAsync);
-        app.MapGet("/api/v1/ops/merchants/{id:guid}", GetMerchantAsync);
-        app.MapGet("/api/v1/ops/merchants/{id:guid}/allowed-ips", GetAllowedIpsAsync);
+        // Reads — ops.merchants.view.
+        app.MapGet("/api/v1/ops/merchants", ListMerchantsAsync).RequirePermission(OpsPermissions.Merchants.View);
+        app.MapGet("/api/v1/ops/merchants/{id:guid}", GetMerchantAsync).RequirePermission(OpsPermissions.Merchants.View);
+        app.MapGet("/api/v1/ops/merchants/{id:guid}/allowed-ips", GetAllowedIpsAsync).RequirePermission(OpsPermissions.Merchants.View);
 
-        // Mutations — Admin only.
-        app.MapPost("/api/v1/ops/merchants", CreateMerchantAsync).RequireAdmin();
-        app.MapPatch("/api/v1/ops/merchants/{id:guid}/status", SetStatusAsync).RequireAdmin();
-        app.MapPost("/api/v1/ops/merchants/{id:guid}/regenerate-key", RegenerateKeyAsync).RequireAdmin();
-        app.MapPut("/api/v1/ops/merchants/{id:guid}/allowed-ips", UpdateAllowedIpsAsync).RequireAdmin();
+        // Mutations — ops.merchants.manage (key rotation gets its own, more sensitive code).
+        app.MapPost("/api/v1/ops/merchants", CreateMerchantAsync).RequirePermission(OpsPermissions.Merchants.Manage);
+        app.MapPatch("/api/v1/ops/merchants/{id:guid}/status", SetStatusAsync).RequirePermission(OpsPermissions.Merchants.Manage);
+        app.MapPost("/api/v1/ops/merchants/{id:guid}/regenerate-key", RegenerateKeyAsync).RequirePermission(OpsPermissions.Merchants.RotateKey);
+        app.MapPut("/api/v1/ops/merchants/{id:guid}/allowed-ips", UpdateAllowedIpsAsync).RequirePermission(OpsPermissions.Merchants.Manage);
     }
 
     private static async Task<IResult> ListMerchantsAsync(
@@ -62,7 +61,7 @@ public static class OpsMerchantEndpoints
     }
 
     private static async Task<IResult> SetStatusAsync(
-        Guid id, SetMerchantStatusRequest request, IMerchantRegistrar registrar, HttpContext http)
+        Guid id, SetMerchantStatusRequest request, IMerchantRegistrar registrar, IAuditLogger audit, HttpContext http)
     {
         var result = request.Active
             ? await registrar.ActivateAsync(id, http.RequestAborted)
@@ -72,14 +71,25 @@ public static class OpsMerchantEndpoints
             return Results.Json(new { isSuccess = false, error = result.Error!.Message }, statusCode: StatusCodes.Status400BadRequest);
 
         var view = await registrar.GetAsync(id, http.RequestAborted);
+
+        var actor = AuditActor.From(http);
+        await audit.LogAsync(new LogAuditEntryCommand(
+            actor.StaffUserId, actor.Username, "merchant.status_changed", "Merchant", id.ToString(),
+            $"status={view.Value.Status}", actor.IpAddress), http.RequestAborted);
+
         return Results.Ok(new { isSuccess = true, data = new { merchantId = id, status = view.Value.Status }, error = (string?)null });
     }
 
-    private static async Task<IResult> RegenerateKeyAsync(Guid id, IMerchantRegistrar registrar, HttpContext http)
+    private static async Task<IResult> RegenerateKeyAsync(Guid id, IMerchantRegistrar registrar, IAuditLogger audit, HttpContext http)
     {
         var result = await registrar.RotateCredentialAsync(id, http.RequestAborted);
         if (result.IsFailure)
             return Results.Json(new { isSuccess = false, error = result.Error!.Message }, statusCode: StatusCodes.Status400BadRequest);
+
+        var actor = AuditActor.From(http);
+        await audit.LogAsync(new LogAuditEntryCommand(
+            actor.StaffUserId, actor.Username, "merchant.key_rotated", "Merchant", id.ToString(), null, actor.IpAddress),
+            http.RequestAborted);
 
         var credential = result.Value;
         return Results.Ok(new
@@ -106,7 +116,7 @@ public static class OpsMerchantEndpoints
 
     private static async Task<IResult> UpdateAllowedIpsAsync(
         Guid id, UpdateAllowedIpsRequest request, IMerchantRegistrar registrar, IMerchantRepository repository,
-        CloudflareService cloudflare, HttpContext http)
+        CloudflareService cloudflare, IAuditLogger audit, HttpContext http)
     {
         var invalidIps = new List<string>();
         var validIps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -141,6 +151,12 @@ public static class OpsMerchantEndpoints
         foreach (var ip in change.Removed.Where(ip => !otherIps.Contains(ip)))
             await cloudflare.RemoveIpAsync(ip, http.RequestAborted);
 
+        var actor = AuditActor.From(http);
+        await audit.LogAsync(new LogAuditEntryCommand(
+            actor.StaffUserId, actor.Username, "merchant.allowed_ips_updated", "Merchant", id.ToString(),
+            $"+[{string.Join(',', change.Added)}] -[{string.Join(',', change.Removed)}]", actor.IpAddress),
+            http.RequestAborted);
+
         return Results.Ok(new
         {
             isSuccess = true,
@@ -156,12 +172,8 @@ public static class OpsMerchantEndpoints
     }
 
     private static async Task<IResult> CreateMerchantAsync(
-        CreateMerchantRequest request,
-        IMerchantRegistrar registrar,
-        IDepositAddressProvisioner provisioner,
-        IConfiguration configuration,
-        ILogger<Program> logger,
-        HttpContext http)
+        CreateMerchantRequest request, IMerchantRegistrar registrar, IDepositAddressProvisioner provisioner,
+        IAuditLogger audit, ILogger<Program> logger, HttpContext http)
     {
         var result = await registrar.RegisterAsync(
             request.MerchantCode, request.Name, request.CallbackUrl, http.RequestAborted);
@@ -174,7 +186,7 @@ public static class OpsMerchantEndpoints
         var merchant = result.Value;
 
         // Registration leaves a merchant Pending (a real onboarding-review gate) — staff creating one via
-        // this endpoint IS the approval, so activate immediately or wallet provisioning below would refuse
+        // this endpoint IS the approval, so activate immediately or the seed wallet below would refuse
         // (WalletProvisioningService gates on merchant.CanTransact).
         var activation = await registrar.ActivateAsync(merchant.MerchantId, http.RequestAborted);
         if (activation.IsFailure)
@@ -182,25 +194,19 @@ public static class OpsMerchantEndpoints
                 new { isSuccess = false, error = activation.Error!.Message },
                 statusCode: StatusCodes.Status500InternalServerError);
 
-        var poolSize = configuration.GetValue<int?>("Operations:WalletPoolSize") ?? DefaultWalletPoolSize;
+        object? wallet = null;
+        var provisioned = await provisioner.ProvisionDepositAddressAsync(merchant.MerchantId, Chain.Tron, http.RequestAborted);
+        if (provisioned.IsFailure)
+            logger.LogWarning(
+                "Seed wallet failed to provision for merchant {MerchantId}: {Error}. The merchant's first " +
+                "deposit call will provision one synchronously instead.", merchant.MerchantId, provisioned.Error!.Code);
+        else
+            wallet = new { chain = provisioned.Value.Chain.ToString(), address = provisioned.Value.Address };
 
-        var wallets = new List<object>();
-        for (var i = 0; i < poolSize; i++)
-        {
-            var provisioned = await provisioner.ProvisionDepositAddressAsync(
-                merchant.MerchantId, Chain.Tron, http.RequestAborted);
-
-            if (provisioned.IsFailure)
-            {
-                logger.LogWarning(
-                    "Wallet {Index}/{PoolSize} failed to provision for merchant {MerchantId}: {Error}. " +
-                    "The pool is short by this one — top it up manually.",
-                    i + 1, poolSize, merchant.MerchantId, provisioned.Error!.Code);
-                continue;
-            }
-
-            wallets.Add(new { chain = provisioned.Value.Chain.ToString(), address = provisioned.Value.Address });
-        }
+        var actor = AuditActor.From(http);
+        await audit.LogAsync(new LogAuditEntryCommand(
+            actor.StaffUserId, actor.Username, "merchant.created", "Merchant", merchant.MerchantId.ToString(),
+            $"code={merchant.MerchantCode}", actor.IpAddress), http.RequestAborted);
 
         return Results.Ok(new
         {
@@ -212,7 +218,7 @@ public static class OpsMerchantEndpoints
                 apiKey = merchant.ApiKey,
                 apiSecret = merchant.ApiSecret,
                 signingSecret = merchant.SigningSecret,
-                wallets,
+                wallet,
             },
             error = (string?)null,
         });

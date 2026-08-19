@@ -177,3 +177,24 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [wallet].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260819090557_AddWalletStatusReason'
+)
+BEGIN
+    ALTER TABLE [wallet].[Wallet] ADD [StatusReason] nvarchar(512) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [wallet].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260819090557_AddWalletStatusReason'
+)
+BEGIN
+    INSERT INTO [wallet].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260819090557_AddWalletStatusReason', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

@@ -1,4 +1,5 @@
 using CryptoPaymentEngine.Api.OperationsApi.Security;
+using CryptoPaymentEngine.Gateway.Core.Platform.Audit.Application;
 using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Application;
 using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Domain;
 using CryptoPaymentEngine.SharedKernel;
@@ -14,10 +15,10 @@ namespace CryptoPaymentEngine.Api.OperationsApi.Endpoints;
 public static class OpsCallbackEndpoints
 {
     public static void MapOpsCallbackApi(this IEndpointRouteBuilder app) =>
-        app.MapPost("/api/v1/ops/callbacks/{type}/{referenceId:guid}/resend", ResendAsync).RequireAdmin();
+        app.MapPost("/api/v1/ops/callbacks/{type}/{referenceId:guid}/resend", ResendAsync).RequirePermission(OpsPermissions.Callbacks.Manage);
 
     private static async Task<IResult> ResendAsync(
-        string type, Guid referenceId, ICallbackDeliveryResendService resend, HttpContext http)
+        string type, Guid referenceId, ICallbackDeliveryResendService resend, IAuditLogger audit, HttpContext http)
     {
         if (!TryParseReferenceType(type, out var referenceType))
             return Results.Json(
@@ -32,6 +33,11 @@ public static class OpsCallbackEndpoints
                 : StatusCodes.Status409Conflict;
             return Results.Json(new { isSuccess = false, error = result.Error!.Message }, statusCode: status);
         }
+
+        var actor = AuditActor.From(http);
+        await audit.LogAsync(new LogAuditEntryCommand(
+            actor.StaffUserId, actor.Username, "callback.resent", "Callback", referenceId.ToString(), type, actor.IpAddress),
+            http.RequestAborted);
 
         return Results.Ok(new { isSuccess = true, data = new { type, referenceId }, error = (string?)null });
     }

@@ -15,10 +15,17 @@ public sealed class StaffUserMap : IEntityTypeConfiguration<StaffUser>
 
         builder.Property(u => u.Username).HasMaxLength(64).IsRequired();
         builder.Property(u => u.PasswordHash).HasMaxLength(512).IsRequired();
-        builder.Property(u => u.Role).HasConversion<string>().HasMaxLength(16).IsRequired();
+        builder.Property(u => u.RoleId).IsRequired();
+        builder.Property(u => u.Status).HasConversion<string>().HasMaxLength(16).IsRequired();
 
         builder.Ignore(u => u.DomainEvents);
 
         builder.HasIndex(u => u.Username).IsUnique();
+        builder.HasIndex(u => u.RoleId);
+
+        // Intra-module FK (§4.5 allows this freely within a module) — a DB-level backstop behind the
+        // app-level in-use precheck in RoleService.DeleteAsync; Restrict so a referenced role can't be
+        // dropped out from under an account even by a direct DB action.
+        builder.HasOne<Role>().WithMany().HasForeignKey(u => u.RoleId).OnDelete(DeleteBehavior.Restrict);
     }
 }

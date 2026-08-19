@@ -1,7 +1,7 @@
 using CryptoPaymentEngine.Api.OperationsApi.Models;
 using CryptoPaymentEngine.Api.OperationsApi.Security;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application;
-using CryptoPaymentEngine.Gateway.Core.Platform.Identity.Application;
+using CryptoPaymentEngine.Gateway.Core.Platform.Audit.Application;
 using CryptoPaymentEngine.SharedKernel;
 
 namespace CryptoPaymentEngine.Api.OperationsApi.Endpoints;
@@ -18,31 +18,39 @@ public static class OpsWithdrawalFundingEndpoints
 {
     public static void MapOpsWithdrawalFundingApi(this IEndpointRouteBuilder app)
     {
-        app.MapPost("/api/v1/ops/withdrawals/{withdrawalId:guid}/release", ReleaseAsync).RequireAdmin();
-        app.MapPost("/api/v1/ops/withdrawals/{withdrawalId:guid}/cancel", CancelAsync).RequireAdmin();
+        app.MapPost("/api/v1/ops/withdrawals/{withdrawalId:guid}/release", ReleaseAsync).RequirePermission(OpsPermissions.Withdrawals.Manage);
+        app.MapPost("/api/v1/ops/withdrawals/{withdrawalId:guid}/cancel", CancelAsync).RequirePermission(OpsPermissions.Withdrawals.Manage);
     }
 
     private static async Task<IResult> ReleaseAsync(
-        Guid withdrawalId, IWithdrawalFundingService funding, HttpContext http)
+        Guid withdrawalId, IWithdrawalFundingService funding, IAuditLogger audit, HttpContext http)
     {
-        var result = await funding.ReleaseAsync(withdrawalId, OperatorId(http), http.RequestAborted);
-        return result.IsFailure
-            ? Fail(result.Error!)
-            : Results.Ok(new { isSuccess = true, data = new { withdrawalId, status = "Released" }, error = (string?)null });
+        var actor = AuditActor.From(http);
+        var result = await funding.ReleaseAsync(withdrawalId, actor.StaffUserId.ToString(), http.RequestAborted);
+        if (result.IsFailure)
+            return Fail(result.Error!);
+
+        await audit.LogAsync(new LogAuditEntryCommand(
+            actor.StaffUserId, actor.Username, "withdrawal.released", "Withdrawal", withdrawalId.ToString(), null, actor.IpAddress),
+            http.RequestAborted);
+
+        return Results.Ok(new { isSuccess = true, data = new { withdrawalId, status = "Released" }, error = (string?)null });
     }
 
     private static async Task<IResult> CancelAsync(
-        Guid withdrawalId, CancelWithdrawalRequest request, IWithdrawalFundingService funding, HttpContext http)
+        Guid withdrawalId, CancelWithdrawalRequest request, IWithdrawalFundingService funding, IAuditLogger audit, HttpContext http)
     {
-        var result = await funding.CancelAsync(withdrawalId, OperatorId(http), request.Reason, http.RequestAborted);
-        return result.IsFailure
-            ? Fail(result.Error!)
-            : Results.Ok(new { isSuccess = true, data = new { withdrawalId, status = "Cancelled" }, error = (string?)null });
-    }
+        var actor = AuditActor.From(http);
+        var result = await funding.CancelAsync(withdrawalId, actor.StaffUserId.ToString(), request.Reason, http.RequestAborted);
+        if (result.IsFailure)
+            return Fail(result.Error!);
 
-    /// <summary>The authenticated staff caller's id — never a request field, so no one can act as someone else.</summary>
-    private static string OperatorId(HttpContext http) =>
-        ((StaffPrincipal)http.Items[StaffBearerAuthMiddleware.PrincipalItem]!).StaffUserId.ToString();
+        await audit.LogAsync(new LogAuditEntryCommand(
+            actor.StaffUserId, actor.Username, "withdrawal.cancelled", "Withdrawal", withdrawalId.ToString(), request.Reason, actor.IpAddress),
+            http.RequestAborted);
+
+        return Results.Ok(new { isSuccess = true, data = new { withdrawalId, status = "Cancelled" }, error = (string?)null });
+    }
 
     private static IResult Fail(Error error)
     {

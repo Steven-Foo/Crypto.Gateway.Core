@@ -1,7 +1,7 @@
 using CryptoPaymentEngine.Api.OperationsApi.Models;
 using CryptoPaymentEngine.Api.OperationsApi.Security;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application;
-using CryptoPaymentEngine.Gateway.Core.Platform.Identity.Application;
+using CryptoPaymentEngine.Gateway.Core.Platform.Audit.Application;
 using CryptoPaymentEngine.SharedKernel;
 
 namespace CryptoPaymentEngine.Api.OperationsApi.Endpoints;
@@ -17,32 +17,39 @@ public static class OpsWithdrawalApprovalEndpoints
 {
     public static void MapOpsWithdrawalApprovalApi(this IEndpointRouteBuilder app)
     {
-        app.MapPost("/api/v1/ops/withdrawals/{withdrawalId:guid}/approve", ApproveAsync).RequireAdmin();
-        app.MapPost("/api/v1/ops/withdrawals/{withdrawalId:guid}/reject", RejectAsync).RequireAdmin();
+        app.MapPost("/api/v1/ops/withdrawals/{withdrawalId:guid}/approve", ApproveAsync).RequirePermission(OpsPermissions.Withdrawals.Approve);
+        app.MapPost("/api/v1/ops/withdrawals/{withdrawalId:guid}/reject", RejectAsync).RequirePermission(OpsPermissions.Withdrawals.Approve);
     }
 
     private static async Task<IResult> ApproveAsync(
-        Guid withdrawalId, IWithdrawalApprovalService approvals, HttpContext http)
+        Guid withdrawalId, IWithdrawalApprovalService approvals, IAuditLogger audit, HttpContext http)
     {
-        var result = await approvals.ApproveAsync(withdrawalId, ApproverId(http), http.RequestAborted);
-        return result.IsFailure
-            ? Fail(result.Error!)
-            : Results.Ok(new { isSuccess = true, data = new { withdrawalId, status = "Approved" }, error = (string?)null });
+        var actor = AuditActor.From(http);
+        var result = await approvals.ApproveAsync(withdrawalId, actor.StaffUserId.ToString(), http.RequestAborted);
+        if (result.IsFailure)
+            return Fail(result.Error!);
+
+        await audit.LogAsync(new LogAuditEntryCommand(
+            actor.StaffUserId, actor.Username, "withdrawal.approved", "Withdrawal", withdrawalId.ToString(), null, actor.IpAddress),
+            http.RequestAborted);
+
+        return Results.Ok(new { isSuccess = true, data = new { withdrawalId, status = "Approved" }, error = (string?)null });
     }
 
     private static async Task<IResult> RejectAsync(
-        Guid withdrawalId, RejectWithdrawalRequest request, IWithdrawalApprovalService approvals, HttpContext http)
+        Guid withdrawalId, RejectWithdrawalRequest request, IWithdrawalApprovalService approvals, IAuditLogger audit, HttpContext http)
     {
-        var result = await approvals.RejectAsync(withdrawalId, ApproverId(http), request.Reason, http.RequestAborted);
-        return result.IsFailure
-            ? Fail(result.Error!)
-            : Results.Ok(new { isSuccess = true, data = new { withdrawalId, status = "Rejected" }, error = (string?)null });
-    }
+        var actor = AuditActor.From(http);
+        var result = await approvals.RejectAsync(withdrawalId, actor.StaffUserId.ToString(), request.Reason, http.RequestAborted);
+        if (result.IsFailure)
+            return Fail(result.Error!);
 
-    /// <summary>The authenticated staff caller's id — never a request field, so no one can approve as
-    /// someone else. <c>StaffPrincipal</c> carries no display name today, only the id.</summary>
-    private static string ApproverId(HttpContext http) =>
-        ((StaffPrincipal)http.Items[StaffBearerAuthMiddleware.PrincipalItem]!).StaffUserId.ToString();
+        await audit.LogAsync(new LogAuditEntryCommand(
+            actor.StaffUserId, actor.Username, "withdrawal.rejected", "Withdrawal", withdrawalId.ToString(), request.Reason, actor.IpAddress),
+            http.RequestAborted);
+
+        return Results.Ok(new { isSuccess = true, data = new { withdrawalId, status = "Rejected" }, error = (string?)null });
+    }
 
     private static IResult Fail(Error error)
     {

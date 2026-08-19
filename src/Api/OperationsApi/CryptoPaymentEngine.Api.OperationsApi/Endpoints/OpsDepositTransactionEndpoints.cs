@@ -1,4 +1,5 @@
 using System.Numerics;
+using CryptoPaymentEngine.Api.OperationsApi.Security;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Contracts;
@@ -17,7 +18,7 @@ namespace CryptoPaymentEngine.Api.OperationsApi.Endpoints;
 public static class OpsDepositTransactionEndpoints
 {
     public static void MapOpsDepositTransactionApi(this IEndpointRouteBuilder app) =>
-        app.MapGet("/api/v1/ops/transactions/deposits", ListAsync);
+        app.MapGet("/api/v1/ops/transactions/deposits", ListAsync).RequirePermission(OpsPermissions.Deposits.View);
 
     private static async Task<IResult> ListAsync(
         IPaymentIntentDirectory paymentIntents,
@@ -96,6 +97,7 @@ public static class OpsDepositTransactionEndpoints
                 coin = asset?.Symbol ?? "",
                 expectedAmount = AmountConversion.ToDisplay(BigInteger.Parse(intent.ExpectedAmountBaseUnits), decimals),
                 receivedAmount = matched is null ? (decimal?)null : AmountConversion.ToDisplay(BigInteger.Parse(matched.AmountBaseUnits), decimals),
+                txHash = matched?.TransactionHash,
                 // The platform fee actually charged, snapshotted on the matched deposit at detection (§14). Null
                 // until a deposit matches this invoice — no deposit, no fee charged yet.
                 fee = matched is null ? (decimal?)null : AmountConversion.ToDisplay(BigInteger.Parse(matched.FeeBaseUnits), decimals),

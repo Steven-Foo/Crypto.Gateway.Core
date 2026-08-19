@@ -42,6 +42,29 @@ public sealed class WalletRepository(WalletDbContext context) : IWalletRepositor
         }
     }
 
+    public async Task<(IReadOnlyList<WalletAdminRow> Items, int TotalCount)> SearchAsync(
+        WalletAdminFilter filter, int page, int pageSize, CancellationToken cancellationToken = default)
+    {
+        var query = context.Wallets.AsNoTracking()
+            .Where(w => filter.MerchantId == null || w.MerchantId == filter.MerchantId)
+            .Where(w => filter.Address == null || w.Address == filter.Address)
+            .Where(w => filter.Chain == null || w.Chain == filter.Chain)
+            .Where(w => filter.Status == null || w.Status == filter.Status);
+
+        var totalCount = await query.CountAsync(cancellationToken);
+
+        var items = await query
+            .OrderByDescending(w => w.CreatedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(w => new WalletAdminRow(
+                w.Id, w.MerchantId, w.Chain, w.Address, w.WalletType.ToString(), w.Status.ToString(),
+                w.StatusReason, w.DepositsReceivedCount, w.CreatedAt, w.UpdatedAt))
+            .ToListAsync(cancellationToken);
+
+        return (items, totalCount);
+    }
+
     public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) =>
         context.SaveChangesAsync(cancellationToken);
 }

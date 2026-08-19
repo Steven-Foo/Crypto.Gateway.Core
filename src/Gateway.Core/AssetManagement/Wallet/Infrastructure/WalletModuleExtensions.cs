@@ -31,6 +31,7 @@ public static class WalletModuleExtensions
         services.AddScoped<IPlatformWalletDirectory, PlatformWalletDirectory>();
         services.AddScoped<IPlatformWalletRegistrar, PlatformWalletRegistrationService>();
         services.AddScoped<IDepositAddressProvisioner, WalletProvisioningService>();
+        services.AddScoped<IWalletAdminService, WalletAdminService>();
 
         // Requires IConnectionMultiplexer (AddRedisInfrastructure) — resolved lazily, so this registration
         // is harmless in a host that never actually reserves a wallet (DI only constructs it on first use).

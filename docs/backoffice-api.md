@@ -133,9 +133,12 @@ Any authenticated role.
 **Response 404**: merchant not found.
 
 ### `POST /api/v1/ops/merchants` 🔒 Admin
-Creates a merchant. **This single call also activates the merchant and provisions a pool of deposit
-wallets** (default 10, `Operations:WalletPoolSize` config) — there is no separate "create then activate"
-step in the UI to build.
+Creates a merchant. **This single call also activates the merchant** — there is no separate "create then
+activate" step in the UI to build. It seeds **exactly one** deposit wallet (not a pool) so the merchant's
+very first `/deposit` call doesn't pay the provisioning cost synchronously — every wallet after that is
+still on-demand, PaymentIntent reuses a free one or mints a new one only when none is free. If the seed
+wallet fails to provision, merchant creation still succeeds (`wallet` comes back `null`) — the first
+deposit call just provisions synchronously instead.
 
 **Request**
 ```json
@@ -156,18 +159,17 @@ step in the UI to build.
     "apiKey": "string",
     "apiSecret": "string",
     "signingSecret": "string",
-    "wallets": [
-      { "chain": "Tron", "address": "T..." }
-    ]
+    "wallet": { "chain": "Tron", "address": "T..." }
   },
   "error": null
 }
 ```
+`wallet` is `null` if the seed provisioning failed (logged server-side) — this does not indicate a problem
+the UI needs to surface beyond maybe a subtle note; the merchant is fully usable regardless.
 **IMPORTANT for the UI**: `apiSecret` and `signingSecret` are shown **exactly once**, here, and are
 never retrievable again (not even via `GET /merchants/{id}`). The frontend must show these prominently
 with a copy button and an explicit "save this now, we cannot show it again" warning — same as the
-`regenerate-key` response below. `wallets` may have fewer than the pool size if some failed to
-provision (partial success is not itself an error — the call still returns 200).
+`regenerate-key` response below.
 
 **Response 400**: registration failed (e.g. duplicate `merchantCode`, invalid callback URL) —
 `{ isSuccess: false, error: "<message>" }`.

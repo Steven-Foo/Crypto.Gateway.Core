@@ -39,4 +39,10 @@ public static class WalletErrors
 
     public static readonly Error UnknownWalletType =
         Error.Validation("wallet.unknown_wallet_type", "The wallet type is not a recognised platform wallet type.");
+
+    public static readonly Error NotActive =
+        Error.Conflict("wallet.not_active", "Only an active wallet can be suspended.");
+
+    public static readonly Error NotSuspended =
+        Error.Conflict("wallet.not_suspended", "Only a suspended wallet can be resumed.");
 }

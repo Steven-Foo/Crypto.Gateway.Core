@@ -10,6 +10,9 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Domai
 /// tracks whether it arrives. It is a merchant-facing overlay on top of on-chain detection, <b>not</b> in the
 /// money path — the Ledger credits any confirmed deposit to the address's owning merchant independently, so a
 /// missing or mismatched intent never blocks a credit. This aggregate only records expectation and outcome.
+/// A confirmed deposit always matches whatever invoice is waiting on its address, exact amount or not — the
+/// callback carries both <c>expectedAmount</c> and the deposit's actual amount so the merchant can reconcile
+/// under/overpayment on their side; we do not gate or hold mismatched deposits for staff review.
 ///
 /// Correctness rules:
 /// <list type="bullet">
@@ -133,19 +136,21 @@ public sealed class PaymentIntent : Entity<Guid>
     }
 
     /// <summary>
-    /// Matches a confirmed deposit to this waiting invoice and raises <see cref="PaymentIntentMatched"/> for the
-    /// callback path. Idempotent: a redelivered event, or a match on an already-resolved intent, is a no-op that
-    /// preserves the first outcome and raises nothing. Records whether the paid amount met the expectation exactly
-    /// — a mismatch still matches (the merchant decides), mirroring the reference flow.
+    /// Resolves a confirmed deposit against this waiting invoice. Always matches outright, exact amount or
+    /// not, and raises <see cref="PaymentIntentMatched"/> — the event carries both <see cref="ExpectedAmount"/>
+    /// and the deposit's actual amount so the merchant can reconcile any under/overpayment on their side; a
+    /// mismatch is never held back for staff review (the money is credited to the merchant via the Ledger
+    /// independently either way). Idempotent: a redelivered event, or a match on an already-resolved intent,
+    /// is a no-op that preserves the first outcome and raises nothing.
     /// </summary>
     public Result MatchTo(Guid depositId, string transactionHash, BigInteger actualAmount, DateTimeOffset now)
     {
         if (Status != PaymentIntentStatus.Waiting)
             return Result.Success();
 
-        Status = PaymentIntentStatus.Matched;
         MatchedDepositId = depositId;
         AmountMatched = actualAmount == ExpectedAmount;
+        Status = PaymentIntentStatus.Matched;
         UpdatedAt = now;
 
         Raise(new PaymentIntentMatched(
@@ -155,6 +160,10 @@ public sealed class PaymentIntent : Entity<Guid>
 
         return Result.Success();
     }
+
+    private void RaiseReleased(string reason, DateTimeOffset now) =>
+        Raise(new PaymentIntentFailed(
+            Guid.CreateVersion7(), now, MerchantId, PublicReference, MerchantTransactionId, CallbackUrl, reason, now));
 
     /// <summary>Marks an unpaid invoice expired, freeing its address for reuse. Idempotent; only a waiting intent expires.</summary>
     public Result Expire(DateTimeOffset now)
@@ -180,10 +189,7 @@ public sealed class PaymentIntent : Entity<Guid>
 
         Status = PaymentIntentStatus.Failed;
         UpdatedAt = now;
-
-        Raise(new PaymentIntentFailed(
-            Guid.CreateVersion7(), now, MerchantId, PublicReference, MerchantTransactionId, CallbackUrl, reason, now));
-
+        RaiseReleased(reason, now);
         return Result.Success();
     }
 }

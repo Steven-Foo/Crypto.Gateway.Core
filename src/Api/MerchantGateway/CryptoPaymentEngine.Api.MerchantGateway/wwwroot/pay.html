@@ -293,8 +293,14 @@
     document.getElementById('pay-amount').textContent  = `${parseFloat(info.amount).toFixed(2)} USDT`;
     document.getElementById('pay-address').textContent = info.address;
 
+    // Encode as a tron: payment URI (address + full-precision amount, not the rounded display value) so a
+    // wallet that understands it can pre-fill the amount. This is advisory only, never enforced on-chain —
+    // a wallet that doesn't recognize the scheme still needs to fall back to extracting a bare address, and
+    // not every TRON wallet's QR scanner does that reliably (unlike bitcoin:/ethereum: URIs, tron: support
+    // is inconsistent, especially for TRC-20 transfers). Verify against your actual target wallets before
+    // relying on the amount prefill; if a wallet fails to parse this at all, drop back to a bare address.
     new QRCode(document.getElementById('qrcode'), {
-      text:         info.address,
+      text:         `tron:${info.address}?amount=${info.amount}`,
       width:        180,
       height:       180,
       correctLevel: QRCode.CorrectLevel.M

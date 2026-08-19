@@ -1,3 +1,4 @@
+using CryptoPaymentEngine.Api.OperationsApi.Security;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Contracts;
 
@@ -7,14 +8,14 @@ namespace CryptoPaymentEngine.Api.OperationsApi.Endpoints;
 /// Staff-facing transaction history — read straight from the immutable ledger, not from
 /// Deposit/Withdrawal/PaymentIntent's own tables (§ ILedgerQuery.GetJournalsAsync).
 ///
-/// <c>transactionId</c> search resolves through PaymentIntent only (deposit-side) — this host doesn't
-/// compose the Withdrawal module yet, so withdrawal-side resolution (by <c>Withdrawal.MerchantTransactionId</c>)
-/// isn't wired in. Add it the same way once Ops needs to search withdrawal transactions by ID.
+/// <c>transactionId</c> search resolves through PaymentIntent only (deposit-side) today — withdrawal-side
+/// resolution (by <c>Withdrawal.MerchantTransactionId</c>) isn't wired in yet, even though this host does
+/// compose the Withdrawal module. Add it the same way once Ops needs to search withdrawal transactions by ID.
 /// </summary>
 public static class OpsTransactionEndpoints
 {
     public static void MapOpsTransactionApi(this IEndpointRouteBuilder app) =>
-        app.MapGet("/api/v1/ops/transactions", ListAsync);
+        app.MapGet("/api/v1/ops/transactions", ListAsync).RequirePermission(OpsPermissions.Transactions.View);
 
     private static async Task<IResult> ListAsync(
         ILedgerQuery ledger,

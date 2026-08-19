@@ -109,4 +109,55 @@ public sealed class WalletDomainTests
 
         wallet.ReleaseAssignment(Now).Error!.Code.ShouldBe(WalletErrors.NotAssigned.Code);
     }
+
+    [Fact]
+    public void Suspend_holds_the_wallet_but_keeps_the_merchant_and_assignment_intact()
+    {
+        var wallet = WalletEntity.CreateDeposit(DerivedKeyId, Chain.Tron, "TDeposit1", MerchantId).Value;
+
+        var result = wallet.Suspend("unexpected transfer, investigating", Now);
+
+        result.IsSuccess.ShouldBeTrue();
+        wallet.Status.ShouldBe(WalletStatus.Suspended);
+        wallet.IsActive.ShouldBeFalse();
+        wallet.StatusReason.ShouldBe("unexpected transfer, investigating");
+
+        // Unlike Disable, the merchant keeps the wallet — this is a pause, not a decommission.
+        wallet.MerchantId.ShouldBe(MerchantId);
+        wallet.ActiveAssignment.ShouldNotBeNull();
+        wallet.Assignments.Count(a => a.Status == WalletAssignmentStatus.Released).ShouldBe(0);
+    }
+
+    [Fact]
+    public void Suspend_only_applies_to_an_active_wallet()
+    {
+        var wallet = WalletEntity.CreateDeposit(DerivedKeyId, Chain.Tron, "T", MerchantId).Value;
+        wallet.Disable(Now);
+
+        wallet.Suspend("reason", Now).Error!.Code.ShouldBe(WalletErrors.NotActive.Code);
+    }
+
+    [Fact]
+    public void Resume_restores_the_exact_same_wallet_to_active_and_clears_the_reason()
+    {
+        var wallet = WalletEntity.CreateDeposit(DerivedKeyId, Chain.Tron, "TDeposit1", MerchantId).Value;
+        wallet.Suspend("reason", Now);
+
+        var result = wallet.Resume(Now.AddHours(1));
+
+        result.IsSuccess.ShouldBeTrue();
+        wallet.Status.ShouldBe(WalletStatus.Active);
+        wallet.IsActive.ShouldBeTrue();
+        wallet.StatusReason.ShouldBeNull();
+        wallet.MerchantId.ShouldBe(MerchantId);
+        wallet.ActiveAssignment.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public void Resume_on_a_wallet_that_is_not_suspended_is_rejected()
+    {
+        var wallet = WalletEntity.CreateDeposit(DerivedKeyId, Chain.Tron, "T", MerchantId).Value;
+
+        wallet.Resume(Now).Error!.Code.ShouldBe(WalletErrors.NotSuspended.Code);
+    }
 }

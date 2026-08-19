@@ -2,7 +2,9 @@ using CryptoPaymentEngine.Api.OperationsApi.Endpoints;
 using CryptoPaymentEngine.Api.OperationsApi.Options;
 using CryptoPaymentEngine.Api.OperationsApi.Security;
 using CryptoPaymentEngine.Api.OperationsApi.Services;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Infrastructure;
+using CryptoPaymentEngine.Gateway.Core.Platform.Audit.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure;
@@ -63,10 +65,17 @@ builder.Services.AddConfigurationAssetCatalog();
 builder.Services.AddWalletModule(dbConnection);
 builder.Services.AddPaymentIntentModule(config, dbConnection);
 builder.Services.AddDepositModule(config, dbConnection);       // read-only use here: IDepositLookup for /transactions/deposits
+// Withdrawal's DI registration wires up HotWalletAllocator unconditionally (it doesn't know a given host is
+// read-only), and HotWalletAllocator needs ITreasuryHotWalletDirectory — so Treasury must be composed
+// alongside Withdrawal even though this host only ever calls IWithdrawalDirectory.SearchAsync. Without this,
+// ASP.NET Core's Development-only service validation fails at boot (no implementation registered for
+// ITreasuryHotWalletDirectory), before the host ever starts listening.
+builder.Services.AddTreasuryModule(dbConnection);
 builder.Services.AddWithdrawalModule(config, dbConnection);    // read-only use here: IWithdrawalDirectory for /transactions/withdrawals
 builder.Services.AddNotificationModule(dbConnection);          // read-only use here: ICallbackDeliveryQuery for both transaction screens
 builder.Services.AddLedgerModule(dbConnection); // read-only use here: ILedgerQuery for /transactions
 builder.Services.AddIdentityModule(config, dbConnection); // staff login/logout/session validation
+builder.Services.AddAuditModule(dbConnection); // staff-action logging, called directly by mutating Ops endpoints
 
 if (builder.Environment.IsDevelopment())
 {
@@ -76,6 +85,17 @@ if (builder.Environment.IsDevelopment())
 
     // Fixed Admin credentials so a fresh clone can call /api/v1/ops/auth/login with no bootstrap step.
     builder.Services.AddDevelopmentStaffSeed(config);
+
+    // This host never calls a chain adapter or a signer itself (no build/sign/broadcast endpoint exists
+    // here) — but AddTreasuryModule/AddWithdrawalModule unconditionally wire up HotWalletAllocator/
+    // TreasuryReloadService, which need IBalanceReader/ITransactionBuilder/ISigner to construct at all, so
+    // ASP.NET Core's Development-only service validation fails at boot without SOMETHING registered for
+    // them. These never touch a real key or a real chain (§10) — purely to satisfy the DI graph.
+    // KNOWN GAP: there is no Staging/Production branch for these yet in this host (unlike MerchantGateway's
+    // testnet-tier split) — flagged for whoever composes a non-Development deployment of OperationsApi.
+    builder.Services.AddInMemoryChainSource();
+    builder.Services.AddInMemoryTransactionEngine();
+    builder.Services.AddInMemorySigner();
 }
 
 var app = builder.Build();
@@ -90,8 +110,12 @@ app.UseMiddleware<StaffBearerAuthMiddleware>();
 
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 app.MapOpsAuthApi();
+app.MapOpsRoleApi();
+app.MapOpsAccountApi();
+app.MapOpsAuditApi();
 app.MapOpsMerchantApi();
 app.MapOpsMerchantFeeApi();
+app.MapOpsWalletApi();
 app.MapOpsPaymentIntentApi();
 app.MapOpsTransactionApi();
 app.MapOpsDepositTransactionApi();

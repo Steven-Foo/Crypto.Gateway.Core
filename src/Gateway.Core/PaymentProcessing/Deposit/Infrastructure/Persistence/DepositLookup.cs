@@ -29,6 +29,7 @@ public sealed class DepositLookup(DepositDbContext context) : IDepositLookup
                 d.Id,
                 d.Amount.ToString(CultureInfo.InvariantCulture),
                 d.Fee.ToString(CultureInfo.InvariantCulture),
-                d.Confirmations));
+                d.Confirmations,
+                d.TransactionHash));
     }
 }

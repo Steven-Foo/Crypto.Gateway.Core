@@ -25,13 +25,18 @@ public static class IdentityModuleExtensions
 
         services.AddScoped<IStaffUserRepository, StaffUserRepository>();
         services.AddScoped<IStaffSessionRepository, StaffSessionRepository>();
+        services.AddScoped<IRoleRepository, RoleRepository>();
         services.AddScoped<IStaffPasswordHasher, StaffPasswordHasher>();
+        services.AddScoped<IStaffPasswordGenerator, StaffPasswordGenerator>();
         services.AddScoped<IBearerTokenGenerator, BearerTokenGenerator>();
 
         // One class serves both application interfaces (§ StaffAuthService doc comment).
         services.AddScoped<StaffAuthService>();
         services.AddScoped<IStaffAuthService>(sp => sp.GetRequiredService<StaffAuthService>());
         services.AddScoped<IStaffSessionValidator>(sp => sp.GetRequiredService<StaffAuthService>());
+
+        services.AddScoped<IRoleService, RoleService>();
+        services.AddScoped<IStaffAccountService, StaffAccountService>();
 
         return services;
     }

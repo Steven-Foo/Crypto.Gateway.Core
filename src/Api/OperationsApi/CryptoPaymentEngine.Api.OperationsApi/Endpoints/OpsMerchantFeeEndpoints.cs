@@ -3,6 +3,7 @@ using CryptoPaymentEngine.Api.OperationsApi.Models;
 using CryptoPaymentEngine.Api.OperationsApi.Security;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Application;
+using CryptoPaymentEngine.Gateway.Core.Platform.Audit.Application;
 using CryptoPaymentEngine.SharedKernel;
 
 namespace CryptoPaymentEngine.Api.OperationsApi.Endpoints;
@@ -18,8 +19,8 @@ public static class OpsMerchantFeeEndpoints
 {
     public static void MapOpsMerchantFeeApi(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/api/v1/ops/merchants/{id:guid}/fees", ListAsync);            // any authenticated staff
-        app.MapPut("/api/v1/ops/merchants/{id:guid}/fees", SetAsync).RequireAdmin();
+        app.MapGet("/api/v1/ops/merchants/{id:guid}/fees", ListAsync).RequirePermission(OpsPermissions.Fees.View);
+        app.MapPut("/api/v1/ops/merchants/{id:guid}/fees", SetAsync).RequirePermission(OpsPermissions.Fees.Manage);
     }
 
     private static async Task<IResult> ListAsync(
@@ -52,7 +53,8 @@ public static class OpsMerchantFeeEndpoints
     }
 
     private static async Task<IResult> SetAsync(
-        Guid id, SetMerchantFeeRequest request, IMerchantAssetPolicyService policies, IAssetCatalog assets, HttpContext http)
+        Guid id, SetMerchantFeeRequest request, IMerchantAssetPolicyService policies, IAssetCatalog assets,
+        IAuditLogger audit, HttpContext http)
     {
         if (!Enum.TryParse<Chain>(request.Chain, ignoreCase: true, out var chain))
             return Bad($"Unknown chain '{request.Chain}'.");
@@ -72,6 +74,12 @@ public static class OpsMerchantFeeEndpoints
 
         if (result.IsFailure)
             return Fail(result.Error!);
+
+        var actor = AuditActor.From(http);
+        await audit.LogAsync(new LogAuditEntryCommand(
+            actor.StaffUserId, actor.Username, "merchant.fee_updated", "Merchant", id.ToString(),
+            $"{asset.Symbol}: deposit={request.DepositFeeFixed}+{request.DepositFeeBps}bps, withdrawal={request.WithdrawalFeeFixed}+{request.WithdrawalFeeBps}bps",
+            actor.IpAddress), http.RequestAborted);
 
         return Results.Ok(new
         {

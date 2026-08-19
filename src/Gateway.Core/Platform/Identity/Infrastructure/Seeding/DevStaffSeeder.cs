@@ -33,28 +33,31 @@ public sealed class DevStaffSeeder(
 
         try
         {
-            // IHostedService is always singleton — IStaffUserRepository/IStaffPasswordHasher are scoped
-            // (EF Core DbContext underneath), so both must come from a scope created here, not the
-            // constructor. Same convention as DevMerchantSeeder.
+            // IHostedService is always singleton — the repositories/hasher are scoped (EF Core DbContext
+            // underneath), so all must come from a scope created here, not the constructor. Same convention
+            // as DevMerchantSeeder.
             await using var scope = scopeFactory.CreateAsyncScope();
-            var repository = scope.ServiceProvider.GetRequiredService<IStaffUserRepository>();
+            var userRepository = scope.ServiceProvider.GetRequiredService<IStaffUserRepository>();
+            var roleRepository = scope.ServiceProvider.GetRequiredService<IRoleRepository>();
             var hasher = scope.ServiceProvider.GetRequiredService<IStaffPasswordHasher>();
 
-            if (await repository.UsernameExistsAsync(seed.Username, cancellationToken))
+            if (await userRepository.UsernameExistsAsync(seed.Username, cancellationToken))
             {
                 logger.LogInformation("Dev staff user '{Username}' already present.", seed.Username);
                 return;
             }
 
-            var userResult = StaffUser.Create(seed.Username, hasher.Hash(seed.Password), StaffRole.Admin, timeProvider.GetUtcNow());
+            var adminRoleId = await EnsureAdminRoleAsync(roleRepository, cancellationToken);
+
+            var userResult = StaffUser.Create(seed.Username, hasher.Hash(seed.Password), adminRoleId, timeProvider.GetUtcNow());
             if (userResult.IsFailure)
             {
                 logger.LogWarning("Dev staff seed skipped: {Error}.", userResult.Error!.Message);
                 return;
             }
 
-            repository.Add(userResult.Value);
-            await repository.SaveChangesAsync(cancellationToken);
+            userRepository.Add(userResult.Value);
+            await userRepository.SaveChangesAsync(cancellationToken);
 
             logger.LogInformation("Seeded development staff user '{Username}' (Admin).", seed.Username);
         }
@@ -70,4 +73,19 @@ public sealed class DevStaffSeeder(
     }
 
     public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
+
+    /// <summary>Idempotently ensures a wildcard-permission "Admin" role exists, returning its id. The dev
+    /// seed's account always gets full access — same guarantee the old hardcoded <c>StaffRole.Admin</c>
+    /// enum gave, now expressed as data instead of an enum value.</summary>
+    private async Task<Guid> EnsureAdminRoleAsync(IRoleRepository roleRepository, CancellationToken cancellationToken)
+    {
+        var existing = await roleRepository.FindByNameAsync("Admin", cancellationToken);
+        if (existing is not null)
+            return existing.Id;
+
+        var role = Role.Create("Admin", "Full access — every permission, present and future.", [Role.WildcardPermission], timeProvider.GetUtcNow());
+        roleRepository.Add(role.Value);
+        await roleRepository.SaveChangesAsync(cancellationToken);
+        return role.Value.Id;
+    }
 }

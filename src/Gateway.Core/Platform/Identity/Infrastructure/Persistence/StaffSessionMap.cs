@@ -14,9 +14,13 @@ public sealed class StaffSessionMap : IEntityTypeConfiguration<StaffSession>
         builder.HasKey(s => s.Id);
         builder.Property(s => s.Id).ValueGeneratedNever();
 
+        builder.Property(s => s.Username).HasMaxLength(64).IsRequired();
         builder.Property(s => s.TokenHash).IsUnicode(false).HasMaxLength(128).IsRequired();
-        builder.Property(s => s.Role).HasConversion<string>().HasMaxLength(16).IsRequired();
+        builder.Property(s => s.RoleId).IsRequired();
+        builder.Property(s => s.RoleName).HasMaxLength(64).IsRequired();
+        builder.Property(s => s.PermissionCodesCsv).IsUnicode(false).HasMaxLength(2048);
 
+        builder.Ignore(s => s.PermissionCodes);
         builder.Ignore(s => s.DomainEvents);
 
         // Append-heavy: one row per login, non-clustered GUID PK + monotonic clustered Seq.

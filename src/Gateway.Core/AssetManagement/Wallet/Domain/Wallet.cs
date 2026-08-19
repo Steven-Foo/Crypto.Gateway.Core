@@ -50,6 +50,12 @@ public sealed class Wallet : Entity<Guid>
     public Guid? MerchantId { get; private set; }
 
     public WalletStatus Status { get; private set; }
+
+    /// <summary>Why the wallet is <see cref="WalletStatus.Suspended"/> — set by <see cref="Suspend"/>, cleared
+    /// by <see cref="Resume"/>. Null outside a suspension (never set for <see cref="WalletStatus.Disabled"/>,
+    /// which carries no reason today).</summary>
+    public string? StatusReason { get; private set; }
+
     public string? Description { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
@@ -129,6 +135,38 @@ public sealed class Wallet : Entity<Guid>
         ActiveAssignment?.Release(now);
         MerchantId = null;
         Status = WalletStatus.Disabled;
+        UpdatedAt = now;
+        return Result.Success();
+    }
+
+    /// <summary>
+    /// A temporary, staff-initiated hold — e.g. an address received an unexpected/off-flow transfer and is
+    /// being held for investigation. Deliberately leaves <see cref="MerchantId"/> and the active assignment
+    /// untouched (unlike <see cref="Disable"/>): this is a pause, not a decommission, so <see cref="Resume"/>
+    /// restores the exact same address to the exact same merchant. Deposit detection already treats any
+    /// non-Active wallet as ignorable (<c>DepositDetectionService</c> checks <see cref="IsActive"/>), so this
+    /// takes effect with no change anywhere else — a suspended address simply stops accumulating new deposits.
+    /// </summary>
+    public Result Suspend(string reason, DateTimeOffset now)
+    {
+        if (Status != WalletStatus.Active)
+            return Result.Failure(WalletErrors.NotActive);
+
+        Status = WalletStatus.Suspended;
+        StatusReason = reason;
+        UpdatedAt = now;
+        return Result.Success();
+    }
+
+    /// <summary>Lifts a <see cref="Suspend"/> hold. Explicit action with caller-visible feedback (like
+    /// <c>PaymentIntent.Fail</c>) — resuming a wallet that isn't suspended is rejected, not a silent no-op.</summary>
+    public Result Resume(DateTimeOffset now)
+    {
+        if (Status != WalletStatus.Suspended)
+            return Result.Failure(WalletErrors.NotSuspended);
+
+        Status = WalletStatus.Active;
+        StatusReason = null;
         UpdatedAt = now;
         return Result.Success();
     }

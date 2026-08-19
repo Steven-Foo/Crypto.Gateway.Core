@@ -23,6 +23,39 @@ namespace CryptoPaymentEngine.Gateway.Core.Platform.Identity.Infrastructure.Pers
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
+            modelBuilder.Entity("CryptoPaymentEngine.Gateway.Core.Platform.Identity.Domain.Role", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("Description")
+                        .HasMaxLength(256)
+                        .HasColumnType("nvarchar(256)");
+
+                    b.Property<string>("Name")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
+
+                    b.Property<string>("PermissionCodesCsv")
+                        .HasMaxLength(2048)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(2048)");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Name")
+                        .IsUnique();
+
+                    b.ToTable("Role", "identity");
+                });
+
             modelBuilder.Entity("CryptoPaymentEngine.Gateway.Core.Platform.Identity.Domain.StaffSession", b =>
                 {
                     b.Property<Guid>("Id")
@@ -34,13 +67,21 @@ namespace CryptoPaymentEngine.Gateway.Core.Platform.Identity.Infrastructure.Pers
                     b.Property<DateTimeOffset>("ExpiresAt")
                         .HasColumnType("datetimeoffset");
 
+                    b.Property<string>("PermissionCodesCsv")
+                        .HasMaxLength(2048)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(2048)");
+
                     b.Property<DateTimeOffset?>("RevokedAt")
                         .HasColumnType("datetimeoffset");
 
-                    b.Property<string>("Role")
+                    b.Property<Guid>("RoleId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("RoleName")
                         .IsRequired()
-                        .HasMaxLength(16)
-                        .HasColumnType("nvarchar(16)");
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
 
                     b.Property<long>("Seq")
                         .ValueGeneratedOnAdd()
@@ -56,6 +97,11 @@ namespace CryptoPaymentEngine.Gateway.Core.Platform.Identity.Infrastructure.Pers
                         .HasMaxLength(128)
                         .IsUnicode(false)
                         .HasColumnType("varchar(128)");
+
+                    b.Property<string>("Username")
+                        .IsRequired()
+                        .HasMaxLength(64)
+                        .HasColumnType("nvarchar(64)");
 
                     b.HasKey("Id");
 
@@ -87,7 +133,10 @@ namespace CryptoPaymentEngine.Gateway.Core.Platform.Identity.Infrastructure.Pers
                         .HasMaxLength(512)
                         .HasColumnType("nvarchar(512)");
 
-                    b.Property<string>("Role")
+                    b.Property<Guid>("RoleId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Status")
                         .IsRequired()
                         .HasMaxLength(16)
                         .HasColumnType("nvarchar(16)");
@@ -98,6 +147,8 @@ namespace CryptoPaymentEngine.Gateway.Core.Platform.Identity.Infrastructure.Pers
                         .HasColumnType("nvarchar(64)");
 
                     b.HasKey("Id");
+
+                    b.HasIndex("RoleId");
 
                     b.HasIndex("Username")
                         .IsUnique();
@@ -154,6 +205,15 @@ namespace CryptoPaymentEngine.Gateway.Core.Platform.Identity.Infrastructure.Pers
                     SqlServerIndexBuilderExtensions.IsClustered(b.HasIndex("Seq"));
 
                     b.ToTable("OutboxMessage", "identity");
+                });
+
+            modelBuilder.Entity("CryptoPaymentEngine.Gateway.Core.Platform.Identity.Domain.StaffUser", b =>
+                {
+                    b.HasOne("CryptoPaymentEngine.Gateway.Core.Platform.Identity.Domain.Role", null)
+                        .WithMany()
+                        .HasForeignKey("RoleId")
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 #pragma warning restore 612, 618
         }

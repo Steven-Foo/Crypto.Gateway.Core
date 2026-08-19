@@ -23,14 +23,31 @@ public sealed class StaffAuthServiceTests : IAsyncLifetime
         new(new DbContextOptionsBuilder<IdentityDbContext>().UseSqlServer(ConnectionString).Options);
 
     private static StaffAuthService Service(IdentityDbContext context, TimeProvider? timeProvider = null) =>
-        new(new StaffUserRepository(context), new StaffSessionRepository(context), new StaffPasswordHasher(),
-            new BearerTokenGenerator(), Options.Create(new StaffAuthOptions { SessionTtlHours = 8 }),
+        new(new StaffUserRepository(context), new StaffSessionRepository(context), new RoleRepository(context),
+            new StaffPasswordHasher(), new BearerTokenGenerator(), Options.Create(new StaffAuthOptions { SessionTtlHours = 8 }),
             timeProvider ?? TimeProvider.System);
 
-    private static async Task SeedUserAsync(string username, string password, StaffRole role = StaffRole.Admin)
+    /// <summary>Seeds an Admin (wildcard) role once per test DB and returns its id — mirrors what
+    /// <c>DevStaffSeeder</c> does in the real host.</summary>
+    private static async Task<Guid> SeedAdminRoleAsync()
     {
         await using var context = Context();
-        var user = StaffUser.Create(username, new StaffPasswordHasher().Hash(password), role, DateTimeOffset.UtcNow).Value;
+        var existing = await context.Roles.SingleOrDefaultAsync(r => r.Name == "Admin", Ct);
+        if (existing is not null)
+            return existing.Id;
+
+        var role = Role.Create("Admin", "Full access (test seed)", [Role.WildcardPermission], DateTimeOffset.UtcNow).Value;
+        context.Roles.Add(role);
+        await context.SaveChangesAsync(Ct);
+        return role.Id;
+    }
+
+    private static async Task SeedUserAsync(string username, string password, Guid? roleId = null)
+    {
+        var resolvedRoleId = roleId ?? await SeedAdminRoleAsync();
+
+        await using var context = Context();
+        var user = StaffUser.Create(username, new StaffPasswordHasher().Hash(password), resolvedRoleId, DateTimeOffset.UtcNow).Value;
         context.StaffUsers.Add(user);
         await context.SaveChangesAsync(Ct);
     }
@@ -61,19 +78,21 @@ public sealed class StaffAuthServiceTests : IAsyncLifetime
     [Fact]
     public async Task Logging_in_with_valid_credentials_returns_a_usable_bearer_token()
     {
-        await SeedUserAsync("admin1", "s3cret-password", StaffRole.Admin);
+        await SeedUserAsync("admin1", "s3cret-password");
 
         await using var context = Context();
         var login = await Service(context).LoginAsync(new LoginCommand("admin1", "s3cret-password"), Ct);
 
         login.IsSuccess.ShouldBeTrue();
-        login.Value.Role.ShouldBe(StaffRole.Admin);
+        login.Value.RoleName.ShouldBe("Admin");
+        login.Value.Permissions.ShouldContain(Role.WildcardPermission);
         login.Value.Token.ShouldNotBeNullOrWhiteSpace();
 
         await using var verify = Context();
         var validated = await Service(verify).ValidateAsync(login.Value.Token, Ct);
         validated.IsSuccess.ShouldBeTrue();
-        validated.Value.Role.ShouldBe(StaffRole.Admin);
+        validated.Value.RoleName.ShouldBe("Admin");
+        validated.Value.Permissions.ShouldContain(Role.WildcardPermission);
     }
 
     [Fact]

@@ -21,7 +21,16 @@ public enum WalletType
 public enum WalletStatus
 {
     Active = 1,
+
+    /// <summary>Permanent decommission — clears the merchant assignment (see <c>Wallet.Disable</c>). Not
+    /// reversible; use <see cref="Suspended"/> for a temporary hold instead.</summary>
     Disabled = 2,
+
+    /// <summary>A temporary, staff-initiated hold (see <c>Wallet.Suspend</c>/<c>Wallet.Resume</c>) — e.g. an
+    /// address that received an unexpected/off-flow transfer and is being held for investigation. Unlike
+    /// <see cref="Disabled"/>, the merchant assignment is left untouched so <c>Resume</c> restores the exact
+    /// same address to the exact same merchant.</summary>
+    Suspended = 3,
 }
 
 public enum WalletAssignmentStatus

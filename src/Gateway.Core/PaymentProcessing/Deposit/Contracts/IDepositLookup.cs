@@ -11,8 +11,11 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Contracts;
 /// <summary>The Ops-facing sliver of a matched deposit — just what the transaction-search screen needs to
 /// enrich a <c>PaymentIntentAdminRow</c>. <see cref="AmountBaseUnits"/> is the exact on-chain amount actually
 /// received (may differ from the invoice's expected amount — see <c>PaymentIntent.AmountMatched</c>);
-/// <see cref="FeeBaseUnits"/> is the platform fee charged on it, snapshotted at detection (§14).</summary>
-public sealed record DepositSummaryView(Guid DepositId, string AmountBaseUnits, string FeeBaseUnits, int Confirmations);
+/// <see cref="FeeBaseUnits"/> is the platform fee charged on it, snapshotted at detection (§14).
+/// <see cref="TransactionHash"/> lets staff pull the transaction up on a block explorer directly from the
+/// Ops screen.</summary>
+public sealed record DepositSummaryView(
+    Guid DepositId, string AmountBaseUnits, string FeeBaseUnits, int Confirmations, string TransactionHash);
 
 public interface IDepositLookup
 {
