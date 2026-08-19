@@ -186,6 +186,9 @@ public sealed class ReconciliationServiceTests
         public Task<ReconciliationSnapshot?> GetAsync(Chain chain, Guid assetId, CancellationToken cancellationToken = default) =>
             Task.FromResult(Latest);
 
+        public Task<IReadOnlyList<ReconciliationSnapshot>> ListAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<ReconciliationSnapshot>>(Latest is null ? [] : [Latest]);
+
         public Task AppendAsync(ReconciliationSnapshot snapshot, CancellationToken cancellationToken = default)
         {
             HistoryCount++;

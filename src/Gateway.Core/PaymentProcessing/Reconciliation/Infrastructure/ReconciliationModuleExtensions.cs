@@ -28,6 +28,17 @@ public static class ReconciliationModuleExtensions
         return services;
     }
 
+    /// <summary>
+    /// READ-ONLY composition for a host that only surfaces reconciliation snapshots (the ops read API), not the
+    /// compute path. Registers the shared Mongo client/database + the snapshot store — but NOT
+    /// <see cref="ReconciliationService"/> or the worker, so a host that lacks the ledger/on-chain read
+    /// capabilities the compute needs (<c>ILedgerQuery</c>, <c>IBalanceReader</c>, the wallet directories) can
+    /// still read what the money host's reconciliation worker wrote. Never writes a snapshot (§2 — derived,
+    /// observability only).
+    /// </summary>
+    public static IServiceCollection AddReconciliationReadModel(this IServiceCollection services, IConfiguration configuration) =>
+        services.AddReconciliationMongo(configuration);
+
     private static ReconciliationOptions ReadOptions(IConfiguration configuration)
     {
         var raw = configuration["Reconciliation:DriftTolerance"];

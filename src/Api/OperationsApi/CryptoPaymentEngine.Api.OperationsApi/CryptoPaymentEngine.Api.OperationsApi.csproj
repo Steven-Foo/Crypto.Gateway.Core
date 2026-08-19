@@ -48,6 +48,11 @@
     <ProjectReference Include="../../../Gateway.Core/Financial/Ledger/Contracts/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Contracts.csproj" />
     <ProjectReference Include="../../../Gateway.Core/Financial/Ledger/Domain/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Domain.csproj" />
     <ProjectReference Include="../../../Gateway.Core/Financial/Ledger/Infrastructure/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\Gateway.Core\AssetManagement\Treasury\Application\CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Application.csproj" />
+    <ProjectReference Include="..\..\..\Gateway.Core\AssetManagement\Treasury\Contracts\CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Contracts.csproj" />
+    <ProjectReference Include="..\..\..\Gateway.Core\AssetManagement\Treasury\Infrastructure\CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\Gateway.Core\PaymentProcessing\Reconciliation\Application\CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Reconciliation.Application.csproj" />
+    <ProjectReference Include="..\..\..\Gateway.Core\PaymentProcessing\Reconciliation\Infrastructure\CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Reconciliation.Infrastructure.csproj" />
   </ItemGroup>
 
   <ItemGroup>

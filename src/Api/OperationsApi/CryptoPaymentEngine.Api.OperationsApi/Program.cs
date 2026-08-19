@@ -2,6 +2,7 @@ using CryptoPaymentEngine.Api.OperationsApi.Endpoints;
 using CryptoPaymentEngine.Api.OperationsApi.Options;
 using CryptoPaymentEngine.Api.OperationsApi.Security;
 using CryptoPaymentEngine.Api.OperationsApi.Services;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Infrastructure;
@@ -9,6 +10,7 @@ using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infrastructure;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Reconciliation.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Platform.Identity.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Infrastructure;
@@ -67,6 +69,22 @@ builder.Services.AddWithdrawalModule(config, dbConnection);    // read-only use 
 builder.Services.AddNotificationModule(dbConnection);          // read-only use here: ICallbackDeliveryQuery for both transaction screens
 builder.Services.AddLedgerModule(dbConnection); // read-only use here: ILedgerQuery for /transactions
 builder.Services.AddIdentityModule(config, dbConnection); // staff login/logout/session validation
+builder.Services.AddTreasuryModule(dbConnection); // cold-reload: hot-pool directory + cold registrar + reload service (composes Wallet/KeyManagement Contracts)
+
+// The cold-reload endpoints build an UNSIGNED treasury→hot transfer, so this host needs a transaction builder —
+// but a KEYLESS one: it never signs (the operator signs the cold key client-side, §10) and never broadcasts
+// (the money host's TreasuryReloadWorker does). Testnet tier uses the in-memory builder; Production uses the
+// real TRON builder — registered UNCONDITIONALLY (not gated on KMS), since the reload is human-signed, not
+// KMS-signed. The builder never crosses a key, so it is safe in the ops host.
+if (builder.Environment.IsDevelopment() || builder.Environment.IsStaging())
+    builder.Services.AddInMemoryTransactionEngine();
+else
+    builder.Services.AddTronTransactionEngine(config);
+
+// Read-only custody-status view over the reconciliation snapshots the money host's worker writes to Mongo.
+// Registers only the read store (+ shared Mongo client) — NOT the compute ReconciliationService or its worker,
+// which this host can't satisfy (no IBalanceReader) and must never run (§4.7). Observability only (§2).
+builder.Services.AddReconciliationReadModel(config);
 
 if (builder.Environment.IsDevelopment())
 {
@@ -100,5 +118,7 @@ app.MapOpsWithdrawalTransactionApi();
 app.MapOpsCallbackApi();
 app.MapOpsWithdrawalApprovalApi();
 app.MapOpsWithdrawalFundingApi();
+app.MapOpsTreasuryApi();
+app.MapOpsReconciliationApi();
 
 app.Run();

@@ -334,7 +334,9 @@ Blockchain `IBalanceReader` (the §8-planned port — `InMemoryBalanceReader` fo
 TRC-20 via `eth_call balanceOf`/`TronAbi.EncodeBalanceOf`, native TRX via `eth_getBalance`; live round-trip
 deferred to staging); `IWalletDirectory.ListReceivingDepositAddressesAsync` (funded Deposit wallets, all merchants,
 `DepositsReceivedCount>0`). In dev the in-memory `IBalanceReader` reads 0, so drift == the ledger holding until the
-real TRON adapter is live. **Deferred:** ops read API, per-asset tolerance, sustained-vs-transient drift detection;
+real TRON adapter is live. **Ops read API — since built** (`GET /api/v1/ops/reconciliation` in OperationsApi; see the
+reconciliation-ops milestone below). **Deferred:** per-asset tolerance, sustained-vs-transient drift detection, and a
+history/time-series read (the snapshot store's `ListAsync` returns only the current per-(chain,asset) snapshots);
 reconciliation simplifies greatly post-Sweep (deposit addresses drain to ~0, custody concentrates in the hot wallet).
 
 **`AssetManagement/Sweep` (concentrate deposit balances → hot wallet) — DONE, 511 tests green.** Third in the
@@ -429,10 +431,10 @@ hot wallet's float rises on-chain → the withdrawal allocator sees it next pass
 address in the custody sum (else it would report a huge false drift once sweeping concentrates funds cold). **Cold
 registration:** dev config seed (`Treasury:ColdWallets`, watch-only address — no key) + `ITreasuryColdWalletRegistrar`
 (the seam a prod staff ops action reuses). **Real TRON tx-build/broadcast + real browser signing deferred** like
-everything else (in-memory engine in dev; inert in prod until the adapters land). **Deferred/known:** the reload +
-cold-register endpoints are **dev-only** (`/dev/treasury/*` in MerchantGateway) — the production **staff-auth Ops
-endpoints in OperationsApi are a follow-up** (that host must first gain the transaction builder); a per-chain reload
-confirmation depth (currently one `TreasuryReloadOptions.Confirmations`, dev=1); and the client-side signing UI.
+everything else (in-memory engine in dev; inert in prod until the adapters land). **Deferred/known:** a per-chain
+reload confirmation depth (currently one `TreasuryReloadOptions.Confirmations`, dev=1); and the client-side signing UI.
+(The production **staff-auth Ops endpoints in OperationsApi** were since built — see the Treasury-reload-Ops milestone
+below; the dev `/dev/treasury/*` helpers in MerchantGateway remain for local testing.)
 
 **Production KMS-envelope seed custody (§10) — DONE, 567 tests green (0 failed, 5 known skips).** The seam that flips
 withdrawal + sweep + address-provisioning from "inert in prod" to live money-out. **Key simplification:** because
@@ -520,8 +522,39 @@ Contracts only** — no workers/dispatchers, so the host scans/processes/broadca
 login/logout, merchant admin, transaction search (deposit/withdrawal/paymentintent/callback), withdrawal
 **approval** (§10 above-threshold) and **funding release/cancel** (`Ops*Endpoints`). **Known placeholders:** the two
 transaction screens hardcode `fee = "0"` and `userId = null` (real per-merchant fee + user attribution not yet
-surfaced — `§ docs/backoffice-api.md`). No Treasury/Energy/Sweep/Reconciliation ops surface yet; prod treasury
-reload/cold-register stay the dev-only `/dev/treasury/*` in MerchantGateway.
+surfaced — `§ docs/backoffice-api.md`). Energy/Sweep still have no ops surface; **Treasury cold-reload and
+Reconciliation now do** (see the next two milestones).
+
+**Reconciliation custody-status Ops read (`Api/OperationsApi`) — BUILT, full suite green.** The go-live surface for the
+ledger-vs-on-chain custody audit, which was log-and-Mongo-only. New `OpsReconciliationEndpoints`: `GET
+/api/v1/ops/reconciliation` (optional `?chain=`) returns the latest snapshot per (chain, asset) — ledger
+`TreasuryAsset` holding vs summed on-chain total vs drift, plus status (Balanced/Drift/Incomplete),
+addresses-scanned/unreadable, observed-at — with **non-Balanced rows sorted first** so an operator sees problems at the
+top. Authenticated staff only (no Admin gate — it moves nothing). Amounts are base→display via `AmountConversion`
+(asset decimals, §14) **plus** an exact `driftBaseUnits` string (a custody audit needs the precise integer). A pure
+**read** over the snapshots the money host's `ReconciliationWorker` writes to Mongo (§2) — this host neither computes
+nor writes them: new read-only `IReconciliationStore.ListAsync` + a `AddReconciliationReadModel` composition that
+registers ONLY the Mongo read store (shared client), NOT the compute `ReconciliationService`/worker (which needs
+`IBalanceReader` etc. the ops host lacks and must never run, §4.7). OperationsApi gained `Mongo:ConnectionString` config
+(same instance as MerchantGateway). **Deferred:** a history/time-series read + per-asset tolerance (as above).
+
+**Treasury cold-reload — production staff-auth Ops endpoints (`Api/OperationsApi`) — BUILT, full suite green.** The
+go-live surface for the three-tier custody cold-reload, promoting the dev-only `/dev/treasury/*` helpers to real
+Admin endpoints. New `OpsTreasuryEndpoints` (all `.RequireAdmin()`): `GET /api/v1/ops/treasury/hot-pool` (list pool
+wallets to pick a reload target — never returns the signing `KeyReference`, §10), `POST .../cold-wallet` (register the
+watch-only cold address via `ITreasuryColdWalletRegistrar`), `POST .../reload` (`ITreasuryReloadService.InitiateAsync`
+→ builds the **unsigned** treasury→hot transfer, returns `{reloadId, unsignedTransactionHex}`), `POST
+.../reload/{id}/submit` (stores the operator's client-signed blob). **Keyless + human-in-the-loop (§10):** the ops host
+builds unsigned only — the operator signs the cold key **client-side** (never sent to any backend), and the money
+host's `TreasuryReloadWorker` broadcasts + confirms (OperationsApi runs no workers). **No ledger entry** (custody-internal,
+§14). Composition: OperationsApi gained `AddTreasuryModule` + a **keyless `ITransactionBuilder`** — tiered
+`AddInMemoryTransactionEngine` (Development/Staging) ↔ `AddTronTransactionEngine` (Production, registered
+**unconditionally**, NOT gated on KMS, since the reload is human-signed not KMS-signed; the builder never crosses a key).
+Amount is display→base at the edge via `AmountConversion` (asset decimals, §14) — not the dev endpoint's hardcoded
+`×1e6`. Endpoints are thin wrappers over the already-tested `TreasuryReloadService`/registrar/directory (Ops endpoints
+follow the service-tested, not host-tested convention — no OperationsApi test project). **Deferred:** USDT-only first cut
+(multi-asset later); dev testing needs a hot pool seeded by MerchantGateway on the shared DB; the per-chain reload depth
++ client-side signing UI stay as noted above.
 
 **Callback delivery completion — BUILT.** `Platform/Notification` now also consumes **`WithdrawalConfirmed` /
 `WithdrawalFailed`** (merchant withdrawal callbacks) alongside `PaymentIntentMatched` / `PaymentIntentFailed`,
