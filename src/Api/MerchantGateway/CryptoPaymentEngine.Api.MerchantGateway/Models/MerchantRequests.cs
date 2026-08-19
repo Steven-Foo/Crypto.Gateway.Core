@@ -19,6 +19,10 @@ public sealed class DepositRequest
 public sealed class TransactionQueryRequest
 {
     [Required] public string TransactionId { get; init; } = null!;
+
+    /// <summary>Optional withdrawal-kind narrowing: "user" (payout) or "merchant" (cash-out). Omitted ⇒
+    /// auto-detect (deposit → user payout → merchant cash-out).</summary>
+    public string? Kind { get; init; }
 }
 
 /// <summary>Frozen withdraw-request body. <see cref="Amount"/> is a display decimal — the destination receives

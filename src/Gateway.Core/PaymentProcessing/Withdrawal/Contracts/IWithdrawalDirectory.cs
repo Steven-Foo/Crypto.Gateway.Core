@@ -52,11 +52,13 @@ public sealed record WithdrawalAdminRow(
 
 public interface IWithdrawalDirectory
 {
-    /// <summary>Looks up a withdrawal by the merchant's own transaction id — the merchant-facing
-    /// transaction-query endpoint's withdrawal-side lookup. Scoped to <paramref name="merchantId"/>: this
-    /// id is only unique per-merchant, never globally.</summary>
+    /// <summary>Looks up a withdrawal by the merchant's own transaction id, scoped to
+    /// <paramref name="merchantId"/> and a specific <paramref name="kind"/> ("User" | "Merchant"). The id is
+    /// unique only per <c>(merchant, kind, reference)</c>, so a user payout and a merchant cash-out can reuse
+    /// the same reference — the kind disambiguates which one to return. An unrecognised kind falls back to
+    /// "User".</summary>
     Task<WithdrawalView?> FindByMerchantReferenceAsync(
-        Guid merchantId, string merchantTransactionId, CancellationToken cancellationToken = default);
+        Guid merchantId, string merchantTransactionId, string kind = "User", CancellationToken cancellationToken = default);
 
     /// <summary>Paged, filtered search behind the Ops withdrawal-transactions screen — newest first.</summary>
     Task<(IReadOnlyList<WithdrawalAdminRow> Items, int TotalCount)> SearchAsync(

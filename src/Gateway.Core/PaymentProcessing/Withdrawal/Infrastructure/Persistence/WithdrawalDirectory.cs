@@ -9,15 +9,18 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastr
 public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdrawalDirectory
 {
     public async Task<WithdrawalView?> FindByMerchantReferenceAsync(
-        Guid merchantId, string merchantTransactionId, CancellationToken cancellationToken = default)
+        Guid merchantId, string merchantTransactionId, string kind = "User", CancellationToken cancellationToken = default)
     {
-        // The merchant transaction-query endpoint is the (frozen) partner contract — it looks up USER payouts.
-        // Kind is in the filter so a merchant cash-out reusing the same reference can't turn this into a
-        // multiple-match (the idempotency key is unique only per (merchant, kind, reference)). Merchant cash-out
-        // lookup is a Phase-2 addition.
+        // The (merchant, kind, reference) idempotency key means a user payout and a merchant cash-out can share
+        // one reference, so the lookup is scoped to a single kind — never a multiple-match. An unrecognised kind
+        // falls back to User (the host validates it upstream, so this is just defensive).
+        var withdrawalKind = Enum.TryParse<WithdrawalKind>(kind, ignoreCase: true, out var parsed)
+            ? parsed
+            : WithdrawalKind.User;
+
         var withdrawal = await context.Withdrawals.AsNoTracking()
             .SingleOrDefaultAsync(
-                w => w.MerchantId == merchantId && w.Kind == WithdrawalKind.User && w.MerchantTransactionId == merchantTransactionId,
+                w => w.MerchantId == merchantId && w.Kind == withdrawalKind && w.MerchantTransactionId == merchantTransactionId,
                 cancellationToken);
 
         if (withdrawal is null)

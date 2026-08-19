@@ -144,10 +144,12 @@ public static class MerchantApiEndpoints
     }
 
     /// <summary>
-    /// Looks up the merchant's own transactionId against both the deposit side (PaymentIntent) and the
-    /// withdrawal side (Withdrawal) — a merchant's reference is scoped per-merchant, never globally, so both
-    /// lookups are scoped to the calling merchant (never a request parameter, §4.5/§7.3). Deposit is checked
-    /// first purely because it's the more common query; a given transactionId is only ever one or the other.
+    /// Looks up one of the merchant's own transactions by its <c>transactionId</c>, scoped to the calling
+    /// merchant (never a request parameter, §4.5/§7.3). With no <c>kind</c> it auto-detects in order:
+    /// deposit (PaymentIntent) → user payout → merchant cash-out. An explicit <c>kind</c> ("user" | "merchant")
+    /// narrows the withdrawal lookup — needed because a user payout and a merchant cash-out can share one
+    /// reference (the idempotency key is <c>(merchant, kind, reference)</c>). User payouts keep the frozen
+    /// <c>type = "withdraw"</c> shape; cash-outs return the additive <c>type = "merchant_withdraw"</c>.
     /// </summary>
     private static async Task<IResult> TransactionQueryAsync(
         TransactionQueryRequest request, HttpContext http, IAssetCatalog assets,
@@ -155,40 +157,66 @@ public static class MerchantApiEndpoints
     {
         var merchantId = MerchantId(http);
 
-        var deposit = await intents.FindByMerchantReferenceAsync(merchantId, request.TransactionId, http.RequestAborted);
-        if (deposit is not null)
+        var kind = request.Kind?.Trim();
+        var isUser = kind is null || kind.Equals("user", StringComparison.OrdinalIgnoreCase);
+        var isMerchant = kind is null || kind.Equals("merchant", StringComparison.OrdinalIgnoreCase);
+        if (kind is not null && !isUser && !isMerchant)
+            return Fail(StatusCodes.Status400BadRequest, "kind must be 'user' or 'merchant' when provided.");
+
+        // Deposit has no kind — only auto-detected when the caller didn't ask for a specific withdrawal kind.
+        if (kind is null)
         {
-            var depositAsset = await assets.FindByIdAsync(deposit.AssetId, http.RequestAborted);
-            return Results.Ok(ApiResponse.Ok(new
+            var deposit = await intents.FindByMerchantReferenceAsync(merchantId, request.TransactionId, http.RequestAborted);
+            if (deposit is not null)
             {
-                type = "deposit",
-                referenceNo = deposit.PublicReference,
-                status = deposit.Status,
-                amount = AmountConversion.ToDisplay(BigInteger.Parse(deposit.ExpectedAmountBaseUnits), depositAsset?.Decimals ?? 6),
-                currency = depositAsset?.Symbol ?? "",
-                address = deposit.Address,
-                expiresAt = deposit.ExpiresAt,
-            }));
+                var depositAsset = await assets.FindByIdAsync(deposit.AssetId, http.RequestAborted);
+                return Results.Ok(ApiResponse.Ok(new
+                {
+                    type = "deposit",
+                    referenceNo = deposit.PublicReference,
+                    status = deposit.Status,
+                    amount = AmountConversion.ToDisplay(BigInteger.Parse(deposit.ExpectedAmountBaseUnits), depositAsset?.Decimals ?? 6),
+                    currency = depositAsset?.Symbol ?? "",
+                    address = deposit.Address,
+                    expiresAt = deposit.ExpiresAt,
+                }));
+            }
         }
 
-        var withdrawal = await withdrawals.FindByMerchantReferenceAsync(merchantId, request.TransactionId, http.RequestAborted);
-        if (withdrawal is not null)
+        if (isUser)
         {
-            var withdrawalAsset = await assets.FindByIdAsync(withdrawal.AssetId, http.RequestAborted);
-            return Results.Ok(ApiResponse.Ok(new
-            {
-                type = "withdraw",
-                referenceNo = withdrawal.WithdrawalId,
-                status = MapWithdrawalStatus(withdrawal.Status),
-                amount = AmountConversion.ToDisplay(BigInteger.Parse(withdrawal.AmountBaseUnits), withdrawalAsset?.Decimals ?? 6),
-                currency = withdrawalAsset?.Symbol ?? "",
-                toAddress = withdrawal.DestinationAddress,
-                txHash = withdrawal.TransactionHash,
-                createdAt = withdrawal.CreatedAt,
-            }));
+            var payout = await withdrawals.FindByMerchantReferenceAsync(merchantId, request.TransactionId, "User", http.RequestAborted);
+            if (payout is not null)
+                return await WithdrawalResultAsync(payout, assets, "withdraw", http.RequestAborted);
+        }
+
+        if (isMerchant)
+        {
+            var cashOut = await withdrawals.FindByMerchantReferenceAsync(merchantId, request.TransactionId, "Merchant", http.RequestAborted);
+            if (cashOut is not null)
+                return await WithdrawalResultAsync(cashOut, assets, "merchant_withdraw", http.RequestAborted);
         }
 
         return Fail(StatusCodes.Status404NotFound, "No deposit or withdrawal found for this transactionId.");
+    }
+
+    /// <summary>Shapes a withdrawal-side query hit. <paramref name="type"/> is "withdraw" for a user payout
+    /// (the frozen shape) or "merchant_withdraw" for a cash-out — the only difference between the two.</summary>
+    private static async Task<IResult> WithdrawalResultAsync(
+        WithdrawalView withdrawal, IAssetCatalog assets, string type, CancellationToken cancellationToken)
+    {
+        var asset = await assets.FindByIdAsync(withdrawal.AssetId, cancellationToken);
+        return Results.Ok(ApiResponse.Ok(new
+        {
+            type,
+            referenceNo = withdrawal.WithdrawalId,
+            status = MapWithdrawalStatus(withdrawal.Status),
+            amount = AmountConversion.ToDisplay(BigInteger.Parse(withdrawal.AmountBaseUnits), asset?.Decimals ?? 6),
+            currency = asset?.Symbol ?? "",
+            toAddress = withdrawal.DestinationAddress,
+            txHash = withdrawal.TransactionHash,
+            createdAt = withdrawal.CreatedAt,
+        }));
     }
 
     private static Guid MerchantId(HttpContext http) => (Guid)http.Items[MerchantSignatureMiddleware.MerchantIdItem]!;

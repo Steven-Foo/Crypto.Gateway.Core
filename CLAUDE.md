@@ -605,8 +605,12 @@ to `UX_Withdrawal_MerchantTxn` long ago) — the concurrent-duplicate race path 
 (`MerchantWithdrawalPercentBps`, default 0 = no cap). Tests: `MerchantWithdrawalServiceTests` (settlement-not-
 registered, flat/%/min caps, dedup, fee, reserve-fail). **Phase 2 — DONE** (staff Ops endpoints to register the
 settlement wallet + set the cap, and `Kind`-differentiated Ops reporting; see the merchant-admin Ops milestone below).
-The merchant-facing `/transactions/query` still filters to `Kind.User` (a merchant querying its own cash-out history is
-a documented follow-up).
+The merchant-facing `/transactions/query` **now looks up merchant cash-outs too** — an optional `kind` ("user" |
+"merchant") narrows the withdrawal side (a user payout and a cash-out can share a reference under the `(merchant, kind,
+reference)` key), auto-detecting deposit → user payout → cash-out when omitted; cash-outs return the additive
+`type:"merchant_withdraw"` while the frozen user `type:"withdraw"` shape is unchanged (`IWithdrawalDirectory.FindByMerchantReferenceAsync`
+gained a `kind` param; tests: `WithdrawalDirectoryTests`). Only a **paged history list** (browse all records, not a
+single lookup) stays deferred — to be applied uniformly across every transaction-record endpoint at once.
 
 **Settlement period (T+N) + merchant freeze (A1 money-path + domain) — DONE, full suite green.** Two admin controls
 added ahead of Merchant-Withdrawal Phase 2. **(1) Settlement period (T+N):** a per-merchant `SettlementDelayDays`
@@ -645,9 +649,10 @@ domain methods already built + tested; no schema change). **Setters (`OpsMerchan
 a string `Kind` filter (Contracts stay Domain-free — parsed to the enum in the directory); the Ops withdrawal screen
 (`OpsWithdrawalTransactionEndpoints`) takes a `kind` query param and emits `kind` per row, so user payouts and merchant
 cash-outs are now distinguishable/filterable (was hardcoded `type:"withdrawal"`). Tests: `MerchantAssetPolicyServiceTests`
-cap round-trip/preserve-fee/invalid-bps. **Still deferred:** the merchant-facing `/transactions/query` still filters
-`Kind.User` (a merchant querying its own cash-out history is a separate follow-up); a per-merchant withdrawal approval
-threshold (still the platform-wide config value).
+cap round-trip/preserve-fee/invalid-bps. **Still deferred:** a per-merchant withdrawal approval threshold (still the
+platform-wide config value). (The merchant-facing cash-out **lookup** in `/transactions/query` was since built — see the
+`kind`-aware query note in the Merchant-Withdrawal milestone above; a paged history list across all transaction-record
+endpoints remains the deferred piece.)
 
 **Per-merchant user-withdrawal min/max (enforced) + platform-default fee (T3) — DONE, full suite green.** Two money-path
 features. **(1) Per-merchant min/max, now ENFORCED (not just recorded):** `MerchantAssetPolicy.MinimumWithdrawal` became
