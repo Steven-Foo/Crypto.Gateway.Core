@@ -52,7 +52,6 @@ public sealed record WithdrawalAdminRow(
     int? Confirmations,
     string? TransactionHash,
     Guid? SourceWalletId,
-    DateTimeOffset CreatedAt);
     DateTimeOffset CreatedAt,
     string Kind);
 

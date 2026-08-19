@@ -19,10 +19,10 @@ public static class OpsTreasuryEndpoints
 {
     public static void MapOpsTreasuryApi(this IEndpointRouteBuilder app)
     {
-        app.MapGet("/api/v1/ops/treasury/hot-pool", HotPoolAsync).RequireAdmin();
-        app.MapPost("/api/v1/ops/treasury/cold-wallet", RegisterColdAsync).RequireAdmin();
-        app.MapPost("/api/v1/ops/treasury/reload", InitiateReloadAsync).RequireAdmin();
-        app.MapPost("/api/v1/ops/treasury/reload/{reloadId:guid}/submit", SubmitReloadAsync).RequireAdmin();
+        app.MapGet("/api/v1/ops/treasury/hot-pool", HotPoolAsync).RequirePermission(OpsPermissions.Treasury.Manage);
+        app.MapPost("/api/v1/ops/treasury/cold-wallet", RegisterColdAsync).RequirePermission(OpsPermissions.Treasury.Manage);
+        app.MapPost("/api/v1/ops/treasury/reload", InitiateReloadAsync).RequirePermission(OpsPermissions.Treasury.Manage);
+        app.MapPost("/api/v1/ops/treasury/reload/{reloadId:guid}/submit", SubmitReloadAsync).RequirePermission(OpsPermissions.Treasury.Manage);
     }
 
     /// <summary>Lists the hot-pool wallets so the operator can pick a reload target. The signing

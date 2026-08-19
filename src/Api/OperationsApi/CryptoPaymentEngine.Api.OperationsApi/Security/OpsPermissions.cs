@@ -72,6 +72,13 @@ public static class OpsPermissions
         public const string Manage = "ops.wallets.manage"; // suspend/resume a deposit address
     }
 
+    public static class Treasury
+    {
+        // Every treasury route is gated by this one code, including the hot-pool read — even listing the
+        // pool is considered sensitive custody-adjacent info, per OpsTreasuryEndpoints' own doc comment.
+        public const string Manage = "ops.treasury.manage";
+    }
+
     /// <summary>Every known code, flattened — what backs <c>GET /api/v1/ops/permissions</c> (the catalog a
     /// Roles-editor UI assigns from). Reflection-free on purpose: an explicit list is easier to audit than a
     /// reflective scan, and this file is the one place that has to stay in sync with the endpoints anyway.</summary>
@@ -87,5 +94,6 @@ public static class OpsPermissions
         Accounts.View, Accounts.Manage,
         Audit.View,
         Wallets.View, Wallets.Manage,
+        Treasury.Manage,
     ];
 }

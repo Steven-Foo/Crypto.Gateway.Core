@@ -80,11 +80,10 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
         EffectiveStatus(withdrawal.Status),
         withdrawal.StatusReason,
         withdrawal.Confirmations,
-        withdrawal.CreatedAt,
-        withdrawal.Kind.ToString());
         withdrawal.TransactionHash,
         withdrawal.SourceWalletId,
-        withdrawal.CreatedAt);
+        withdrawal.CreatedAt,
+        withdrawal.Kind.ToString());
 
     /// <summary>"pending" | "pending_approval" | "insufficient_balance" | "awaiting_release" | "confirmed" |
     /// "failed" — withdrawals have no "expired" state. The states that need a human, not the worker, to move
