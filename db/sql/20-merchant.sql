@@ -493,3 +493,32 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260820023953_AddMerchantApprovalThreshold'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantAssetPolicy] ADD [ApprovalThreshold] decimal(38,0) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260820023953_AddMerchantApprovalThreshold'
+)
+BEGIN
+    EXEC(N'ALTER TABLE [merchant].[MerchantAssetPolicy] ADD CONSTRAINT [CK_MerchantAssetPolicy_ApprovalThreshold] CHECK ([ApprovalThreshold] IS NULL OR [ApprovalThreshold] >= 0)');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260820023953_AddMerchantApprovalThreshold'
+)
+BEGIN
+    INSERT INTO [merchant].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260820023953_AddMerchantApprovalThreshold', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

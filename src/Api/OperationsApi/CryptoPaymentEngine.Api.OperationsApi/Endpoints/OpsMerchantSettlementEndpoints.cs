@@ -10,8 +10,9 @@ namespace CryptoPaymentEngine.Api.OperationsApi.Endpoints;
 /// <summary>
 /// Staff-facing merchant policy controls — the write paths that were dev-seed-only/config-only until now: the
 /// settlement period (T+N), the whitelisted cash-out wallet, the merchant-withdrawal (cash-out) liquidity cap,
-/// and the per-merchant user-withdrawal min/max. All Admin-only. Reads come from the existing merchant GET
-/// (period + settlement wallets) and the fees GET (cap + limits alongside fees). Amounts cross display↔base-unit
+/// and the per-merchant user-withdrawal min/max + approval threshold. Each route's write permission mirrors the
+/// permission that reads the same data back: the settlement period + wallet read via the merchant GET
+/// (<c>Merchants.*</c>), the cap/limits/threshold via the fees GET (<c>Fees.*</c>). Amounts cross display↔base-unit
 /// only here (§14); all bounds live in the domain.
 /// </summary>
 public static class OpsMerchantSettlementEndpoints
@@ -20,8 +21,9 @@ public static class OpsMerchantSettlementEndpoints
     {
         app.MapPut("/api/v1/ops/merchants/{id:guid}/settlement-period", SetSettlementPeriodAsync).RequirePermission(OpsPermissions.Merchants.Manage);
         app.MapPut("/api/v1/ops/merchants/{id:guid}/settlement-wallet", SetSettlementWalletAsync).RequirePermission(OpsPermissions.Merchants.Manage);
-        app.MapPut("/api/v1/ops/merchants/{id:guid}/withdrawal-cap", SetWithdrawalCapAsync).RequirePermission(OpsPermissions.Merchants.Manage);
-        app.MapPut("/api/v1/ops/merchants/{id:guid}/withdrawal-limits", SetWithdrawalLimitsAsync).RequirePermission(OpsPermissions.Merchants.Manage);
+        app.MapPut("/api/v1/ops/merchants/{id:guid}/withdrawal-cap", SetWithdrawalCapAsync).RequirePermission(OpsPermissions.Fees.Manage);
+        app.MapPut("/api/v1/ops/merchants/{id:guid}/withdrawal-limits", SetWithdrawalLimitsAsync).RequirePermission(OpsPermissions.Fees.Manage);
+        app.MapPut("/api/v1/ops/merchants/{id:guid}/approval-threshold", SetApprovalThresholdAsync).RequirePermission(OpsPermissions.Fees.Manage);
     }
 
     private static async Task<IResult> SetSettlementPeriodAsync(
@@ -109,6 +111,32 @@ public static class OpsMerchantSettlementEndpoints
             return Bad("maximum is negative or finer than the asset's precision.");
 
         var result = await policies.SetWithdrawalLimitsAsync(id, asset.AssetId, minimum, maximum, http.RequestAborted);
+        return result.IsFailure
+            ? Fail(result.Error!)
+            : Results.Ok(new
+            {
+                isSuccess = true,
+                data = new { merchantId = id, assetId = asset.AssetId, coin = asset.Symbol, network = chain.ToString() },
+                error = (string?)null,
+            });
+    }
+
+    private static async Task<IResult> SetApprovalThresholdAsync(
+        Guid id, SetApprovalThresholdRequest request, IMerchantAssetPolicyService policies, IAssetCatalog assets, HttpContext http)
+    {
+        if (!Enum.TryParse<Chain>(request.Chain, ignoreCase: true, out var chain))
+            return Bad($"Unknown chain '{request.Chain}'.");
+
+        var asset = await assets.FindAsync(chain, request.Coin.Trim().ToUpperInvariant(), http.RequestAborted);
+        if (asset is null)
+            return Bad($"Unknown coin '{request.Coin}' on {chain}.");
+
+        // null = unset (fall back to the platform config threshold); 0 = an explicit "everything needs approval".
+        // Never truncates (§14).
+        if (!TryLimitToBase(request.Threshold, asset.Decimals, out var threshold))
+            return Bad("threshold is negative or finer than the asset's precision.");
+
+        var result = await policies.SetApprovalThresholdAsync(id, asset.AssetId, threshold, http.RequestAborted);
         return result.IsFailure
             ? Fail(result.Error!)
             : Results.Ok(new

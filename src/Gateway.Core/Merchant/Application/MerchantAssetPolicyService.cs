@@ -20,7 +20,8 @@ public sealed record MerchantAssetPolicyView(
     string? MerchantWithdrawalFlatCap,
     int MerchantWithdrawalPercentBps,
     string? MinimumWithdrawal,
-    string? MaximumWithdrawal);
+    string? MaximumWithdrawal,
+    string? ApprovalThreshold);
 
 /// <summary>
 /// Staff-facing pricing management — the write path that was missing, so a merchant's <c>fixed + %</c> fee
@@ -65,6 +66,15 @@ public interface IMerchantAssetPolicyService
     /// </summary>
     Task<Result> SetMerchantWithdrawalCapAsync(
         Guid merchantId, Guid assetId, BigInteger? flatCap, int percentBps, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Sets the per-merchant approval-threshold override for one asset (base units; null = unset ⇒ the flow uses
+    /// the platform config threshold). A withdrawal (user payout OR cash-out) above it needs human oversight
+    /// (approve at request + release at processing, §10). Creates an otherwise-default policy row if none exists;
+    /// preserves fees, user limits, and the cash-out cap.
+    /// </summary>
+    Task<Result> SetApprovalThresholdAsync(
+        Guid merchantId, Guid assetId, BigInteger? approvalThreshold, CancellationToken cancellationToken = default);
 
     /// <summary>The merchant's current per-asset pricing + cash-out cap — for staff to read / a UI to pre-fill.
     /// Empty if unpriced.</summary>
@@ -140,6 +150,23 @@ public sealed class MerchantAssetPolicyService(IMerchantRepository repository, T
         return Result.Success();
     }
 
+    public async Task<Result> SetApprovalThresholdAsync(
+        Guid merchantId, Guid assetId, BigInteger? approvalThreshold, CancellationToken cancellationToken = default)
+    {
+        var merchant = await repository.GetByIdAsync(merchantId, cancellationToken);
+        if (merchant is null)
+            return Result.Failure(MerchantErrors.NotFound);
+
+        // Creates a default policy if none exists (threshold only), otherwise updates just the threshold —
+        // fees, user limits, and the cash-out cap are preserved.
+        var result = merchant.SetApprovalThreshold(assetId, approvalThreshold, timeProvider.GetUtcNow());
+        if (result.IsFailure)
+            return result;
+
+        await repository.SaveChangesAsync(cancellationToken);
+        return Result.Success();
+    }
+
     public async Task<Result<IReadOnlyList<MerchantAssetPolicyView>>> ListAsync(
         Guid merchantId, CancellationToken cancellationToken = default)
     {
@@ -157,7 +184,8 @@ public sealed class MerchantAssetPolicyService(IMerchantRepository repository, T
                 p.MerchantWithdrawalFlatCap?.ToString(CultureInfo.InvariantCulture),
                 p.MerchantWithdrawalPercentBps,
                 p.MinimumWithdrawal?.ToString(CultureInfo.InvariantCulture),
-                p.MaximumWithdrawal?.ToString(CultureInfo.InvariantCulture)))
+                p.MaximumWithdrawal?.ToString(CultureInfo.InvariantCulture),
+                p.ApprovalThreshold?.ToString(CultureInfo.InvariantCulture)))
             .ToList();
 
         return Result.Success(views);

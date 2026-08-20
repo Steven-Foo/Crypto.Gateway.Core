@@ -682,8 +682,8 @@ domain methods already built + tested; no schema change). **Setters (`OpsMerchan
 a string `Kind` filter (Contracts stay Domain-free — parsed to the enum in the directory); the Ops withdrawal screen
 (`OpsWithdrawalTransactionEndpoints`) takes a `kind` query param and emits `kind` per row, so user payouts and merchant
 cash-outs are now distinguishable/filterable (was hardcoded `type:"withdrawal"`). Tests: `MerchantAssetPolicyServiceTests`
-cap round-trip/preserve-fee/invalid-bps. **Still deferred:** a per-merchant withdrawal approval threshold (still the
-platform-wide config value). (The merchant-facing cash-out **lookup** in `/transactions/query` was since built — see the
+cap round-trip/preserve-fee/invalid-bps. (The per-merchant withdrawal **approval threshold** was since built — see the
+per-merchant-approval-threshold milestone below; the merchant-facing cash-out **lookup** in `/transactions/query` too — see the
 `kind`-aware query note in the Merchant-Withdrawal milestone above; a paged history list across all transaction-record
 endpoints remains the deferred piece.)
 
@@ -706,8 +706,30 @@ resolve via `IMerchantFeeSchedule`). **Account opening stays free** (no onboardi
 `WithdrawalRequestServiceTests` (override raise/lower/config-fallback), `MerchantDefaultFeeTests` (config→schedule, zero/
 invalid→None), `MerchantPersistenceTests` (unpriced→default, explicit-overrides-default, no-config→free),
 `MerchantAssetPolicyServiceTests` (limits round-trip/preserve-fee/min>max). **Deferred:** per-asset flat default fees;
-per-merchant approval-threshold override; the "explicitly zero-rated" merchant (a fully-zero explicit fee is
-indistinguishable from unpriced, so it also gets the default — a future zero-rated flag if needed).
+the "explicitly zero-rated" merchant (a fully-zero explicit fee is indistinguishable from unpriced, so it also gets the
+default — a future zero-rated flag if needed).
+
+**Per-merchant withdrawal approval-threshold override (enforced, both kinds) — DONE, full suite green.** The last
+platform-wide withdrawal knob (fees/min-max/caps/settlement/freeze were already per-merchant) is now a per-(merchant,
+asset) override of the config `Withdrawal:Policies:{Chain}:ApprovalThresholdBaseUnits`. Rule: `effectiveThreshold =
+merchantThreshold ?? configThreshold`; a payout `amount > effectiveThreshold` needs human oversight. **Nullable ⇒
+unset ⇒ config** (existing merchants unaffected). `MerchantAssetPolicy` gained a nullable `ApprovalThreshold` column +
+`SetApprovalThreshold` (migration `AddMerchantApprovalThreshold`, `20-merchant.sql` regenerated; a NULL-aware `>= 0`
+CHECK). **Applies to BOTH withdrawal kinds at all three enforcement points** — the key correctness point, since the
+config threshold drove two gates that had to move together or a raised threshold would auto-approve at request yet be
+second-gated at processing: `WithdrawalRequestService` (user → PendingApproval), `MerchantWithdrawalService` (cash-out
+→ PendingApproval), and `WithdrawalProcessingService` (the "large = manual **release**" AwaitingRelease gate). New
+**focused `Merchant.Contracts/IMerchantApprovalThreshold`** (deliberately NOT folded into the user-only
+`IMerchantWithdrawalLimits` — the threshold applies to both kinds), read by all three services (Withdrawal.Application
+already refs Merchant.Contracts). Setter `IMerchantAssetPolicyService.SetApprovalThresholdAsync` + **Admin** `PUT
+/api/v1/ops/merchants/{id}/approval-threshold` (display→base at the edge §14; null = unset, 0 = "everything needs
+approval") + read-back on `GET .../fees`. **Security (§10):** Admin-only setter — a compromised merchant API key can't
+lower its own approval bar; the ledger reserve stays the atomic balance guard; the threshold is a best-effort policy
+control at request + processing (a threshold change in the near-zero window between a payout's request and its
+processing is a documented edge, same class as the fee-mid-reorg note). Tests: domain set/unset/preserve/negative
+(`MerchantAssetPolicyServiceTests`) + enforcement (`WithdrawalRequestServiceTests` user PendingApproval/auto-approve,
+`MerchantWithdrawalServiceTests` cash-out PendingApproval). **Deferred:** snapshotting the threshold on the withdrawal
+at request (to avoid the near-zero mid-flight re-resolution) — not needed for the common case.
 
 Every other module in the map is a placeholder in this doc, not yet on disk — scaffold a module
 only when real feature work on it starts, creating only the layers it uses (§4.3).

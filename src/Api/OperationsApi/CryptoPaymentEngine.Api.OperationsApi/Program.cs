@@ -71,7 +71,6 @@ builder.Services.AddDepositModule(config, dbConnection);       // read-only use 
 // alongside Withdrawal even though this host only ever calls IWithdrawalDirectory.SearchAsync. Without this,
 // ASP.NET Core's Development-only service validation fails at boot (no implementation registered for
 // ITreasuryHotWalletDirectory), before the host ever starts listening.
-builder.Services.AddTreasuryModule(dbConnection);
 builder.Services.AddWithdrawalModule(config, dbConnection);    // read-only use here: IWithdrawalDirectory for /transactions/withdrawals
 builder.Services.AddNotificationModule(dbConnection);          // read-only use here: ICallbackDeliveryQuery for both transaction screens
 builder.Services.AddLedgerModule(dbConnection); // read-only use here: ILedgerQuery for /transactions

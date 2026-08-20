@@ -107,6 +107,7 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
         services.AddSingleton<IMerchantDirectory>(new FakeMerchants());
         services.AddSingleton<IMerchantFeeSchedule>(new FakeFees(Fee));
         services.AddSingleton<IMerchantWithdrawalLimits>(new UnsetWithdrawalLimits());
+        services.AddSingleton<IMerchantApprovalThreshold>(new UnsetApprovalThreshold());
         services.AddSingleton<InMemoryTransactionEngine>();
         services.AddSingleton<ITransactionBuilder>(sp => sp.GetRequiredService<InMemoryTransactionEngine>());
         services.AddSingleton<ITransactionBroadcaster>(sp => sp.GetRequiredService<InMemoryTransactionEngine>());
@@ -600,6 +601,12 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
     {
         public Task<MerchantWithdrawalLimits> GetAsync(Guid merchantId, Guid assetId, CancellationToken cancellationToken = default) =>
             Task.FromResult(MerchantWithdrawalLimits.None);
+    }
+
+    private sealed class UnsetApprovalThreshold : IMerchantApprovalThreshold
+    {
+        public Task<BigInteger?> GetAsync(Guid merchantId, Guid assetId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<BigInteger?>(null);
     }
 
     private sealed class FakeFees(BigInteger withdrawalFee) : IMerchantFeeSchedule

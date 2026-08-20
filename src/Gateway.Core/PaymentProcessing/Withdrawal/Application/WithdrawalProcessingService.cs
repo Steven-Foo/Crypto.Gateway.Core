@@ -2,6 +2,7 @@ using System.Numerics;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Contracts;
+using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Domain;
 using Microsoft.Extensions.Logging;
@@ -33,6 +34,7 @@ public sealed class WithdrawalProcessingService(
     ITransactionBroadcaster broadcaster,
     IHotWalletAllocator allocator,
     IWithdrawalPolicyProvider policies,
+    IMerchantApprovalThreshold merchantApprovalThreshold,
     IEnergyDelegationService energy,
     TimeProvider timeProvider,
     ILogger<WithdrawalProcessingService> logger)
@@ -73,7 +75,11 @@ public sealed class WithdrawalProcessingService(
             // A payout above the approval threshold needs a human release before it sends (the "large = manual"
             // rule); a release already granted (ReleasedAt set) clears it for good, so a later re-park never
             // demands a second release. Small ones send automatically.
-            var threshold = policies.For(withdrawal.Chain).ApprovalThreshold;
+            // Per-merchant approval-threshold override of the config default (§10), consistent with the
+            // request-time gate — else a merchant who raised their threshold would auto-approve at request yet
+            // still be held for release here on the config value. Unset ⇒ the platform config threshold.
+            var merchantThreshold = await merchantApprovalThreshold.GetAsync(withdrawal.MerchantId, withdrawal.AssetId, cancellationToken);
+            var threshold = merchantThreshold ?? policies.For(withdrawal.Chain).ApprovalThreshold;
             if (withdrawal.Amount > threshold && withdrawal.ReleasedAt is null)
                 return await HoldForReleaseAsync(withdrawal, threshold, cancellationToken);
 

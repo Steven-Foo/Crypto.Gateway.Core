@@ -242,6 +242,63 @@ public sealed class MerchantAssetPolicyServiceTests
         repo.Saves.ShouldBe(0);
     }
 
+    [Fact]
+    public async Task Setting_an_approval_threshold_persists_and_is_listed()
+    {
+        var merchant = ActiveMerchant();
+        var (service, repo) = Compose(merchant);
+
+        var result = await service.SetApprovalThresholdAsync(merchant.Id, Asset, new BigInteger(2_000_000), Ct);
+
+        result.IsSuccess.ShouldBeTrue();
+        repo.Saves.ShouldBe(1);
+        merchant.AssetPolicies.ShouldHaveSingleItem().ApprovalThreshold.ShouldBe(new BigInteger(2_000_000));
+
+        var view = (await service.ListAsync(merchant.Id, Ct)).Value.ShouldHaveSingleItem();
+        view.ApprovalThreshold.ShouldBe("2000000");
+    }
+
+    [Fact]
+    public async Task Setting_an_approval_threshold_preserves_an_existing_fee_and_cap()
+    {
+        var merchant = ActiveMerchant();
+        var (service, _) = Compose(merchant);
+        await service.SetFeesAsync(merchant.Id, Asset, new BigInteger(5), 100, new BigInteger(3), 50, Ct);
+        await service.SetMerchantWithdrawalCapAsync(merchant.Id, Asset, null, 5000, Ct);
+
+        await service.SetApprovalThresholdAsync(merchant.Id, Asset, new BigInteger(2_000_000), Ct);
+
+        var policy = merchant.AssetPolicies.ShouldHaveSingleItem();
+        policy.DepositFeeBps.ShouldBe(100);                 // fee untouched by a threshold change
+        policy.MerchantWithdrawalPercentBps.ShouldBe(5000); // cap untouched
+        policy.ApprovalThreshold.ShouldBe(new BigInteger(2_000_000));
+    }
+
+    [Fact]
+    public async Task A_null_approval_threshold_unsets_the_override()
+    {
+        var merchant = ActiveMerchant();
+        var (service, _) = Compose(merchant);
+        await service.SetApprovalThresholdAsync(merchant.Id, Asset, new BigInteger(2_000_000), Ct);
+
+        await service.SetApprovalThresholdAsync(merchant.Id, Asset, null, Ct);
+
+        merchant.AssetPolicies.ShouldHaveSingleItem().ApprovalThreshold.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_negative_approval_threshold_is_rejected_by_the_domain()
+    {
+        var merchant = ActiveMerchant();
+        var (service, repo) = Compose(merchant);
+
+        var result = await service.SetApprovalThresholdAsync(merchant.Id, Asset, new BigInteger(-1), Ct);
+
+        result.IsFailure.ShouldBeTrue();
+        result.Error!.Code.ShouldBe(MerchantErrors.AmountNegative.Code);
+        repo.Saves.ShouldBe(0);
+    }
+
     private sealed class FakeClock : TimeProvider
     {
         public override DateTimeOffset GetUtcNow() => Now;

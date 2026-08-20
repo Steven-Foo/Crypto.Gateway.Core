@@ -36,6 +36,7 @@ public sealed class MerchantAssetPolicy : Entity<Guid>
         WithdrawalFeeBps = fees.WithdrawalFeeBps;
         MerchantWithdrawalFlatCap = null;       // no merchant-withdrawal (cash-out) cap until one is set
         MerchantWithdrawalPercentBps = 0;
+        ApprovalThreshold = null;               // unset ⇒ the withdrawal flow uses the platform config threshold
         CreatedAt = createdAt;
         UpdatedAt = createdAt;
     }
@@ -69,6 +70,12 @@ public sealed class MerchantAssetPolicy : Entity<Guid>
 
     /// <summary>Per-cash-out cap as a percentage of available balance, in basis points; 0 = no percent cap.</summary>
     public int MerchantWithdrawalPercentBps { get; private set; }
+
+    /// <summary>Per-merchant, per-asset override of the platform config <b>approval threshold</b> — the payout
+    /// amount above which a withdrawal (user payout OR cash-out) needs human oversight (approve at request +
+    /// release at processing, §10). Null = unset ⇒ the flow uses the config threshold; a set value (including
+    /// 0 = "everything needs approval") fully overrides. Applies to BOTH withdrawal kinds.</summary>
+    public BigInteger? ApprovalThreshold { get; private set; }
 
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
@@ -148,6 +155,23 @@ public sealed class MerchantAssetPolicy : Entity<Guid>
 
         MerchantWithdrawalFlatCap = flatCap;
         MerchantWithdrawalPercentBps = percentBps;
+        UpdatedAt = now;
+        return Result.Success();
+    }
+
+    /// <summary>Sets the per-merchant approval-threshold override independently of fees, limits, cap, and sweep.
+    /// Null = unset ⇒ the withdrawal flow uses the platform config threshold. Validates non-negative + storable.</summary>
+    internal Result SetApprovalThreshold(BigInteger? approvalThreshold, DateTimeOffset now)
+    {
+        if (approvalThreshold is { } threshold)
+        {
+            if (threshold < BigInteger.Zero)
+                return Result.Failure(MerchantErrors.AmountNegative);
+            if (!MoneyLimits.IsStorable(threshold))
+                return Result.Failure(MerchantErrors.AmountTooLarge);
+        }
+
+        ApprovalThreshold = approvalThreshold;
         UpdatedAt = now;
         return Result.Success();
     }

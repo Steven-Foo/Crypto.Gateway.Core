@@ -75,3 +75,13 @@ public sealed class SetWithdrawalLimitsRequest
     public decimal? Minimum { get; init; }
     public decimal? Maximum { get; init; }
 }
+
+/// <summary>Sets the per-merchant approval threshold for one asset, in <b>display</b> units. Null = unset ⇒ the
+/// platform config threshold (<c>Withdrawal:Policies</c>) applies; a set value (including 0 = "everything needs
+/// approval") overrides. A withdrawal above it — user payout OR cash-out — needs human oversight (§10).</summary>
+public sealed class SetApprovalThresholdRequest
+{
+    [Required, MaxLength(16)] public string Chain { get; init; } = null!;
+    [Required, MaxLength(16)] public string Coin { get; init; } = null!;
+    public decimal? Threshold { get; init; }
+}

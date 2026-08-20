@@ -34,7 +34,8 @@ public sealed class MerchantWithdrawalServiceTests
         bool reserveSucceeds = true,
         bool canTransact = true,
         int settlementDelayDays = 0,
-        BigInteger? settled = null)
+        BigInteger? settled = null,
+        BigInteger? merchantThreshold = null)
     {
         var repo = new FakeRepo();
         var ledgerQuery = new FakeLedgerQuery(balance ?? BigInteger.Parse("10000000"), settled);
@@ -45,6 +46,7 @@ public sealed class MerchantWithdrawalServiceTests
             new FakeSettlements(settlement),
             new FakeCaps(cap ?? MerchantWithdrawalCap.None),
             new FakeFees(Fee),
+            new FakeApprovalThreshold(merchantThreshold),
             new SettledBalanceGate(ledgerQuery, TimeProvider.System),
             new FakeLedger(reserveSucceeds),
             TimeProvider.System);
@@ -67,6 +69,17 @@ public sealed class MerchantWithdrawalServiceTests
         w.DestinationAddress.ShouldBe(Settlement);      // resolved server-side, never client-supplied
         w.Fee.ShouldBe(Fee);                            // the same schedule as a user payout
         w.Status.ShouldBe(WithdrawalStatus.Approved);   // reserved + below the approval threshold
+    }
+
+    [Fact]
+    public async Task A_lowered_per_merchant_approval_threshold_holds_a_cash_out_for_approval()
+    {
+        // Config threshold is 5,000,000; the merchant lowers theirs to 1,000,000, so a 3,000,000 cash-out
+        // now needs approval (the threshold applies to cash-outs exactly as to user payouts).
+        var (service, repo) = Compose(merchantThreshold: BigInteger.Parse("1000000"));
+
+        (await service.RequestAsync(Command(BigInteger.Parse("3000000")), Ct)).IsSuccess.ShouldBeTrue();
+        repo.Withdrawals.ShouldHaveSingleItem().Status.ShouldBe(WithdrawalStatus.PendingApproval);
     }
 
     [Fact]
@@ -229,6 +242,12 @@ public sealed class MerchantWithdrawalServiceTests
     {
         public Task<MerchantWithdrawalCap> GetAsync(Guid merchantId, Guid assetId, CancellationToken cancellationToken = default) =>
             Task.FromResult(cap);
+    }
+
+    private sealed class FakeApprovalThreshold(BigInteger? threshold) : IMerchantApprovalThreshold
+    {
+        public Task<BigInteger?> GetAsync(Guid merchantId, Guid assetId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(threshold);
     }
 
     private sealed class FakeFees(BigInteger fee) : IMerchantFeeSchedule

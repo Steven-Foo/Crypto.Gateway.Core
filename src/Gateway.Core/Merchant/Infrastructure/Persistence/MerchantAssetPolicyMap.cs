@@ -30,6 +30,9 @@ public sealed class MerchantAssetPolicyMap : IEntityTypeConfiguration<MerchantAs
         builder.Property(p => p.MerchantWithdrawalFlatCap);
         builder.Property(p => p.MerchantWithdrawalPercentBps).IsRequired().HasDefaultValue(0);
 
+        // Per-merchant approval-threshold override — null = unset (fall back to the platform config threshold).
+        builder.Property(p => p.ApprovalThreshold);
+
         builder.Property<byte[]>("RowVersion").IsRowVersion();
 
         builder.Ignore(p => p.DomainEvents);
@@ -56,6 +59,10 @@ public sealed class MerchantAssetPolicyMap : IEntityTypeConfiguration<MerchantAs
             t.HasCheckConstraint(
                 "CK_MerchantAssetPolicy_MerchantWithdrawalCap",
                 "[MerchantWithdrawalPercentBps] >= 0 AND [MerchantWithdrawalPercentBps] <= 10000 AND ([MerchantWithdrawalFlatCap] IS NULL OR [MerchantWithdrawalFlatCap] >= 0)");
+
+            t.HasCheckConstraint(
+                "CK_MerchantAssetPolicy_ApprovalThreshold",
+                "[ApprovalThreshold] IS NULL OR [ApprovalThreshold] >= 0");
         });
     }
 }

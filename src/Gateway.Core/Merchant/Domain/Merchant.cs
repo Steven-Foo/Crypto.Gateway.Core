@@ -289,6 +289,34 @@ public sealed partial class Merchant : Entity<Guid>
         return capResult;
     }
 
+    /// <summary>Sets the per-merchant approval-threshold override for an asset — the payout amount above which
+    /// a withdrawal (user payout OR cash-out) needs human oversight. Null = unset (the flow uses the platform
+    /// config threshold). Creates an unpriced policy (threshold only) if none exists, otherwise updates just the
+    /// threshold — fees, user limits, and the cash-out cap are preserved.</summary>
+    public Result SetApprovalThreshold(Guid assetId, BigInteger? approvalThreshold, DateTimeOffset now)
+    {
+        if (Status == MerchantStatus.Closed)
+            return Result.Failure(MerchantErrors.Closed);
+
+        var policy = _assetPolicies.SingleOrDefault(p => p.AssetId == assetId);
+        if (policy is null)
+        {
+            var createResult = MerchantAssetPolicy.Create(
+                Id, assetId, BigInteger.Zero, null, null, FeeSchedule.None, now);
+            if (createResult.IsFailure)
+                return Result.Failure(createResult.Error!);
+
+            policy = createResult.Value;
+            _assetPolicies.Add(policy);
+        }
+
+        var result = policy.SetApprovalThreshold(approvalThreshold, now);
+        if (result.IsSuccess)
+            UpdatedAt = now;
+
+        return result;
+    }
+
     private Result TransitionTo(MerchantStatus target, DateTimeOffset now)
     {
         if (Status == MerchantStatus.Closed)

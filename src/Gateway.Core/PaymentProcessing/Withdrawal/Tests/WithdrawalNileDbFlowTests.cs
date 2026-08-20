@@ -116,6 +116,7 @@ public sealed class WithdrawalNileDbFlowTests : IAsyncLifetime
         services.AddSingleton<IMerchantDirectory>(new FakeMerchants());
         services.AddSingleton<IMerchantFeeSchedule>(new FakeFees(Fee));
         services.AddSingleton<IMerchantWithdrawalLimits>(new UnsetWithdrawalLimits());
+        services.AddSingleton<IMerchantApprovalThreshold>(new UnsetApprovalThreshold());
 
         // Ample hot-wallet float so the physical gate always clears — this live test exercises the real RPC
         // build/sign/broadcast, not the insufficient-balance park.
@@ -304,6 +305,12 @@ public sealed class WithdrawalNileDbFlowTests : IAsyncLifetime
     {
         public Task<MerchantWithdrawalLimits> GetAsync(Guid merchantId, Guid assetId, CancellationToken cancellationToken = default) =>
             Task.FromResult(MerchantWithdrawalLimits.None);
+    }
+
+    private sealed class UnsetApprovalThreshold : IMerchantApprovalThreshold
+    {
+        public Task<BigInteger?> GetAsync(Guid merchantId, Guid assetId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<BigInteger?>(null);
     }
 
     private sealed class FakeFees(BigInteger withdrawalFee) : IMerchantFeeSchedule

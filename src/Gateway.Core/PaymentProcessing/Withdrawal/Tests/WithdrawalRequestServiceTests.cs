@@ -26,7 +26,7 @@ public sealed class WithdrawalRequestServiceTests
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static WithdrawalRequestService Compose(MerchantWithdrawalLimits? limits = null)
+    private static WithdrawalRequestService Compose(MerchantWithdrawalLimits? limits = null, BigInteger? merchantThreshold = null)
     {
         var ledger = new AmpleLedgerQuery();
         return new WithdrawalRequestService(
@@ -35,6 +35,7 @@ public sealed class WithdrawalRequestServiceTests
             new FakeMerchants(),
             new FakeFees(),
             new FakeLimits(limits ?? MerchantWithdrawalLimits.None),
+            new FakeApprovalThreshold(merchantThreshold),
             new SettledBalanceGate(ledger, TimeProvider.System),
             new FakeLedger(),
             TimeProvider.System);
@@ -73,6 +74,23 @@ public sealed class WithdrawalRequestServiceTests
         (await service.RequestAsync(Command(new BigInteger(5_000)), Ct))
             .Error!.Code.ShouldBe(WithdrawalErrors.AboveMaximum.Code);
         (await service.RequestAsync(Command(new BigInteger(2_500), "w-2"), Ct)).IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task A_lowered_per_merchant_approval_threshold_sends_a_payout_above_it_to_pending_approval()
+    {
+        // Config threshold is 1e9; the merchant lowers theirs to 10_000, so a 50_000 payout now needs approval.
+        var result = await Compose(merchantThreshold: new BigInteger(10_000)).RequestAsync(Command(new BigInteger(50_000)), Ct);
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.Status.ShouldBe(WithdrawalStatus.PendingApproval.ToString());
+    }
+
+    [Fact]
+    public async Task At_or_below_the_per_merchant_approval_threshold_auto_approves()
+    {
+        var result = await Compose(merchantThreshold: new BigInteger(1_000_000)).RequestAsync(Command(new BigInteger(50_000)), Ct);
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.Status.ShouldBe(WithdrawalStatus.Approved.ToString());
     }
 
     // ── fakes ──
@@ -133,6 +151,12 @@ public sealed class WithdrawalRequestServiceTests
     {
         public Task<MerchantWithdrawalLimits> GetAsync(Guid merchantId, Guid assetId, CancellationToken cancellationToken = default) =>
             Task.FromResult(limits);
+    }
+
+    private sealed class FakeApprovalThreshold(BigInteger? threshold) : IMerchantApprovalThreshold
+    {
+        public Task<BigInteger?> GetAsync(Guid merchantId, Guid assetId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(threshold);
     }
 
     private sealed class AmpleLedgerQuery : ILedgerQuery

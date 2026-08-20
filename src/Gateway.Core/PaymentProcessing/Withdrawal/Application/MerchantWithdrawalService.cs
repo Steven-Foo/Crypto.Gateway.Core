@@ -34,6 +34,7 @@ public sealed class MerchantWithdrawalService(
     IMerchantSettlementDirectory settlements,
     IMerchantWithdrawalCap caps,
     IMerchantFeeSchedule feeSchedule,
+    IMerchantApprovalThreshold merchantApprovalThreshold,
     SettledBalanceGate settledBalance,
     IWithdrawalLedger ledger,
     TimeProvider timeProvider) : IMerchantWithdrawalService
@@ -109,7 +110,11 @@ public sealed class MerchantWithdrawalService(
                 return Result.Failure<WithdrawalResult>(WithdrawalErrors.InsufficientBalance);
             }
 
-            withdrawal.ConfirmReserved(policy.RequiresApproval(withdrawal.Amount), timeProvider.GetUtcNow());
+            // Per-merchant approval-threshold override of the config default (§10), same as a user payout: a
+            // cash-out above the effective threshold enters PendingApproval. Unset ⇒ the platform config threshold.
+            var merchantThreshold = await merchantApprovalThreshold.GetAsync(withdrawal.MerchantId, withdrawal.AssetId, cancellationToken);
+            var requiresApproval = withdrawal.Amount > (merchantThreshold ?? policy.ApprovalThreshold);
+            withdrawal.ConfirmReserved(requiresApproval, timeProvider.GetUtcNow());
             await repository.SaveChangesAsync(cancellationToken);
         }
 
