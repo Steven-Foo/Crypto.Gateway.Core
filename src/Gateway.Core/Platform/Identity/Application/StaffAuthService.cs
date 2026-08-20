@@ -8,13 +8,14 @@ namespace CryptoPaymentEngine.Gateway.Core.Platform.Identity.Application;
 public sealed record LoginCommand(string Username, string Password);
 
 public sealed record LoginResult(
-    string Token, DateTimeOffset ExpiresAt, string Username, Guid RoleId, string RoleName, IReadOnlyList<string> Permissions);
+    string Token, string CsrfToken, DateTimeOffset ExpiresAt, string Username, Guid RoleId, string RoleName, IReadOnlyList<string> Permissions);
 
 /// <summary>A validated bearer session — what the host middleware needs to authorize a request. Permissions
 /// are exactly what was snapshotted onto the session at login (§ StaffSession) — re-resolving them from the
 /// live Role on every request would defeat the point of snapshotting. <see cref="Username"/> is plain data a
 /// caller (e.g. the audit log) can attribute an action to, without depending on Identity itself (§4.5).</summary>
-public sealed record StaffPrincipal(Guid StaffUserId, string Username, Guid RoleId, string RoleName, IReadOnlyList<string> Permissions);
+public sealed record StaffPrincipal(
+    Guid StaffUserId, string Username, Guid RoleId, string RoleName, IReadOnlyList<string> Permissions, string CsrfToken);
 
 public interface IStaffAuthService
 {
@@ -64,14 +65,18 @@ public sealed class StaffAuthService(
 
         var now = timeProvider.GetUtcNow();
         var token = tokenGenerator.Generate();
+        // A second CSPRNG value as the anti-CSRF token — same 256-bit generator, but we keep only the raw value
+        // (it is compared plaintext, never a bearer credential, so it isn't hashed). See StaffSession.CsrfToken.
+        var csrfToken = tokenGenerator.Generate().RawToken;
         var session = StaffSession.Issue(
-            user.Id, user.Username, token.Hash, role.Id, role.Name, role.PermissionCodes,
+            user.Id, user.Username, token.Hash, csrfToken, role.Id, role.Name, role.PermissionCodes,
             TimeSpan.FromHours(_options.SessionTtlHours), now);
 
         sessionRepository.Add(session);
         await sessionRepository.SaveChangesAsync(cancellationToken);
 
-        return Result.Success(new LoginResult(token.RawToken, session.ExpiresAt, user.Username, role.Id, role.Name, role.PermissionCodes));
+        return Result.Success(new LoginResult(
+            token.RawToken, csrfToken, session.ExpiresAt, user.Username, role.Id, role.Name, role.PermissionCodes));
     }
 
     public async Task<Result> LogoutAsync(string rawToken, CancellationToken cancellationToken = default)
@@ -91,6 +96,7 @@ public sealed class StaffAuthService(
         if (session is null || !session.IsValid(timeProvider.GetUtcNow()))
             return Result.Failure<StaffPrincipal>(StaffUserErrors.SessionExpiredOrRevoked);
 
-        return Result.Success(new StaffPrincipal(session.StaffUserId, session.Username, session.RoleId, session.RoleName, session.PermissionCodes));
+        return Result.Success(new StaffPrincipal(
+            session.StaffUserId, session.Username, session.RoleId, session.RoleName, session.PermissionCodes, session.CsrfToken));
     }
 }

@@ -757,6 +757,33 @@ retry/cancel of a stuck sweep, or a manual stake trigger — is a later T3); a p
 endpoints remains the deferred cross-cutting piece; `EnergyPolicy` (thresholds) has no read endpoint yet (the resource
 snapshot already carries target/minimum energy).
 
+**httpOnly cookie + CSRF session auth for `Api/OperationsApi` (browser-safe staff login) — BUILT, full suite green
+(685 passed, 8 expected skips), HTTP-verified end-to-end.** Unblocks the Admin UI's target auth (its `CLAUDE.md` D7 /
+§12 / blocker #1): the backend was pure `Authorization: Bearer`, so a browser had to hold the session token in JS
+(sessionStorage = XSS-exposed). The staff session was already a **server-side opaque token** (256-bit random, only its
+SHA-256 hash stored on `StaffSession`, permissions snapshotted at login), so this is a *delivery* change, not a new trust
+model — the same opaque token now also rides in an **httpOnly cookie**. **Additive, not a replacement:**
+`StaffBearerAuthMiddleware` accepts the token from EITHER the `Authorization: Bearer` header (non-browser clients + the
+UI's interim bearer mode — kept working) OR the `cpe_ops_session` cookie; one `/auth/login` serves both (returns `token`
+for bearer mode AND sets the cookie + returns `csrfToken`). **CSRF = synchronizer token bound to the session:** new
+`StaffSession.CsrfToken` (per-session CSPRNG, migration `AddStaffSessionCsrfToken`, `db/sql/100-identity.sql`
+regenerated), returned in the **login + `/auth/me`** bodies (JS-readable — useless without the httpOnly cookie), echoed by
+the SPA as `X-CSRF-Token`, and **enforced only on cookie-authenticated unsafe methods** (POST/PUT/PATCH/DELETE),
+`FixedTimeEquals`-compared; a bearer-header request is not ambient ⇒ inherently CSRF-safe and exempt (safe methods never
+need it). **CORS:** credentialed allow-list from config `Cors:AllowedOrigins` (exact origins, never `*`; `AllowCredentials`;
+`UseCors` before the auth middleware; OPTIONS preflight bypasses auth) — empty ⇒ same-origin-only (safe default); dev seeds
+the Vite origins. **Cookie attributes:** `HttpOnly` always; `Secure` defaults `!Development` (so http://localhost works),
+config-overridable; `SameSite` defaults **Lax** (correct for dev + a same-registrable-domain UI/API), config-settable to
+`None` (auto-forces Secure) for a cross-site split — the one deployment knob (`Auth:Cookie`). **No ledger/key impact.**
+HTTP-proven on a booted host: login sets `Set-Cookie: …; samesite=lax; httponly`; cookie-only auth works on `/auth/me` +
+the gated `/ops/sweeps`; cookie POST **without** `X-CSRF-Token` → **403**, **with** it → 200; logout revokes + clears the
+cookie; bearer path still works and is CSRF-exempt; CORS preflight + credentialed headers correct, unknown origin refused.
+Tests: `StaffAuthServiceTests` gains CSRF-token issuance/validation assertions. **EF-tooling note (net10):** `dotnet ef`
+here needs `DOTNET_ROLL_FORWARD=LatestMajor` (its host is net8, the assemblies net10) — see [[ef-tooling-net10-rollforward]].
+**Deferred:** a machine-readable `errorCode` alongside `error` (the UI can't branch on prose — UI blocker #6); sliding-
+expiry / refresh (session is fixed-TTL, re-login on expiry); per-deployment prod `Cors:AllowedOrigins` + `Auth:Cookie`
+(config only, not code).
+
 Every other module in the map is a placeholder in this doc, not yet on disk — scaffold a module
 only when real feature work on it starts, creating only the layers it uses (§4.3).
 

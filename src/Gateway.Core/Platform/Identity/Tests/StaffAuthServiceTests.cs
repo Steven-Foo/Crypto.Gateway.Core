@@ -87,12 +87,17 @@ public sealed class StaffAuthServiceTests : IAsyncLifetime
         login.Value.RoleName.ShouldBe("Admin");
         login.Value.Permissions.ShouldContain(Role.WildcardPermission);
         login.Value.Token.ShouldNotBeNullOrWhiteSpace();
+        // A per-session anti-CSRF token is issued alongside the session token, and is a DISTINCT value.
+        login.Value.CsrfToken.ShouldNotBeNullOrWhiteSpace();
+        login.Value.CsrfToken.ShouldNotBe(login.Value.Token);
 
         await using var verify = Context();
         var validated = await Service(verify).ValidateAsync(login.Value.Token, Ct);
         validated.IsSuccess.ShouldBeTrue();
         validated.Value.RoleName.ShouldBe("Admin");
         validated.Value.Permissions.ShouldContain(Role.WildcardPermission);
+        // Validation surfaces the same CSRF token the middleware compares the X-CSRF-Token header against.
+        validated.Value.CsrfToken.ShouldBe(login.Value.CsrfToken);
     }
 
     [Fact]

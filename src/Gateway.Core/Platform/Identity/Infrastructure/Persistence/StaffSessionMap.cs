@@ -16,6 +16,7 @@ public sealed class StaffSessionMap : IEntityTypeConfiguration<StaffSession>
 
         builder.Property(s => s.Username).HasMaxLength(64).IsRequired();
         builder.Property(s => s.TokenHash).IsUnicode(false).HasMaxLength(128).IsRequired();
+        builder.Property(s => s.CsrfToken).IsUnicode(false).HasMaxLength(128).IsRequired();
         builder.Property(s => s.RoleId).IsRequired();
         builder.Property(s => s.RoleName).HasMaxLength(64).IsRequired();
         builder.Property(s => s.PermissionCodesCsv).IsUnicode(false).HasMaxLength(2048);

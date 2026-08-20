@@ -39,6 +39,25 @@ var redisConnection = config["Redis:ConnectionString"]
 
 builder.Services.AddRedisInfrastructure(redisConnection); // needed by PaymentIntent's wallet reservation lock
 
+// httpOnly session-cookie settings (name / SameSite / Secure). Bearer auth keeps working; the cookie is the
+// additive path the browser UI uses (§ StaffBearerAuthMiddleware). Secure defaults by environment.
+builder.Services.Configure<OpsSessionCookieOptions>(config.GetSection(OpsSessionCookieOptions.SectionName));
+
+// CORS for the browser UI. Cookie auth is cross-ORIGIN (UI and API on different ports/hosts) even when
+// same-SITE, so the browser needs an explicit credentialed allow-list — a specific origin (never '*') plus
+// Allow-Credentials, or it will neither send nor accept the session cookie. Origins come from config; with
+// none configured the API is same-origin-only, the safe default for a deployment that hasn't opted in.
+var corsOrigins = config.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
+builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
+{
+    if (corsOrigins.Length == 0)
+        return;
+    policy.WithOrigins(corsOrigins)
+        .AllowCredentials() // required for the browser to send/receive the httpOnly session cookie
+        .AllowAnyHeader()   // includes Authorization + X-CSRF-Token
+        .AllowAnyMethod();
+}));
+
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(o =>
     o.SwaggerDoc("v1", new OpenApiInfo { Title = "Crypto.Gateway.Core — Operations API", Version = "v1" }));
@@ -130,6 +149,10 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI(o => o.SwaggerEndpoint("/swagger/v1/swagger.json", "Operations API v1"));
 }
+
+// CORS must precede the auth middleware so preflight (OPTIONS) gets its headers and 401/403 responses still
+// carry CORS headers (otherwise the browser hides the real status behind a CORS error).
+app.UseCors();
 
 app.UseMiddleware<StaffBearerAuthMiddleware>();
 
