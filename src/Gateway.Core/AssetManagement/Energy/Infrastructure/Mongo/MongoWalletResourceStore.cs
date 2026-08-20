@@ -33,4 +33,12 @@ public sealed class MongoWalletResourceStore : IWalletResourceStore
         var document = await _collection.Find(d => d.Id == id).FirstOrDefaultAsync(cancellationToken);
         return document is null ? null : ResourceDocumentMapper.FromCurrent(document);
     }
+
+    public async Task<IReadOnlyList<WalletResourceSnapshot>> ListAsync(CancellationToken cancellationToken = default)
+    {
+        var documents = await _collection
+            .Find(FilterDefinition<WalletResourceDocument>.Empty)
+            .ToListAsync(cancellationToken);
+        return documents.Select(ResourceDocumentMapper.FromCurrent).ToList();
+    }
 }

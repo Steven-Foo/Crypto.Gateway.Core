@@ -2,6 +2,8 @@ using CryptoPaymentEngine.Api.OperationsApi.Endpoints;
 using CryptoPaymentEngine.Api.OperationsApi.Options;
 using CryptoPaymentEngine.Api.OperationsApi.Security;
 using CryptoPaymentEngine.Api.OperationsApi.Services;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Infrastructure;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Platform.Audit.Infrastructure;
@@ -93,6 +95,13 @@ else
 // which this host can't satisfy (no IBalanceReader) and must never run (§4.7). Observability only (§2).
 builder.Services.AddReconciliationReadModel(config);
 
+// Read-only ops view over the Sweep + Energy state machines the money host owns. Sweep: the SQL sweep
+// directory only. Energy: the SQL stake/delegate/top-up operation directory + the Mongo resource-health
+// snapshots — NOT the monitor/stake/delegate services or their workers, which need chain/signer capabilities
+// this host lacks and must never run (§4.7). Neither read moves funds, signs, or writes a snapshot (§2).
+builder.Services.AddSweepReadModel(dbConnection);
+builder.Services.AddEnergyReadModel(config, dbConnection);
+
 if (builder.Environment.IsDevelopment())
 {
     // Public xpub only, never a seed (§10) — same dev-only seam MerchantGateway uses, and must point at
@@ -142,5 +151,7 @@ app.MapOpsWithdrawalApprovalApi();
 app.MapOpsWithdrawalFundingApi();
 app.MapOpsTreasuryApi();
 app.MapOpsReconciliationApi();
+app.MapOpsSweepApi();
+app.MapOpsEnergyApi();
 
 app.Run();

@@ -1,4 +1,5 @@
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Application.Abstractions;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Contracts;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Infrastructure.Configuration;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Infrastructure.Persistence;
 using CryptoPaymentEngine.Infrastructure.Persistence.Money;
@@ -34,6 +35,23 @@ public static class SweepModuleExtensions
         services.AddSingleton<ISweepPolicyProvider>(_ => new ConfigurationSweepPolicyProvider(configuration));
         services.AddScoped<ISweepRepository, SweepRepository>();
 
+        return services;
+    }
+
+    /// <summary>
+    /// READ-ONLY composition for a host that only surfaces sweep state (the ops read API), not the scan/sign/
+    /// broadcast path. Registers the DbContext + the no-tracking <see cref="ISweepDirectory"/> — but NOT the
+    /// policy provider, the mutating repository, or the workers, so a host that lacks the signer/broadcaster/
+    /// balance-reader the workers need can still read what the money host wrote (§4.7). Never moves funds.
+    /// </summary>
+    public static IServiceCollection AddSweepReadModel(this IServiceCollection services, string connectionString)
+    {
+        services.AddDbContext<SweepDbContext>(options => options
+            .UseSqlServer(connectionString, sql => sql.MigrationsHistoryTable(
+                "__EFMigrationsHistory", SweepDbContext.SchemaName))
+            .UseBigIntegerMoney());
+
+        services.AddScoped<ISweepDirectory, SweepDirectory>();
         return services;
     }
 }

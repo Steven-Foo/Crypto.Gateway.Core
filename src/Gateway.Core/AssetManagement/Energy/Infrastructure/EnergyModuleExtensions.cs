@@ -49,6 +49,27 @@ public static class EnergyModuleExtensions
         return services;
     }
 
+    /// <summary>
+    /// READ-ONLY composition for a host that only surfaces energy state (the ops read API), not the monitor/
+    /// stake/delegate path. Registers the SQL DbContext + the no-tracking <see cref="IEnergyOperationDirectory"/>
+    /// and the Mongo resource-snapshot store (<see cref="IWalletResourceStore"/> for the resource-health read) —
+    /// but NOT <c>ResourceMonitorService</c>/<c>StakingService</c>/<c>EnergyDelegationService</c> or the workers,
+    /// which need <c>IAccountResourceReader</c>/<c>IResourceOperationBuilder</c>/<c>ISigner</c> the ops host lacks
+    /// and must never run (§4.7). Never moves funds, never signs, never writes a snapshot (§2).
+    /// </summary>
+    public static IServiceCollection AddEnergyReadModel(
+        this IServiceCollection services, IConfiguration configuration, string connectionString)
+    {
+        services.AddDbContext<EnergyDbContext>(options => options
+            .UseSqlServer(connectionString, sql => sql.MigrationsHistoryTable(
+                "__EFMigrationsHistory", EnergyDbContext.SchemaName))
+            .UseBigIntegerMoney());
+
+        services.AddScoped<IEnergyOperationDirectory, EnergyOperationDirectory>();
+        services.AddEnergyMongo(configuration); // resource snapshots (read-only use here)
+        return services;
+    }
+
     private static EnergyOperationOptions ReadOperationOptions(IConfiguration configuration)
     {
         var section = configuration.GetSection("Energy:Operations");
