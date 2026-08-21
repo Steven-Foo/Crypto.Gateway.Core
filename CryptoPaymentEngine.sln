@@ -381,6 +381,10 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CryptoPaymentEngine.Gateway
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CryptoPaymentEngine.Gateway.Core.Platform.Audit.Tests", "src\Gateway.Core\Platform\Audit\Tests\CryptoPaymentEngine.Gateway.Core.Platform.Audit.Tests.csproj", "{E4CFCF8A-D822-4FEC-B2D1-71DFDEFE1E8E}"
 EndProject
+Project("{2150E333-8FDC-42A3-9474-1A3956D46DE8}") = "Contracts", "Contracts", "{FA65CDB6-7903-E5D0-1665-8735C8779CB8}"
+EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Contracts", "src\Gateway.Core\AssetManagement\Sweep\Contracts\CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Contracts.csproj", "{FE908E53-B3BE-479E-BC23-0E880E3B3494}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -1423,6 +1427,18 @@ Global
 		{E4CFCF8A-D822-4FEC-B2D1-71DFDEFE1E8E}.Release|x64.Build.0 = Release|Any CPU
 		{E4CFCF8A-D822-4FEC-B2D1-71DFDEFE1E8E}.Release|x86.ActiveCfg = Release|Any CPU
 		{E4CFCF8A-D822-4FEC-B2D1-71DFDEFE1E8E}.Release|x86.Build.0 = Release|Any CPU
+		{FE908E53-B3BE-479E-BC23-0E880E3B3494}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{FE908E53-B3BE-479E-BC23-0E880E3B3494}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{FE908E53-B3BE-479E-BC23-0E880E3B3494}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{FE908E53-B3BE-479E-BC23-0E880E3B3494}.Debug|x64.Build.0 = Debug|Any CPU
+		{FE908E53-B3BE-479E-BC23-0E880E3B3494}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{FE908E53-B3BE-479E-BC23-0E880E3B3494}.Debug|x86.Build.0 = Debug|Any CPU
+		{FE908E53-B3BE-479E-BC23-0E880E3B3494}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{FE908E53-B3BE-479E-BC23-0E880E3B3494}.Release|Any CPU.Build.0 = Release|Any CPU
+		{FE908E53-B3BE-479E-BC23-0E880E3B3494}.Release|x64.ActiveCfg = Release|Any CPU
+		{FE908E53-B3BE-479E-BC23-0E880E3B3494}.Release|x64.Build.0 = Release|Any CPU
+		{FE908E53-B3BE-479E-BC23-0E880E3B3494}.Release|x86.ActiveCfg = Release|Any CPU
+		{FE908E53-B3BE-479E-BC23-0E880E3B3494}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -1615,5 +1631,7 @@ Global
 		{EC0D2A00-D20C-4A95-91DD-8709F735F3C1} = {C4419C3A-1A27-A7CE-63E5-0DC8375133CF}
 		{A4AE4327-F9EF-4254-8384-C2A466FFFEE3} = {C4419C3A-1A27-A7CE-63E5-0DC8375133CF}
 		{E4CFCF8A-D822-4FEC-B2D1-71DFDEFE1E8E} = {C4419C3A-1A27-A7CE-63E5-0DC8375133CF}
+		{FA65CDB6-7903-E5D0-1665-8735C8779CB8} = {D06676CD-E567-BEF3-3182-682B84DFC0B6}
+		{FE908E53-B3BE-479E-BC23-0E880E3B3494} = {FA65CDB6-7903-E5D0-1665-8735C8779CB8}
 	EndGlobalSection
 EndGlobal

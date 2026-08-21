@@ -1,4 +1,5 @@
 ﻿SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
 GO
 
 IF OBJECT_ID(N'[identity].[__EFMigrationsHistory]') IS NULL
@@ -329,6 +330,27 @@ IF NOT EXISTS (
 BEGIN
     INSERT INTO [identity].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
     VALUES (N'20260818081353_AddStaffSessionUsername', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [identity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260820084841_AddStaffSessionCsrfToken'
+)
+BEGIN
+    ALTER TABLE [identity].[StaffSession] ADD [CsrfToken] varchar(128) NOT NULL DEFAULT '';
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [identity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260820084841_AddStaffSessionCsrfToken'
+)
+BEGIN
+    INSERT INTO [identity].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260820084841_AddStaffSessionCsrfToken', N'10.0.9');
 END;
 
 COMMIT;

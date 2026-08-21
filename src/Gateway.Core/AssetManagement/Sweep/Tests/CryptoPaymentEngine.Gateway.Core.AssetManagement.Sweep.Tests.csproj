@@ -8,6 +8,9 @@
   <ItemGroup>
     <ProjectReference Include="../Domain/CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Domain.csproj" />
     <ProjectReference Include="../Application/CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Application.csproj" />
+    <ProjectReference Include="../Contracts/CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Contracts.csproj" />
+    <!-- Infrastructure: the read directory (SweepDirectory) + SweepDbContext, exercised on real SQL Server. -->
+    <ProjectReference Include="../Infrastructure/CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Infrastructure.csproj" />
     <!-- The in-memory balance reader + signer/engine live in Blockchain/KeyManagement (§8); the tests compose them like a host would. -->
     <ProjectReference Include="../../../Blockchain/Infrastructure/CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.csproj" />
   </ItemGroup>
@@ -19,6 +22,7 @@
     <PackageReference Include="coverlet.collector" />
     <PackageReference Include="NSubstitute" />
     <PackageReference Include="Shouldly" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
   </ItemGroup>
 
 </Project>

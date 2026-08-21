@@ -2,6 +2,8 @@ using CryptoPaymentEngine.Api.OperationsApi.Endpoints;
 using CryptoPaymentEngine.Api.OperationsApi.Options;
 using CryptoPaymentEngine.Api.OperationsApi.Security;
 using CryptoPaymentEngine.Api.OperationsApi.Services;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Infrastructure;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Platform.Audit.Infrastructure;
@@ -36,6 +38,25 @@ var redisConnection = config["Redis:ConnectionString"]
     ?? throw new InvalidOperationException("Missing configuration 'Redis:ConnectionString'.");
 
 builder.Services.AddRedisInfrastructure(redisConnection); // needed by PaymentIntent's wallet reservation lock
+
+// httpOnly session-cookie settings (name / SameSite / Secure). Bearer auth keeps working; the cookie is the
+// additive path the browser UI uses (§ StaffBearerAuthMiddleware). Secure defaults by environment.
+builder.Services.Configure<OpsSessionCookieOptions>(config.GetSection(OpsSessionCookieOptions.SectionName));
+
+// CORS for the browser UI. Cookie auth is cross-ORIGIN (UI and API on different ports/hosts) even when
+// same-SITE, so the browser needs an explicit credentialed allow-list — a specific origin (never '*') plus
+// Allow-Credentials, or it will neither send nor accept the session cookie. Origins come from config; with
+// none configured the API is same-origin-only, the safe default for a deployment that hasn't opted in.
+var corsOrigins = config.GetSection("Cors:AllowedOrigins").Get<string[]>() ?? [];
+builder.Services.AddCors(options => options.AddDefaultPolicy(policy =>
+{
+    if (corsOrigins.Length == 0)
+        return;
+    policy.WithOrigins(corsOrigins)
+        .AllowCredentials() // required for the browser to send/receive the httpOnly session cookie
+        .AllowAnyHeader()   // includes Authorization + X-CSRF-Token
+        .AllowAnyMethod();
+}));
 
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(o =>
@@ -93,6 +114,13 @@ else
 // which this host can't satisfy (no IBalanceReader) and must never run (§4.7). Observability only (§2).
 builder.Services.AddReconciliationReadModel(config);
 
+// Read-only ops view over the Sweep + Energy state machines the money host owns. Sweep: the SQL sweep
+// directory only. Energy: the SQL stake/delegate/top-up operation directory + the Mongo resource-health
+// snapshots — NOT the monitor/stake/delegate services or their workers, which need chain/signer capabilities
+// this host lacks and must never run (§4.7). Neither read moves funds, signs, or writes a snapshot (§2).
+builder.Services.AddSweepReadModel(dbConnection);
+builder.Services.AddEnergyReadModel(config, dbConnection);
+
 if (builder.Environment.IsDevelopment())
 {
     // Public xpub only, never a seed (§10) — same dev-only seam MerchantGateway uses, and must point at
@@ -122,6 +150,10 @@ if (app.Environment.IsDevelopment())
     app.UseSwaggerUI(o => o.SwaggerEndpoint("/swagger/v1/swagger.json", "Operations API v1"));
 }
 
+// CORS must precede the auth middleware so preflight (OPTIONS) gets its headers and 401/403 responses still
+// carry CORS headers (otherwise the browser hides the real status behind a CORS error).
+app.UseCors();
+
 app.UseMiddleware<StaffBearerAuthMiddleware>();
 
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
@@ -142,5 +174,7 @@ app.MapOpsWithdrawalApprovalApi();
 app.MapOpsWithdrawalFundingApi();
 app.MapOpsTreasuryApi();
 app.MapOpsReconciliationApi();
+app.MapOpsSweepApi();
+app.MapOpsEnergyApi();
 
 app.Run();

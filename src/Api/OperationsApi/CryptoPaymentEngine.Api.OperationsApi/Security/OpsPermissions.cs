@@ -79,6 +79,17 @@ public static class OpsPermissions
         public const string Manage = "ops.treasury.manage";
     }
 
+    public static class Sweep
+    {
+        public const string View = "ops.sweep.view"; // read the sweep state machine (deposit → cold treasury)
+    }
+
+    public static class Energy
+    {
+        // Read the TRON energy state: stake/delegate/top-up operations + per-wallet resource-health snapshots.
+        public const string View = "ops.energy.view";
+    }
+
     /// <summary>Every known code, flattened — what backs <c>GET /api/v1/ops/permissions</c> (the catalog a
     /// Roles-editor UI assigns from). Reflection-free on purpose: an explicit list is easier to audit than a
     /// reflective scan, and this file is the one place that has to stay in sync with the endpoints anyway.</summary>
@@ -95,5 +106,7 @@ public static class OpsPermissions
         Audit.View,
         Wallets.View, Wallets.Manage,
         Treasury.Manage,
+        Sweep.View,
+        Energy.View,
     ];
 }

@@ -34,6 +34,8 @@ public sealed class ResourceMonitorServiceTests
         }
         public Task<WalletResourceSnapshot?> GetAsync(Guid walletId, CancellationToken ct = default) =>
             Task.FromResult(Last);
+        public Task<IReadOnlyList<WalletResourceSnapshot>> ListAsync(CancellationToken ct = default) =>
+            Task.FromResult<IReadOnlyList<WalletResourceSnapshot>>(Last is null ? [] : [Last]);
     }
 
     private sealed class CapturingHistoryStore : IResourceHistoryStore

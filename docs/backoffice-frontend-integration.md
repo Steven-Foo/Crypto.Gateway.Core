@@ -45,7 +45,32 @@ pattern-match on it beyond display.
 
 ## 3. Authentication & session model
 
-**No cookies, no CSRF tokens.** Pure bearer-token auth, header: `Authorization: Bearer <token>`.
+A session is a **server-side opaque token** (revocable, fixed-TTL). It can be presented **two ways** — pick one
+per client:
+
+- **Cookie mode (recommended for the browser SPA).** On login the server sets an **httpOnly** `cpe_ops_session`
+  cookie; the browser sends it automatically. The session token is never exposed to JavaScript (no
+  sessionStorage/XSS surface). Because a cookie is sent automatically, **every state-changing request
+  (POST/PUT/PATCH/DELETE) must also send an `X-CSRF-Token` header** (see below). Send `credentials: 'include'`
+  on every request.
+- **Bearer mode (non-browser clients, or the interim SPA transport).** Send `Authorization: Bearer <token>`
+  using the `token` from the login response. Bearer requests are **exempt from CSRF** (a header credential is
+  not sent automatically). No cookie needed.
+
+Both modes are served by the same login endpoint — it returns `token` **and** sets the cookie **and** returns
+`csrfToken`; the client uses whichever it needs.
+
+**CSRF (cookie mode only):** the login and `/auth/me` responses return a `csrfToken`. Hold it in memory and send
+it as the `X-CSRF-Token` header on every POST/PUT/PATCH/DELETE. A missing/incorrect token on a cookie-authenticated
+write → **403** `{"error":"Missing or invalid CSRF token…"}`. It is bound to the session (rotates on login, dies on
+logout). After a page refresh (which clears the in-memory copy but keeps the httpOnly cookie), call `GET /auth/me`
+to re-obtain it. The CSRF token grants nothing on its own — it is only meaningful alongside the httpOnly session
+cookie, so keeping it in JS memory is safe.
+
+**CORS (cross-origin SPA):** the API must list your UI origin in `Cors:AllowedOrigins` (exact origin, never `*`)
+for the browser to send/receive the cookie; the dev server seeds the Vite origins. Cookie `SameSite` defaults to
+`Lax` (correct for a UI + API on the same registrable domain); a cross-registrable-domain split needs `SameSite=None`
+(server config `Auth:Cookie`).
 
 ### `POST /api/v1/ops/auth/login` — the only unauthenticated endpoint besides `/health`
 
@@ -59,7 +84,8 @@ Response 200:
 {
   "isSuccess": true,
   "data": {
-    "token": "opaque bearer token string",
+    "token": "opaque bearer token string (use in bearer mode; ignore in cookie mode)",
+    "csrfToken": "opaque CSRF token (cookie mode: send as X-CSRF-Token on writes)",
     "expiresAt": "2026-08-19T18:00:00+00:00",
     "username": "admin",
     "role": "Admin",
@@ -68,7 +94,8 @@ Response 200:
   "error": null
 }
 ```
-Response 401 on bad credentials: `{ "isSuccess": false, "error": "..." }`.
+A successful login also sets the httpOnly `cpe_ops_session` cookie (`Set-Cookie`). Response 401 on bad
+credentials: `{ "isSuccess": false, "error": "..." }`.
 
 Session TTL defaults to **8 hours** (server-configured, `StaffAuthOptions.SessionTtlHours`). There is no
 refresh-token flow — when the session expires, every request 401s and the frontend must send the user back
@@ -76,7 +103,8 @@ to login.
 
 ### `POST /api/v1/ops/auth/logout`
 
-No body. Revokes the current session server-side (not just a client-side token discard).
+No body. Revokes the current session server-side (not just a client-side token discard) and clears the session
+cookie. In cookie mode this is a state-changing POST, so it **requires the `X-CSRF-Token` header** like any other write.
 Response 200: `{ "isSuccess": true, "data": { "loggedOut": true }, "error": null }`.
 
 ### `GET /api/v1/ops/auth/me` — any valid session, no specific permission needed
@@ -89,7 +117,8 @@ Call this on app load / after login to know what to render.
     "staffUserId": "guid",
     "username": "admin",
     "role": "Admin",
-    "permissions": ["*"]
+    "permissions": ["*"],
+    "csrfToken": "opaque CSRF token — re-obtain here after a refresh (cookie mode)"
   },
   "error": null
 }

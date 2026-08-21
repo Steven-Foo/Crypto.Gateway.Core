@@ -9,6 +9,10 @@ public interface IWalletResourceStore
     Task UpsertAsync(WalletResourceSnapshot snapshot, CancellationToken cancellationToken = default);
 
     Task<WalletResourceSnapshot?> GetAsync(Guid walletId, CancellationToken cancellationToken = default);
+
+    /// <summary>Every current wallet-resource snapshot (one per wallet) — the back-office resource-health read.
+    /// Pure read over the derived store; never money truth (§2).</summary>
+    Task<IReadOnlyList<WalletResourceSnapshot>> ListAsync(CancellationToken cancellationToken = default);
 }
 
 /// <summary>

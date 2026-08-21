@@ -522,8 +522,8 @@ Contracts only** — no workers/dispatchers, so the host scans/processes/broadca
 login/logout, merchant admin, transaction search (deposit/withdrawal/paymentintent/callback), withdrawal
 **approval** (§10 above-threshold) and **funding release/cancel** (`Ops*Endpoints`). **Known placeholders:** the two
 transaction screens hardcode `fee = "0"` and `userId = null` (real per-merchant fee + user attribution not yet
-surfaced — `§ docs/backoffice-api.md`). Energy/Sweep still have no ops surface; **Treasury cold-reload and
-Reconciliation now do** (see the next two milestones).
+surfaced — `§ docs/backoffice-api.md`). **Treasury cold-reload, Reconciliation, and now Energy/Sweep** all have
+ops surfaces (see the milestones below) — the earlier "no ops surface" gap for Energy/Sweep is closed (read-only).
 
 **Reconciliation custody-status Ops read (`Api/OperationsApi`) — BUILT, full suite green.** The go-live surface for the
 ledger-vs-on-chain custody audit, which was log-and-Mongo-only. New `OpsReconciliationEndpoints`: `GET
@@ -730,6 +730,59 @@ processing is a documented edge, same class as the fee-mid-reorg note). Tests: d
 (`MerchantAssetPolicyServiceTests`) + enforcement (`WithdrawalRequestServiceTests` user PendingApproval/auto-approve,
 `MerchantWithdrawalServiceTests` cash-out PendingApproval). **Deferred:** snapshotting the threshold on the withdrawal
 at request (to avoid the near-zero mid-flight re-resolution) — not needed for the common case.
+
+**Energy + Sweep Ops read surface (`Api/OperationsApi`) — BUILT, full suite green (685 passed, 8 expected skips).**
+Closed the last back-office blind spots (Reconciliation/Treasury already had theirs): an operator can now see the
+gas-hub + concentration paths that previously lived only in logs + SQL. All pure **reads** over the state machines the
+money host owns — this host runs no scan/monitor/stake/sign/broadcast worker and holds no keys (§4.7). Three new
+endpoints, each gated on a new permission (Admin's `WildcardPermission` passes; codes assignable in the Roles UI):
+`GET /api/v1/ops/sweeps` (`ops.sweep.view`) — the sweep state machine (deposit → cold treasury), filter by
+chain/status/wallet, paged, with a by-status summary; `GET /api/v1/ops/energy/operations` (`ops.energy.view`) — the
+stake/delegate/top-up operations, filter by chain/kind/status/staking-wallet, paged + summary; `GET
+/api/v1/ops/energy/resources` (`ops.energy.view`) — per-wallet resource-health snapshots (energy/bandwidth,
+Healthy/Low/Critical, frozen/available TRX), **worst-health-first**. Amounts cross to display at the edge (§14) — a
+display value **plus** the exact base-unit integer string (audit needs the precise integer); TRX shows with 6dp via a
+documented constant (TRX is deliberately NOT in the deposit catalog, so no catalog lookup). **New read seams (additive,
+Contracts-only §4.5):** Sweep gained its **first `Contracts` project** — `ISweepDirectory` (+ `SweepAdminRow`/
+`SweepAdminFilter`), backed by a no-tracking `SweepDirectory` over `SweepDbContext`; Energy gained
+`IEnergyOperationDirectory` (+ row/filter) over `EnergyDbContext`, and `IWalletResourceStore.ListAsync` for the Mongo
+resource read (consumed directly like Reconciliation's store). **Composition mirrors `AddReconciliationReadModel`:** new
+`AddSweepReadModel(conn)` + `AddEnergyReadModel(config, conn)` register ONLY the DbContext + read directory (+ the Mongo
+resource store) — NOT `ResourceMonitorService`/`StakingService`/`EnergyDelegationService`/`SweepScanService` or their
+workers, which need chain/signer capabilities this host lacks and must never run (§4.7). **No schema/migration/ledger/key
+change.** Host-boot verified (DI graph validates, Kestrel up, all three routes in the Swagger doc). Tests:
+`SweepDirectoryTests` + `EnergyOperationDirectoryTests` (real SQL Server — order/filter/summary + exact decimal(38,0)
+amount round-trip beyond Int64). **Deferred:** these are read-only (no ops *action* on Energy/Sweep — e.g. manual
+retry/cancel of a stuck sweep, or a manual stake trigger — is a later T3); a paged history across all transaction-record
+endpoints remains the deferred cross-cutting piece; `EnergyPolicy` (thresholds) has no read endpoint yet (the resource
+snapshot already carries target/minimum energy).
+
+**httpOnly cookie + CSRF session auth for `Api/OperationsApi` (browser-safe staff login) — BUILT, full suite green
+(685 passed, 8 expected skips), HTTP-verified end-to-end.** Unblocks the Admin UI's target auth (its `CLAUDE.md` D7 /
+§12 / blocker #1): the backend was pure `Authorization: Bearer`, so a browser had to hold the session token in JS
+(sessionStorage = XSS-exposed). The staff session was already a **server-side opaque token** (256-bit random, only its
+SHA-256 hash stored on `StaffSession`, permissions snapshotted at login), so this is a *delivery* change, not a new trust
+model — the same opaque token now also rides in an **httpOnly cookie**. **Additive, not a replacement:**
+`StaffBearerAuthMiddleware` accepts the token from EITHER the `Authorization: Bearer` header (non-browser clients + the
+UI's interim bearer mode — kept working) OR the `cpe_ops_session` cookie; one `/auth/login` serves both (returns `token`
+for bearer mode AND sets the cookie + returns `csrfToken`). **CSRF = synchronizer token bound to the session:** new
+`StaffSession.CsrfToken` (per-session CSPRNG, migration `AddStaffSessionCsrfToken`, `db/sql/100-identity.sql`
+regenerated), returned in the **login + `/auth/me`** bodies (JS-readable — useless without the httpOnly cookie), echoed by
+the SPA as `X-CSRF-Token`, and **enforced only on cookie-authenticated unsafe methods** (POST/PUT/PATCH/DELETE),
+`FixedTimeEquals`-compared; a bearer-header request is not ambient ⇒ inherently CSRF-safe and exempt (safe methods never
+need it). **CORS:** credentialed allow-list from config `Cors:AllowedOrigins` (exact origins, never `*`; `AllowCredentials`;
+`UseCors` before the auth middleware; OPTIONS preflight bypasses auth) — empty ⇒ same-origin-only (safe default); dev seeds
+the Vite origins. **Cookie attributes:** `HttpOnly` always; `Secure` defaults `!Development` (so http://localhost works),
+config-overridable; `SameSite` defaults **Lax** (correct for dev + a same-registrable-domain UI/API), config-settable to
+`None` (auto-forces Secure) for a cross-site split — the one deployment knob (`Auth:Cookie`). **No ledger/key impact.**
+HTTP-proven on a booted host: login sets `Set-Cookie: …; samesite=lax; httponly`; cookie-only auth works on `/auth/me` +
+the gated `/ops/sweeps`; cookie POST **without** `X-CSRF-Token` → **403**, **with** it → 200; logout revokes + clears the
+cookie; bearer path still works and is CSRF-exempt; CORS preflight + credentialed headers correct, unknown origin refused.
+Tests: `StaffAuthServiceTests` gains CSRF-token issuance/validation assertions. **EF-tooling note (net10):** `dotnet ef`
+here needs `DOTNET_ROLL_FORWARD=LatestMajor` (its host is net8, the assemblies net10) — see [[ef-tooling-net10-rollforward]].
+**Deferred:** a machine-readable `errorCode` alongside `error` (the UI can't branch on prose — UI blocker #6); sliding-
+expiry / refresh (session is fixed-TTL, re-login on expiry); per-deployment prod `Cors:AllowedOrigins` + `Auth:Cookie`
+(config only, not code).
 
 Every other module in the map is a placeholder in this doc, not yet on disk — scaffold a module
 only when real feature work on it starts, creating only the layers it uses (§4.3).

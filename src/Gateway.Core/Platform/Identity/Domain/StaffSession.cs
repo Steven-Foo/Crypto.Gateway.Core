@@ -11,12 +11,13 @@ namespace CryptoPaymentEngine.Gateway.Core.Platform.Identity.Domain;
 public sealed class StaffSession : Entity<Guid>
 {
     private StaffSession(
-        Guid id, Guid staffUserId, string username, string tokenHash, Guid roleId, string roleName, string? permissionCodesCsv,
-        DateTimeOffset expiresAt, DateTimeOffset now) : base(id)
+        Guid id, Guid staffUserId, string username, string tokenHash, string csrfToken, Guid roleId, string roleName,
+        string? permissionCodesCsv, DateTimeOffset expiresAt, DateTimeOffset now) : base(id)
     {
         StaffUserId = staffUserId;
         Username = username;
         TokenHash = tokenHash;
+        CsrfToken = csrfToken;
         RoleId = roleId;
         RoleName = roleName;
         PermissionCodesCsv = permissionCodesCsv;
@@ -36,6 +37,16 @@ public sealed class StaffSession : Entity<Guid>
     public string Username { get; private set; } = null!;
 
     public string TokenHash { get; private set; } = null!;
+
+    /// <summary>
+    /// The session's anti-CSRF token — a per-session random value, set at issue. Unlike <see cref="TokenHash"/>
+    /// this is stored in plaintext and IS returned to the browser (in the login + /auth/me body, so the SPA can
+    /// echo it as an <c>X-CSRF-Token</c> header). That is safe: the CSRF token grants nothing on its own — a
+    /// request is only authenticated by the httpOnly session cookie, whose value is never in the DB. Binding the
+    /// CSRF token to the session means it rotates on every login and dies on logout/expiry. Only meaningful for
+    /// cookie-authenticated requests; a bearer-header caller is inherently CSRF-safe (§ StaffBearerAuthMiddleware).
+    /// </summary>
+    public string CsrfToken { get; private set; } = null!;
 
     /// <summary>
     /// The role's id/name/permission-codes are snapshotted from the <see cref="Role"/> at login, not
@@ -59,11 +70,12 @@ public sealed class StaffSession : Entity<Guid>
     public bool IsValid(DateTimeOffset now) => RevokedAt is null && now < ExpiresAt;
 
     public static StaffSession Issue(
-        Guid staffUserId, string username, string tokenHash, Guid roleId, string roleName,
+        Guid staffUserId, string username, string tokenHash, string csrfToken, Guid roleId, string roleName,
         IReadOnlyCollection<string> permissionCodes, TimeSpan ttl, DateTimeOffset now)
     {
         var csv = permissionCodes.Count == 0 ? null : string.Join(',', permissionCodes);
-        return new StaffSession(Guid.CreateVersion7(), staffUserId, username, tokenHash, roleId, roleName, csv, now.Add(ttl), now);
+        return new StaffSession(
+            Guid.CreateVersion7(), staffUserId, username, tokenHash, csrfToken, roleId, roleName, csv, now.Add(ttl), now);
     }
 
     /// <summary>Idempotent — revoking an already-revoked session keeps the original revocation time.</summary>

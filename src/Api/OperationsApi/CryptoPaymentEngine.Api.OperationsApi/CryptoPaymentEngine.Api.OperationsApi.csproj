@@ -60,6 +60,14 @@
     <ProjectReference Include="..\..\..\Gateway.Core\AssetManagement\Treasury\Infrastructure\CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Infrastructure.csproj" />
     <ProjectReference Include="..\..\..\Gateway.Core\PaymentProcessing\Reconciliation\Application\CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Reconciliation.Application.csproj" />
     <ProjectReference Include="..\..\..\Gateway.Core\PaymentProcessing\Reconciliation\Infrastructure\CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Reconciliation.Infrastructure.csproj" />
+
+    <!-- Sweep + Energy: read-only Ops surface (ISweepDirectory / IEnergyOperationDirectory + Mongo resource
+         snapshots). No workers/signers composed here (§4.7) — see AddSweepReadModel / AddEnergyReadModel. -->
+    <ProjectReference Include="..\..\..\Gateway.Core\AssetManagement\Sweep\Contracts\CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Contracts.csproj" />
+    <ProjectReference Include="..\..\..\Gateway.Core\AssetManagement\Sweep\Infrastructure\CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\Gateway.Core\AssetManagement\Energy\Application\CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Application.csproj" />
+    <ProjectReference Include="..\..\..\Gateway.Core\AssetManagement\Energy\Contracts\CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Contracts.csproj" />
+    <ProjectReference Include="..\..\..\Gateway.Core\AssetManagement\Energy\Infrastructure\CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Infrastructure.csproj" />
   </ItemGroup>
 
   <ItemGroup>
