@@ -44,6 +44,20 @@ public static class OpsDepositTransactionEndpoints
         if (pageSize < 1) pageSize = 50;
         if (pageSize > 200) pageSize = 200;
 
+        // An empty-result short-circuit still returns every field the populated path returns — same shape,
+        // zeroed — so the frontend never has to special-case a no-match response.
+        IResult EmptyPage() => Results.Ok(new
+        {
+            isSuccess = true,
+            data = new
+            {
+                page, pageSize, totalCount = 0, totalTransactionRecords = 0,
+                totalDepositAmount = 0m, totalActualDepositAmount = 0m, totalFee = 0m, distinctAssetCount = 0,
+                items = Array.Empty<object>(),
+            },
+            error = (string?)null,
+        });
+
         // Free-text merchant-name search: resolve to ids first (Deposit/PaymentIntent never learn Merchant's
         // schema, §4.5). No match ⇒ short-circuit to an empty page, same pattern as an unknown coin below.
         IReadOnlyList<Guid>? merchantIds = null;
@@ -51,12 +65,7 @@ public static class OpsDepositTransactionEndpoints
         {
             merchantIds = await merchants.SearchIdsByNameAsync(merchantName, http.RequestAborted);
             if (merchantIds.Count == 0)
-                return Results.Ok(new
-                {
-                    isSuccess = true,
-                    data = new { page, pageSize, totalCount = 0, items = Array.Empty<object>() },
-                    error = (string?)null,
-                });
+                return EmptyPage();
         }
 
         Guid? assetId = null;
@@ -69,12 +78,7 @@ public static class OpsDepositTransactionEndpoints
 
             var coinAsset = await assets.FindAsync(network.Value, coin.Trim().ToUpperInvariant(), http.RequestAborted);
             if (coinAsset is null)
-                return Results.Ok(new
-                {
-                    isSuccess = true,
-                    data = new { page, pageSize, totalCount = 0, items = Array.Empty<object>() },
-                    error = (string?)null,
-                });
+                return EmptyPage();
 
             assetId = coinAsset.AssetId;
         }
@@ -86,6 +90,16 @@ public static class OpsDepositTransactionEndpoints
 
         var matchedDepositIds = items.Where(i => i.MatchedDepositId is not null).Select(i => i.MatchedDepositId!.Value).ToList();
         var depositSummaries = await deposits.GetByIdsAsync(matchedDepositIds, http.RequestAborted);
+
+        // Totals across the WHOLE filtered set (every page, not just this one) — the summary row above the
+        // table. totalsDecimals uses the coin filter's precision when one is set (the exact, correct case);
+        // otherwise falls back to 6 like every per-row conversion below (§14 — see distinctAssetCount: if the
+        // filtered set spans more than one asset, these sums are added together across different-decimal
+        // assets and are only approximate, deliberately surfaced rather than silently hidden).
+        var totals = await paymentIntents.GetTotalsAsync(filter, http.RequestAborted);
+        var depositAmountTotals = await deposits.SumByIdsAsync(totals.MatchedDepositIds, http.RequestAborted);
+        var totalsAsset = assetId is { } fixedAssetId ? await assets.FindByIdAsync(fixedAssetId, http.RequestAborted) : null;
+        var totalsDecimals = totalsAsset?.Decimals ?? 6;
 
         var callbackStatuses = await callbacks.GetStatusesAsync(
             CallbackReferenceType.Deposit, items.Select(i => i.PublicReference).ToList(), http.RequestAborted);
@@ -137,7 +151,20 @@ public static class OpsDepositTransactionEndpoints
         return Results.Ok(new
         {
             isSuccess = true,
-            data = new { page, pageSize, totalCount = total, items = rows },
+            data = new
+            {
+                page,
+                pageSize,
+                totalCount = total,
+                // Summary totals across the whole filtered set, not just this page (§14 — see the comment
+                // above on totalsDecimals for the multi-asset caveat).
+                totalTransactionRecords = total,
+                totalDepositAmount = AmountConversion.ToDisplay(BigInteger.Parse(totals.TotalExpectedAmountBaseUnits), totalsDecimals),
+                totalActualDepositAmount = AmountConversion.ToDisplay(BigInteger.Parse(depositAmountTotals.TotalAmountBaseUnits), totalsDecimals),
+                totalFee = AmountConversion.ToDisplay(BigInteger.Parse(depositAmountTotals.TotalFeeBaseUnits), totalsDecimals),
+                distinctAssetCount = totals.DistinctAssetCount,
+                items = rows,
+            },
             error = (string?)null,
         });
     }

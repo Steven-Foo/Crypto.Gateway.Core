@@ -50,6 +50,19 @@ public sealed record PaymentIntentAdminRow(
     Guid? MatchedDepositId,
     DateTimeOffset CreatedAt);
 
+/// <summary>Aggregate totals across the ENTIRE filtered set — not the current page — behind the Ops
+/// deposit-transactions screen's summary row. <see cref="TotalExpectedAmountBaseUnits"/> sums every matching
+/// invoice's requested amount (an exact base-unit integer string, §14). <see cref="MatchedDepositIds"/> is
+/// every non-null <c>MatchedDepositId</c> in the filtered set, for the caller to further sum the actual
+/// received amount/fee via Deposit's own <c>IDepositLookup</c> (§4.5 — PaymentIntent doesn't know Deposit's
+/// Amount/Fee schema). <see cref="DistinctAssetCount"/> is how many different assets appear in the filtered
+/// set — summing amounts across different-decimal assets into one number is meaningless, so a caller
+/// combining these into a single display total should treat it as approximate/flag it when this is &gt; 1.</summary>
+public sealed record PaymentIntentTotals(
+    string TotalExpectedAmountBaseUnits,
+    int DistinctAssetCount,
+    IReadOnlyList<Guid> MatchedDepositIds);
+
 public interface IPaymentIntentDirectory
 {
     Task<PaymentIntentView?> FindByPublicReferenceAsync(Guid publicReference, CancellationToken cancellationToken = default);
@@ -71,4 +84,8 @@ public interface IPaymentIntentDirectory
     /// <summary>Paged, filtered search behind the Ops deposit-transactions screen — newest first.</summary>
     Task<(IReadOnlyList<PaymentIntentAdminRow> Items, int TotalCount)> SearchAsync(
         PaymentIntentAdminFilter filter, int page, int pageSize, CancellationToken cancellationToken = default);
+
+    /// <summary>Same filter as <see cref="SearchAsync"/>, but aggregated over the whole matching set instead
+    /// of one page — the Ops screen's summary totals.</summary>
+    Task<PaymentIntentTotals> GetTotalsAsync(PaymentIntentAdminFilter filter, CancellationToken cancellationToken = default);
 }

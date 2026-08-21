@@ -17,6 +17,9 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Contracts;
 public sealed record DepositSummaryView(
     Guid DepositId, string AmountBaseUnits, string FeeBaseUnits, int Confirmations, string TransactionHash);
 
+/// <summary>Aggregate sums over a set of deposits — exact base-unit integer strings (§14).</summary>
+public sealed record DepositAmountTotals(string TotalAmountBaseUnits, string TotalFeeBaseUnits);
+
 public interface IDepositLookup
 {
     /// <summary>True if an unconfirmed (<c>Detected</c>) deposit currently sits at this address.</summary>
@@ -28,5 +31,11 @@ public interface IDepositLookup
     /// no matching row are simply absent from the result.
     /// </summary>
     Task<IReadOnlyDictionary<Guid, DepositSummaryView>> GetByIdsAsync(
+        IReadOnlyCollection<Guid> depositIds, CancellationToken cancellationToken = default);
+
+    /// <summary>Sums Amount/Fee across the given deposit ids — the Ops screen's summary totals, resolved
+    /// from PaymentIntent's <c>MatchedDepositId</c> list. An empty <paramref name="depositIds"/> sums to
+    /// zero, never an error.</summary>
+    Task<DepositAmountTotals> SumByIdsAsync(
         IReadOnlyCollection<Guid> depositIds, CancellationToken cancellationToken = default);
 }

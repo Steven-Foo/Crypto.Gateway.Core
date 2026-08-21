@@ -341,13 +341,25 @@ explicit "save this now" warning. `wallet` can be `null` if seed provisioning fa
 this does not indicate a problem worth surfacing loudly — the merchant is still fully usable, the first
 deposit call just provisions a wallet synchronously instead.
 
-400 on duplicate `merchantCode` or invalid callback URL. 500 (rare) if registration succeeded but
-auto-activation failed — tell the user to check with engineering, the merchant may be half-set-up.
+400 on duplicate `merchantCode` or invalid callback URL.
 
 ### `PATCH /api/v1/ops/merchants/{id}/status` — `ops.merchants.manage`
-Request: `{ "active": true|false }` (`true` → activate, `false` → suspend).
-Response: `{ "merchantId": "guid", "status": "Active" }`. 400 on an invalid transition (e.g. activating a
-`Closed` merchant).
+Request: `{ "active": true|false }` (`true` → activate, `false` → freeze).
+Response: `{ "merchantId": "guid", "status": "Active" }` (or `"Frozen"`).
+
+Status is **never terminal** — this also reopens a `Closed` merchant: `active: true` moves a Closed
+merchant to `Active`, `active: false` moves it to `Frozen`. There is no invalid Active/Frozen/Closed
+transition through this endpoint; the only failure is an unknown `id` (404).
+
+### `POST /api/v1/ops/merchants/{id}/close` — `ops.merchants.manage`
+No body. Closes the merchant from either `Active` or `Frozen`. Reversible — use `PATCH .../status` above
+to reopen it (`active: true` → `Active`, `active: false` → `Frozen`). Closing does **not** touch any other
+merchant data (credentials, policies, settlement wallet, etc. are untouched, just inert while Closed) and
+does **not** stop already-confirmed on-chain deposits from crediting the ledger (§14) — it only blocks new
+activity (deposit-address issuance, payouts, credential/config/policy changes — every one of those has its
+own independent guard rejecting a Closed merchant, separate from the status field itself).
+
+Response: `{ "merchantId": "guid", "status": "Closed" }`. 404 on an unknown `id`.
 
 ### `POST /api/v1/ops/merchants/{id}/regenerate-key` — `ops.merchants.rotate-key`
 No body. Revokes the current credential immediately and issues a new one.
@@ -414,14 +426,16 @@ Query filters (all optional, AND-combined): `merchantId` (guid), `address` (exac
 Row:
 ```json
 {
-  "walletId": "guid", "merchantId": "guid|null", "chain": 1, "address": "T...",
+  "walletId": "guid", "merchantId": "guid|null", "merchantName": "string|null", "chain": 1, "address": "T...",
   "walletType": "Deposit", "status": "Active", "statusReason": "string|null",
   "depositsReceivedCount": 3, "createdAt": "...", "updatedAt": "..."
 }
 ```
 **Note:** `chain` here serializes as a **numeric enum value** (`1` = Tron), not a string — unlike almost
 everywhere else in this API where chain is a string like `"Tron"`. Map it client-side (`1` = Tron; today
-this is the only chain live). `statusReason` is only non-null while `status == "Suspended"`.
+this is the only chain live). `statusReason` is only non-null while `status == "Suspended"`. `merchantName`
+is `null` whenever `merchantId` is — platform wallets (hot pool, staking, treasury, etc.) aren't assigned to
+a merchant; only deposit wallets are.
 
 ### `POST /api/v1/ops/wallets/{id}/suspend` — `ops.wallets.manage`
 Request: `{ "reason": "string, required, max 512" }`
@@ -459,14 +473,38 @@ always shows nulls the other populates.
 
 ### `GET /api/v1/ops/transactions/deposits` — `ops.deposits.view`
 
-Query filters (all optional): `merchantId`, `systemOrderNumber` (guid), `merchantOrderNumber` (string),
-`receivingAddress`, `network` (chain), `coin` (requires `network` to also be set), `fromDate`, `toDate`,
-`page`, `pageSize`.
+Query filters (all optional): `merchantId`, `merchantName` (free-text, case-insensitive "contains" match
+against the merchant's Name or MerchantCode — no matches returns an empty page, not an error), `systemOrderNumber`
+(guid), `merchantOrderNumber` (string), `receivingAddress`, `network` (chain), `coin` (requires `network`
+to also be set), `fromDate`, `toDate`, `page`, `pageSize`.
+
+Response `data` — same level as `page`/`pageSize`/`items`:
+```json
+{
+  "page": 1, "pageSize": 50, "totalCount": 1234,
+  "totalTransactionRecords": 1234,
+  "totalDepositAmount": 50000.00,
+  "totalActualDepositAmount": 49500.00,
+  "totalFee": 495.00,
+  "distinctAssetCount": 1,
+  "items": [ /* rows below */ ]
+}
+```
+`totalTransactionRecords` is the same number as `totalCount` (both count every matching record across
+**every page**, not just this one — it's duplicated under both names deliberately). `totalDepositAmount`
+sums every matching invoice's requested amount; `totalActualDepositAmount`/`totalFee` sum only the
+invoices that have actually matched a deposit (unmatched invoices contribute `0` to those two). **All four
+sums are computed across the whole filtered result set**, not the current page. `distinctAssetCount` is how
+many different coins appear in the filtered set — if it's `> 1`, the amount sums above were added together
+across assets with different decimal precision and are not a real combined quantity (e.g. USDT + a
+hypothetical 18-decimal asset); only trust them at face value when the search is filtered to one `coin`, or
+when this is `1`.
 
 Row:
 ```json
 {
   "merchantId": "guid",
+  "merchantName": "string|null — null only if the merchant record can't be resolved",
   "systemOrderNumber": "guid",
   "merchantOrderNumber": "the merchant's own tx reference",
   "userId": null,
@@ -494,12 +532,29 @@ matched the invoice.
 
 ### `GET /api/v1/ops/transactions/withdrawals` — `ops.withdrawals.view`
 
-Same query filters as deposits (minus `coin` needing `network` — same rule applies here too).
+Same query filters as deposits (minus `coin` needing `network` — same rule applies here too), plus `kind`
+(`"user"` | `"merchant"` — filters to end-user payouts or merchant cash-outs; omit for both).
+
+Response `data` — same level as `page`/`pageSize`/`items`:
+```json
+{
+  "page": 1, "pageSize": 50, "totalCount": 567,
+  "totalTransactionRecords": 567,
+  "totalWithdrawalAmount": 30000.00,
+  "totalFee": 300.00,
+  "distinctAssetCount": 1,
+  "items": [ /* rows below */ ]
+}
+```
+Same rules as the deposit totals above: computed across the **whole filtered set**, not the current page;
+`distinctAssetCount > 1` means the sums span more than one asset and are only meaningful at face value when
+filtered to one `coin`.
 
 Row:
 ```json
 {
   "merchantId": "guid",
+  "merchantName": "string|null — null only if the merchant record can't be resolved",
   "systemOrderNumber": "guid",
   "merchantOrderNumber": "the merchant's own tx reference",
   "userId": null,
@@ -512,6 +567,7 @@ Row:
   "txHash": "0x... | null — null until broadcast",
   "sourceWalletId": "guid|null — which hot-pool wallet is/was leased for this payout; null until Signing",
   "type": "withdrawal",
+  "kind": "User | Merchant — end-user payout vs. the merchant's own earnings cash-out",
   "createdAt": "...",
   "status": "pending",
   "callback": "Pending",

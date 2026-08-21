@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Domain;
 using Microsoft.EntityFrameworkCore;
@@ -41,16 +42,7 @@ public sealed class PaymentIntentDirectory(PaymentIntentDbContext context, TimeP
     public async Task<(IReadOnlyList<PaymentIntentAdminRow> Items, int TotalCount)> SearchAsync(
         PaymentIntentAdminFilter filter, int page, int pageSize, CancellationToken cancellationToken = default)
     {
-        var query = context.PaymentIntents.AsNoTracking()
-            .Where(i => filter.MerchantId == null || i.MerchantId == filter.MerchantId)
-            .Where(i => filter.MerchantIds == null || filter.MerchantIds.Contains(i.MerchantId))
-            .Where(i => filter.SystemOrderNumber == null || i.PublicReference == filter.SystemOrderNumber)
-            .Where(i => filter.MerchantOrderNumber == null || i.MerchantTransactionId == filter.MerchantOrderNumber)
-            .Where(i => filter.ReceivingAddress == null || i.Address == filter.ReceivingAddress)
-            .Where(i => filter.Network == null || i.Chain == filter.Network)
-            .Where(i => filter.AssetId == null || i.AssetId == filter.AssetId)
-            .Where(i => filter.FromDate == null || i.CreatedAt >= filter.FromDate)
-            .Where(i => filter.ToDate == null || i.CreatedAt <= filter.ToDate);
+        var query = Filtered(filter);
 
         var totalCount = await query.CountAsync(cancellationToken);
 
@@ -62,6 +54,38 @@ public sealed class PaymentIntentDirectory(PaymentIntentDbContext context, TimeP
 
         return (items.Select(ToAdminRow).ToList(), totalCount);
     }
+
+    public async Task<PaymentIntentTotals> GetTotalsAsync(
+        PaymentIntentAdminFilter filter, CancellationToken cancellationToken = default)
+    {
+        // Narrow projection over the WHOLE filtered set (unpaged) — just the three columns needed, never
+        // full entities. BigInteger has no native LINQ Sum()/SQL aggregate translation for this project's
+        // custom money type mapping (no precedent for it anywhere in this codebase), so the sum is folded
+        // client-side instead of risking an untranslatable/incorrect SQL SUM (§14 — correctness over a
+        // marginal round-trip saving on what is an ops search screen, not a hot path).
+        var rows = await Filtered(filter)
+            .Select(i => new { i.ExpectedAmount, i.AssetId, i.MatchedDepositId })
+            .ToListAsync(cancellationToken);
+
+        var totalExpected = rows.Aggregate(BigInteger.Zero, (sum, r) => sum + r.ExpectedAmount);
+        var distinctAssetCount = rows.Select(r => r.AssetId).Distinct().Count();
+        var matchedDepositIds = rows.Where(r => r.MatchedDepositId is not null).Select(r => r.MatchedDepositId!.Value).ToList();
+
+        return new PaymentIntentTotals(
+            totalExpected.ToString(CultureInfo.InvariantCulture), distinctAssetCount, matchedDepositIds);
+    }
+
+    private IQueryable<PaymentIntentEntity> Filtered(PaymentIntentAdminFilter filter) =>
+        context.PaymentIntents.AsNoTracking()
+            .Where(i => filter.MerchantId == null || i.MerchantId == filter.MerchantId)
+            .Where(i => filter.MerchantIds == null || filter.MerchantIds.Contains(i.MerchantId))
+            .Where(i => filter.SystemOrderNumber == null || i.PublicReference == filter.SystemOrderNumber)
+            .Where(i => filter.MerchantOrderNumber == null || i.MerchantTransactionId == filter.MerchantOrderNumber)
+            .Where(i => filter.ReceivingAddress == null || i.Address == filter.ReceivingAddress)
+            .Where(i => filter.Network == null || i.Chain == filter.Network)
+            .Where(i => filter.AssetId == null || i.AssetId == filter.AssetId)
+            .Where(i => filter.FromDate == null || i.CreatedAt >= filter.FromDate)
+            .Where(i => filter.ToDate == null || i.CreatedAt <= filter.ToDate);
 
     private PaymentIntentView ToView(PaymentIntentEntity intent) => new(
         intent.PublicReference,

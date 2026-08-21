@@ -119,6 +119,42 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Closing_a_merchant_blocks_transacting_and_it_can_be_reopened()
+    {
+        Guid merchantId;
+        await using (var context = NewContext())
+            merchantId = (await NewRegistrar(context).RegisterAsync("CLOSE-1", "Acme", null, Ct)).Value.MerchantId;
+
+        await using (var context = NewContext())
+            (await NewRegistrar(context).CloseAsync(merchantId, Ct)).IsSuccess.ShouldBeTrue();
+
+        await using (var context = NewContext())
+        {
+            var closed = await context.Merchants.SingleAsync(m => m.Id == merchantId, Ct);
+            closed.Status.ShouldBe(MerchantStatus.Closed);
+            closed.CanTransact.ShouldBeFalse();
+        }
+
+        // Reopening a closed merchant is a real, supported path (status is never terminal).
+        await using (var context = NewContext())
+            (await NewRegistrar(context).ActivateAsync(merchantId, Ct)).IsSuccess.ShouldBeTrue();
+
+        await using (var context = NewContext())
+        {
+            var reopened = await context.Merchants.SingleAsync(m => m.Id == merchantId, Ct);
+            reopened.Status.ShouldBe(MerchantStatus.Active);
+            reopened.CanTransact.ShouldBeTrue();
+        }
+    }
+
+    [Fact]
+    public async Task Closing_an_unknown_merchant_fails()
+    {
+        await using var context = NewContext();
+        (await NewRegistrar(context).CloseAsync(Guid.CreateVersion7(), Ct)).IsSuccess.ShouldBeFalse();
+    }
+
+    [Fact]
     public async Task Activating_an_unknown_merchant_fails()
     {
         await using var context = NewContext();

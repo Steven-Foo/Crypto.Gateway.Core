@@ -59,6 +59,13 @@ public sealed record WithdrawalAdminRow(
     DateTimeOffset CreatedAt,
     string Kind);
 
+/// <summary>Aggregate totals across the ENTIRE filtered set — not the current page — behind the Ops
+/// withdrawal-transactions screen's summary row. Both sums are exact base-unit integer strings (§14).
+/// <see cref="DistinctAssetCount"/> is how many different assets appear in the filtered set — summing
+/// amounts across different-decimal assets into one number is meaningless, so a caller combining these into
+/// a single display total should treat it as approximate/flag it when this is &gt; 1.</summary>
+public sealed record WithdrawalTotals(string TotalAmountBaseUnits, string TotalFeeBaseUnits, int DistinctAssetCount);
+
 public interface IWithdrawalDirectory
 {
     /// <summary>Looks up a withdrawal by the merchant's own transaction id, scoped to
@@ -72,4 +79,8 @@ public interface IWithdrawalDirectory
     /// <summary>Paged, filtered search behind the Ops withdrawal-transactions screen — newest first.</summary>
     Task<(IReadOnlyList<WithdrawalAdminRow> Items, int TotalCount)> SearchAsync(
         WithdrawalAdminFilter filter, int page, int pageSize, CancellationToken cancellationToken = default);
+
+    /// <summary>Same filter as <see cref="SearchAsync"/>, but aggregated over the whole matching set instead
+    /// of one page — the Ops screen's summary totals.</summary>
+    Task<WithdrawalTotals> GetTotalsAsync(WithdrawalAdminFilter filter, CancellationToken cancellationToken = default);
 }

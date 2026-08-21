@@ -31,6 +31,7 @@ public static class OpsMerchantEndpoints
         // Mutations — ops.merchants.manage (key rotation gets its own, more sensitive code).
         app.MapPost("/api/v1/ops/merchants", CreateMerchantAsync).RequirePermission(OpsPermissions.Merchants.Manage);
         app.MapPatch("/api/v1/ops/merchants/{id:guid}/status", SetStatusAsync).RequirePermission(OpsPermissions.Merchants.Manage);
+        app.MapPost("/api/v1/ops/merchants/{id:guid}/close", CloseMerchantAsync).RequirePermission(OpsPermissions.Merchants.Manage);
         app.MapPost("/api/v1/ops/merchants/{id:guid}/regenerate-key", RegenerateKeyAsync).RequirePermission(OpsPermissions.Merchants.RotateKey);
         app.MapPut("/api/v1/ops/merchants/{id:guid}/allowed-ips", UpdateAllowedIpsAsync).RequirePermission(OpsPermissions.Merchants.Manage);
     }
@@ -78,6 +79,29 @@ public static class OpsMerchantEndpoints
             $"status={view.Value.Status}", actor.IpAddress), http.RequestAborted);
 
         return Results.Ok(new { isSuccess = true, data = new { merchantId = id, status = view.Value.Status }, error = (string?)null });
+    }
+
+    /// <summary>
+    /// Closes a merchant (from Active or Frozen). Kept as its own endpoint rather than folded into
+    /// <see cref="SetStatusAsync"/>'s boolean <c>active</c> field — that field is already a documented,
+    /// deployed frontend contract (§ docs/backoffice-frontend-integration.md), and "close" is a more
+    /// consequential action than the freeze/unfreeze toggle, so it gets an explicit, unambiguous route.
+    /// Reversible — <c>PATCH .../status</c> with <c>active: true</c> or <c>active: false</c> reopens a
+    /// closed merchant back to Active or Frozen respectively (status is never terminal, only every OTHER
+    /// business operation independently keeps rejecting a Closed merchant).
+    /// </summary>
+    private static async Task<IResult> CloseMerchantAsync(Guid id, IMerchantRegistrar registrar, IAuditLogger audit, HttpContext http)
+    {
+        var result = await registrar.CloseAsync(id, http.RequestAborted);
+        if (result.IsFailure)
+            return Results.Json(new { isSuccess = false, error = result.Error!.Message }, statusCode: StatusCodes.Status400BadRequest);
+
+        var actor = AuditActor.From(http);
+        await audit.LogAsync(new LogAuditEntryCommand(
+            actor.StaffUserId, actor.Username, "merchant.status_changed", "Merchant", id.ToString(),
+            "status=Closed", actor.IpAddress), http.RequestAborted);
+
+        return Results.Ok(new { isSuccess = true, data = new { merchantId = id, status = "Closed" }, error = (string?)null });
     }
 
     private static async Task<IResult> RegenerateKeyAsync(Guid id, IMerchantRegistrar registrar, IAuditLogger audit, HttpContext http)

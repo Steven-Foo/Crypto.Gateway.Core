@@ -1,4 +1,5 @@
 using System.Globalization;
+using System.Numerics;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Domain;
 using Microsoft.EntityFrameworkCore;
@@ -41,6 +42,40 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
     public async Task<(IReadOnlyList<WithdrawalAdminRow> Items, int TotalCount)> SearchAsync(
         WithdrawalAdminFilter filter, int page, int pageSize, CancellationToken cancellationToken = default)
     {
+        var query = Filtered(filter);
+
+        var totalCount = await query.CountAsync(cancellationToken);
+
+        var items = await query
+            .OrderByDescending(w => w.CreatedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        return (items.Select(ToAdminRow).ToList(), totalCount);
+    }
+
+    public async Task<WithdrawalTotals> GetTotalsAsync(
+        WithdrawalAdminFilter filter, CancellationToken cancellationToken = default)
+    {
+        // Narrow projection over the WHOLE filtered set (unpaged), folded client-side — see
+        // PaymentIntentDirectory.GetTotalsAsync for why (no SQL Sum() translation precedent for this
+        // project's BigInteger money mapping, §14).
+        var rows = await Filtered(filter)
+            .Select(w => new { w.Amount, w.Fee, w.AssetId })
+            .ToListAsync(cancellationToken);
+
+        var totalAmount = rows.Aggregate(BigInteger.Zero, (sum, r) => sum + r.Amount);
+        var totalFee = rows.Aggregate(BigInteger.Zero, (sum, r) => sum + r.Fee);
+        var distinctAssetCount = rows.Select(r => r.AssetId).Distinct().Count();
+
+        return new WithdrawalTotals(
+            totalAmount.ToString(CultureInfo.InvariantCulture), totalFee.ToString(CultureInfo.InvariantCulture),
+            distinctAssetCount);
+    }
+
+    private IQueryable<WithdrawalEntity> Filtered(WithdrawalAdminFilter filter)
+    {
         var query = context.Withdrawals.AsNoTracking()
             .Where(w => filter.MerchantId == null || w.MerchantId == filter.MerchantId)
             .Where(w => filter.MerchantIds == null || filter.MerchantIds.Contains(w.MerchantId))
@@ -58,15 +93,7 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
             && Enum.TryParse<WithdrawalKind>(filter.Kind, ignoreCase: true, out var kind))
             query = query.Where(w => w.Kind == kind);
 
-        var totalCount = await query.CountAsync(cancellationToken);
-
-        var items = await query
-            .OrderByDescending(w => w.CreatedAt)
-            .Skip((page - 1) * pageSize)
-            .Take(pageSize)
-            .ToListAsync(cancellationToken);
-
-        return (items.Select(ToAdminRow).ToList(), totalCount);
+        return query;
     }
 
     private static WithdrawalAdminRow ToAdminRow(WithdrawalEntity withdrawal) => new(

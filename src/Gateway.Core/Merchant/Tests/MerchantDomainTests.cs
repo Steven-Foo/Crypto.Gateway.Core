@@ -106,17 +106,45 @@ public sealed class MerchantDomainTests
     }
 
     [Fact]
-    public void A_closed_merchant_is_terminal()
+    public void A_closed_merchant_blocks_every_other_business_operation()
     {
         var merchant = NewMerchant();
         merchant.Close(Now);
 
-        merchant.Activate(Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
         merchant.UpdateCallbackUrl("https://x.test/h", Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
         merchant.IssueCredential("k", "h", 1, "cipher", Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
         merchant.UpdateConfiguration(true, 3, true, Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
         merchant.SetAssetPolicy(Guid.CreateVersion7(), 1, 1, 2, FeeSchedule.None, Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
         merchant.UpdateAllowedIps(["1.2.3.4"], Now).Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
+    }
+
+    [Fact]
+    public void A_closed_merchant_can_be_reopened_to_active_or_frozen()
+    {
+        var active = NewMerchant();
+        active.Close(Now);
+        active.Activate(Now).IsSuccess.ShouldBeTrue();
+        active.Status.ShouldBe(MerchantStatus.Active);
+        active.CanTransact.ShouldBeTrue();
+
+        var frozen = NewMerchant();
+        frozen.Close(Now);
+        frozen.Freeze(Now).IsSuccess.ShouldBeTrue();
+        frozen.Status.ShouldBe(MerchantStatus.Frozen);
+        frozen.CanTransact.ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Close_is_reachable_from_either_active_or_frozen()
+    {
+        var fromActive = NewMerchant();
+        fromActive.Close(Now).IsSuccess.ShouldBeTrue();
+        fromActive.Status.ShouldBe(MerchantStatus.Closed);
+
+        var fromFrozen = NewMerchant();
+        fromFrozen.Freeze(Now);
+        fromFrozen.Close(Now).IsSuccess.ShouldBeTrue();
+        fromFrozen.Status.ShouldBe(MerchantStatus.Closed);
     }
 
     // ── Allowed IPs ────────────────────────────────────────────────────────────

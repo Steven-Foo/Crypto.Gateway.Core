@@ -3,6 +3,7 @@ using CryptoPaymentEngine.Api.OperationsApi.Security;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Application;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Domain;
+using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Platform.Audit.Application;
 using CryptoPaymentEngine.SharedKernel;
 
@@ -24,6 +25,7 @@ public static class OpsWalletEndpoints
 
     private static async Task<IResult> SearchAsync(
         IWalletAdminService wallets,
+        IMerchantDirectory merchants,
         HttpContext http,
         Guid? merchantId = null,
         string? address = null,
@@ -50,10 +52,31 @@ public static class OpsWalletEndpoints
         var filter = new WalletAdminFilter(merchantId, address?.Trim(), chain, statusFilter);
         var (items, total) = await wallets.SearchAsync(filter, page, pageSize, http.RequestAborted);
 
+        // MerchantId is nullable here — platform wallets (hot pool, staking, treasury, etc.) have none, only
+        // deposit wallets are ever assigned to a merchant.
+        var merchantNames = await merchants.GetNamesByIdsAsync(
+            items.Where(w => w.MerchantId is not null).Select(w => w.MerchantId!.Value).Distinct().ToList(),
+            http.RequestAborted);
+
+        var rows = items.Select(w => new
+        {
+            w.WalletId,
+            w.MerchantId,
+            merchantName = w.MerchantId is { } id ? merchantNames.GetValueOrDefault(id) : null,
+            w.Chain,
+            w.Address,
+            w.WalletType,
+            w.Status,
+            w.StatusReason,
+            w.DepositsReceivedCount,
+            w.CreatedAt,
+            w.UpdatedAt,
+        });
+
         return Results.Ok(new
         {
             isSuccess = true,
-            data = new { page, pageSize, totalCount = total, items },
+            data = new { page, pageSize, totalCount = total, items = rows },
             error = (string?)null,
         });
     }

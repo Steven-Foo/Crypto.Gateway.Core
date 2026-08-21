@@ -84,12 +84,20 @@ public sealed partial class Merchant : Entity<Guid>
         return Result.Success(new Merchant(Guid.CreateVersion7(), normalisedCode, name.Trim(), callbackResult.Value, now));
     }
 
+    /// <summary>Also reopens a <c>Closed</c> merchant — status transitions are always reversible (see
+    /// <see cref="TransitionTo"/>); a "closed" merchant is a reversible administrative state, not a
+    /// deleted/terminal one.</summary>
     public Result Activate(DateTimeOffset now) => TransitionTo(MerchantStatus.Active, now);
 
     /// <summary>Admin risk-hold — blocks all transacting via <c>CanTransact</c>. Reversible: <see cref="Activate"/>
-    /// unfreezes. Does not stop crediting funds already sent on-chain (§14) — it stops new activity.</summary>
+    /// unfreezes. Does not stop crediting funds already sent on-chain (§14) — it stops new activity. Also
+    /// reachable from <c>Closed</c> (reopens into a frozen, not active, state).</summary>
     public Result Freeze(DateTimeOffset now) => TransitionTo(MerchantStatus.Frozen, now);
 
+    /// <summary>Admin action — blocks all transacting via <c>CanTransact</c>, same as <see cref="Freeze"/>.
+    /// Reversible: <see cref="Activate"/>/<see cref="Freeze"/> can move a Closed merchant back out (§ status
+    /// transitions are never terminal — only the per-operation guards on other business methods, e.g.
+    /// <see cref="IssueCredential"/>, independently keep rejecting while Closed).</summary>
     public Result Close(DateTimeOffset now) => TransitionTo(MerchantStatus.Closed, now);
 
     /// <summary>Sets the settlement period (T+N) in whole days. 0 = T+0. Rejects a negative value or one
@@ -317,11 +325,13 @@ public sealed partial class Merchant : Entity<Guid>
         return result;
     }
 
+    /// <summary>Status itself is always reversible — Active/Frozen/Closed can move freely between each other
+    /// via <see cref="Activate"/>/<see cref="Freeze"/>/<see cref="Close"/> (e.g. a closed merchant can be
+    /// reopened). "Closed blocks everything else" is enforced per-operation instead, by the individual guards
+    /// on every other business method (<see cref="UpdateCallbackUrl"/>, <see cref="IssueCredential"/>, etc.) —
+    /// those still reject while Closed, deliberately independent of this transition.</summary>
     private Result TransitionTo(MerchantStatus target, DateTimeOffset now)
     {
-        if (Status == MerchantStatus.Closed)
-            return Result.Failure(MerchantErrors.Closed);
-
         Status = target;
         UpdatedAt = now;
         return Result.Success();

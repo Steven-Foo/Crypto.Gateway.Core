@@ -47,6 +47,12 @@ public interface IMerchantRegistrar
     /// unfreezes it. Matches APIGateway's merchant status toggle, expressed against this project's status enum.</summary>
     Task<Result> FreezeAsync(Guid merchantId, CancellationToken cancellationToken = default);
 
+    /// <summary>Admin action — blocks all transacting, same effect as <see cref="FreezeAsync"/>. Reversible:
+    /// <see cref="ActivateAsync"/>/<see cref="FreezeAsync"/> can move a Closed merchant back out — "Closed" is
+    /// a status like any other, not a delete. Every other business operation independently keeps rejecting a
+    /// Closed merchant regardless of this.</summary>
+    Task<Result> CloseAsync(Guid merchantId, CancellationToken cancellationToken = default);
+
     /// <summary>Sets the merchant's settlement period (T+N) in whole days (0 = T+0). Gates the withdrawable
     /// balance for BOTH user payouts and the merchant cash-out. The domain validates the 0–30 range.</summary>
     Task<Result> SetSettlementDelayAsync(Guid merchantId, int days, CancellationToken cancellationToken = default);
@@ -137,6 +143,20 @@ public sealed class MerchantRegistrar(
             return Result.Failure(MerchantErrors.NotFound);
 
         var result = merchant.Freeze(timeProvider.GetUtcNow());
+        if (result.IsFailure)
+            return result;
+
+        await repository.SaveChangesAsync(cancellationToken);
+        return Result.Success();
+    }
+
+    public async Task<Result> CloseAsync(Guid merchantId, CancellationToken cancellationToken = default)
+    {
+        var merchant = await repository.GetByIdAsync(merchantId, cancellationToken);
+        if (merchant is null)
+            return Result.Failure(MerchantErrors.NotFound);
+
+        var result = merchant.Close(timeProvider.GetUtcNow());
         if (result.IsFailure)
             return result;
 
