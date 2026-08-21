@@ -43,6 +43,7 @@ public sealed class PaymentIntentDirectory(PaymentIntentDbContext context, TimeP
     {
         var query = context.PaymentIntents.AsNoTracking()
             .Where(i => filter.MerchantId == null || i.MerchantId == filter.MerchantId)
+            .Where(i => filter.MerchantIds == null || filter.MerchantIds.Contains(i.MerchantId))
             .Where(i => filter.SystemOrderNumber == null || i.PublicReference == filter.SystemOrderNumber)
             .Where(i => filter.MerchantOrderNumber == null || i.MerchantTransactionId == filter.MerchantOrderNumber)
             .Where(i => filter.ReceivingAddress == null || i.Address == filter.ReceivingAddress)

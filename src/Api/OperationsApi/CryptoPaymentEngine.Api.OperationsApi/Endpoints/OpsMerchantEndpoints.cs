@@ -185,15 +185,8 @@ public static class OpsMerchantEndpoints
 
         var merchant = result.Value;
 
-        // Registration leaves a merchant Pending (a real onboarding-review gate) — staff creating one via
-        // this endpoint IS the approval, so activate immediately or the seed wallet below would refuse
-        // (WalletProvisioningService gates on merchant.CanTransact).
-        var activation = await registrar.ActivateAsync(merchant.MerchantId, http.RequestAborted);
-        if (activation.IsFailure)
-            return Results.Json(
-                new { isSuccess = false, error = activation.Error!.Message },
-                statusCode: StatusCodes.Status500InternalServerError);
-
+        // Registration already leaves the merchant Active (no separate approval step, §MerchantStatus) — the
+        // seed wallet below needs that (WalletProvisioningService gates on merchant.CanTransact).
         object? wallet = null;
         var provisioned = await provisioner.ProvisionDepositAddressAsync(merchant.MerchantId, Chain.Tron, http.RequestAborted);
         if (provisioned.IsFailure)

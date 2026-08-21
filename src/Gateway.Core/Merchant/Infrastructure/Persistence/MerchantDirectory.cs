@@ -21,6 +21,27 @@ public sealed class MerchantDirectory(MerchantDbContext context) : IMerchantDire
             .SingleOrDefaultAsync(cancellationToken);
     }
 
+    public async Task<IReadOnlyDictionary<Guid, string>> GetNamesByIdsAsync(
+        IReadOnlyList<Guid> merchantIds, CancellationToken cancellationToken = default)
+    {
+        if (merchantIds.Count == 0)
+            return new Dictionary<Guid, string>();
+
+        return await context.Merchants.AsNoTracking()
+            .Where(m => merchantIds.Contains(m.Id))
+            .Select(m => new { m.Id, m.Name })
+            .ToDictionaryAsync(m => m.Id, m => m.Name, cancellationToken);
+    }
+
+    public async Task<IReadOnlyList<Guid>> SearchIdsByNameAsync(string nameContains, CancellationToken cancellationToken = default)
+    {
+        var term = nameContains.Trim();
+        return await context.Merchants.AsNoTracking()
+            .Where(m => EF.Functions.Like(m.Name, $"%{term}%") || EF.Functions.Like(m.MerchantCode, $"%{term}%"))
+            .Select(m => m.Id)
+            .ToListAsync(cancellationToken);
+    }
+
     private static IQueryable<MerchantSummary> Project(IQueryable<Domain.Merchant> query) =>
         query.Select(m => new MerchantSummary(
             m.Id,

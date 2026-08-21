@@ -34,8 +34,8 @@ public sealed class MerchantSigningTests
     {
         var cipher = NewCipher();
         var now = DateTimeOffset.UtcNow;
-        var merchant = MerchantEntity.Create("SIGN-1", "Signer", null).Value;
-        if (active) merchant.Activate(now);
+        var merchant = MerchantEntity.Create("SIGN-1", "Signer", null).Value; // Active by default on Create
+        if (!active) merchant.Freeze(now);
         var credential = merchant.IssueCredential(ApiKey, "bearer-hash", 1, cipher.Protect(SigningSecretHex), now).Value;
 
         var repo = Substitute.For<IMerchantRepository>();
@@ -106,7 +106,7 @@ public sealed class MerchantSigningTests
     [Fact]
     public async Task A_valid_signature_for_a_non_transactable_merchant_is_refused()
     {
-        var (repo, _, cipher) = Setup(active: false); // Pending → cannot transact
+        var (repo, _, cipher) = Setup(active: false); // Frozen → cannot transact
         var verifier = new MerchantRequestVerifier(repo, cipher);
 
         const string ts = "1700000000";

@@ -1,6 +1,7 @@
 using System.Numerics;
 using CryptoPaymentEngine.Api.OperationsApi.Security;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
+using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Application;
 using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Domain;
@@ -22,8 +23,10 @@ public static class OpsWithdrawalTransactionEndpoints
         IWithdrawalDirectory withdrawals,
         ICallbackDeliveryQuery callbacks,
         IAssetCatalog assets,
+        IMerchantDirectory merchants,
         HttpContext http,
         Guid? merchantId = null,
+        string? merchantName = null,
         Guid? systemOrderNumber = null,
         string? merchantOrderNumber = null,
         string? receivingAddress = null,
@@ -38,6 +41,21 @@ public static class OpsWithdrawalTransactionEndpoints
         if (page < 1) page = 1;
         if (pageSize < 1) pageSize = 50;
         if (pageSize > 200) pageSize = 200;
+
+        // Free-text merchant-name search: resolve to ids first (Withdrawal never learns Merchant's schema,
+        // §4.5). No match ⇒ short-circuit to an empty page, same pattern as an unknown coin below.
+        IReadOnlyList<Guid>? merchantIds = null;
+        if (!string.IsNullOrWhiteSpace(merchantName))
+        {
+            merchantIds = await merchants.SearchIdsByNameAsync(merchantName, http.RequestAborted);
+            if (merchantIds.Count == 0)
+                return Results.Ok(new
+                {
+                    isSuccess = true,
+                    data = new { page, pageSize, totalCount = 0, items = Array.Empty<object>() },
+                    error = (string?)null,
+                });
+        }
 
         // Optional withdrawal-kind filter: "user" (end-user payout) or "merchant" (earnings cash-out).
         string? normalisedKind = null;
@@ -77,11 +95,14 @@ public static class OpsWithdrawalTransactionEndpoints
 
         var filter = new WithdrawalAdminFilter(
             merchantId, systemOrderNumber, merchantOrderNumber, receivingAddress, network, assetId, fromDate, toDate,
-            normalisedKind);
+            normalisedKind, MerchantIds: merchantIds);
         var (items, total) = await withdrawals.SearchAsync(filter, page, pageSize, http.RequestAborted);
 
         var callbackStatuses = await callbacks.GetStatusesAsync(
             CallbackReferenceType.Withdrawal, items.Select(w => w.WithdrawalId).ToList(), http.RequestAborted);
+
+        var merchantNames = await merchants.GetNamesByIdsAsync(
+            items.Select(w => w.MerchantId).Distinct().ToList(), http.RequestAborted);
 
         var assetCache = new Dictionary<Guid, AssetDto?>();
         var rows = new List<object>(items.Count);
@@ -99,6 +120,7 @@ public static class OpsWithdrawalTransactionEndpoints
             rows.Add(new
             {
                 merchantId = withdrawal.MerchantId,
+                merchantName = merchantNames.GetValueOrDefault(withdrawal.MerchantId),
                 systemOrderNumber = withdrawal.WithdrawalId,
                 merchantOrderNumber = withdrawal.MerchantTransactionId,
                 userId = (string?)null, // not implemented yet — always null (§ docs/backoffice-api.md)

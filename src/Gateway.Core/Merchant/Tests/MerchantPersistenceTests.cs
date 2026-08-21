@@ -83,7 +83,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
                 .SingleAsync(m => m.Id == registration.MerchantId, Ct);
 
             merchant.MerchantCode.ShouldBe("ACME-1");
-            merchant.Status.ShouldBe(MerchantStatus.Pending);
+            merchant.Status.ShouldBe(MerchantStatus.Active);
             merchant.Configuration.ShouldNotBeNull();
             merchant.Credentials.Count.ShouldBe(1);
             merchant.Credentials[0].ApiKey.ShouldBe(registration.ApiKey);
@@ -92,11 +92,20 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task Activating_a_registered_merchant_makes_it_transactable()
+    public async Task Activating_a_frozen_merchant_makes_it_transactable_again()
     {
         Guid merchantId;
         await using (var context = NewContext())
             merchantId = (await NewRegistrar(context).RegisterAsync("ACTIVATE-1", "Acme", null, Ct)).Value.MerchantId;
+
+        await using (var context = NewContext())
+            (await NewRegistrar(context).FreezeAsync(merchantId, Ct)).IsSuccess.ShouldBeTrue();
+
+        await using (var context = NewContext())
+        {
+            var frozen = await context.Merchants.SingleAsync(m => m.Id == merchantId, Ct);
+            frozen.CanTransact.ShouldBeFalse();
+        }
 
         await using (var context = NewContext())
             (await NewRegistrar(context).ActivateAsync(merchantId, Ct)).IsSuccess.ShouldBeTrue();
@@ -450,13 +459,16 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task A_pending_merchant_cannot_transact_even_with_valid_credentials()
+    public async Task A_frozen_merchant_cannot_transact_even_with_valid_credentials()
     {
         MerchantRegistrationResult registration;
         await using (var context = NewContext())
         {
             registration = (await NewRegistrar(context).RegisterAsync("AUTH-2", "Acme", null, Ct)).Value;
         }
+
+        await using (var context = NewContext())
+            (await NewRegistrar(context).FreezeAsync(registration.MerchantId, Ct)).IsSuccess.ShouldBeTrue();
 
         await using (var context = NewContext())
         {

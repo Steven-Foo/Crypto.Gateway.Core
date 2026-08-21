@@ -62,8 +62,7 @@ public sealed class DevMerchantSeeder(
                     return;
                 }
 
-                merchant = merchantResult.Value;
-                merchant.Activate(now); // dev: transactable immediately, so a signed request passes the CanTransact gate
+                merchant = merchantResult.Value; // already Active on Create — no separate activation step needed
 
                 var secretHash = hasher.Hash(seed.ApiSecret);
                 var signingSecretCipher = secretCipher.Protect(seed.SigningSecret);

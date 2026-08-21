@@ -43,6 +43,7 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
     {
         var query = context.Withdrawals.AsNoTracking()
             .Where(w => filter.MerchantId == null || w.MerchantId == filter.MerchantId)
+            .Where(w => filter.MerchantIds == null || filter.MerchantIds.Contains(w.MerchantId))
             .Where(w => filter.SystemOrderNumber == null || w.Id == filter.SystemOrderNumber)
             .Where(w => filter.MerchantOrderNumber == null || w.MerchantTransactionId == filter.MerchantOrderNumber)
             .Where(w => filter.ReceivingAddress == null || w.DestinationAddress == filter.ReceivingAddress)

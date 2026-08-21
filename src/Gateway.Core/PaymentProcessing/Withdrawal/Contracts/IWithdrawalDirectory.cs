@@ -29,7 +29,11 @@ public sealed record WithdrawalAdminFilter(
     Guid? AssetId,
     DateTimeOffset? FromDate,
     DateTimeOffset? ToDate,
-    string? Kind = null);
+    string? Kind = null,
+    /// <summary>Narrows to any of these merchants — how a merchant-<em>name</em> search (resolved to ids by the
+    /// host via Merchant's <c>IMerchantDirectory</c>, §4.5) is expressed here without Withdrawal knowing
+    /// Merchant's schema. AND-combined with <see cref="MerchantId"/> if both happen to be set.</summary>
+    IReadOnlyList<Guid>? MerchantIds = null);
 
 /// <summary>The Ops transaction-search read model for one withdrawal. <see cref="Status"/> is the effective,
 /// already-collapsed vocabulary ("pending" | "pending_approval" | "insufficient_balance" | "awaiting_release" |

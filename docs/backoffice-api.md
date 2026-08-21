@@ -116,8 +116,9 @@ Any authenticated role. Query params: `page` (default 1), `pageSize` (default 50
   "error": null
 }
 ```
-`status` is the merchant's status enum as a string (e.g. `Pending`, `Active`, `Frozen`, `Closed` —
-confirm exact values against `Merchant.Domain.MerchantStatus` if you need a fixed dropdown list). `Frozen`
+`status` is the merchant's status enum as a string — `Active`, `Frozen`, or `Closed` (no separate
+"Pending" review state; a merchant is `Active` immediately on creation — confirm exact values against
+`Merchant.Domain.MerchantStatus` if you need a fixed dropdown list). `Frozen`
 is the reversible admin risk-hold; the status toggle (`PATCH .../status` with `active: false`) freezes,
 `active: true` unfreezes (returns to `Active`). A frozen merchant is blocked from all transacting.
 
@@ -196,7 +197,7 @@ already sent on-chain to an issued deposit address are still credited — freeze
 ```json
 { "isSuccess": true, "data": { "merchantId": "guid", "status": "Active" }, "error": null }
 ```
-`status` is `Active` or `Frozen` (or `Pending`/`Closed`). **Response 400**: invalid transition (e.g. trying
+`status` is `Active` or `Frozen` (or `Closed`). **Response 400**: invalid transition (e.g. trying
 to activate a Closed merchant) — `{ isSuccess: false, error: "<message>" }`.
 
 ### `PUT /api/v1/ops/merchants/{id}/settlement-period` 🔒 Admin

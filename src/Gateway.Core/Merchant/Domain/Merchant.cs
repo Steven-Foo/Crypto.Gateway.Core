@@ -28,7 +28,7 @@ public sealed partial class Merchant : Entity<Guid>
         MerchantCode = merchantCode;
         Name = name;
         CallbackUrl = callbackUrl;
-        Status = MerchantStatus.Pending;
+        Status = MerchantStatus.Active;
         SettlementDelayDays = 0;
         CreatedAt = createdAt;
         UpdatedAt = createdAt;

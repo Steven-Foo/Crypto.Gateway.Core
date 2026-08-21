@@ -272,7 +272,8 @@ Paginated. Row (`MerchantAdminView`):
 ```json
 { "merchantId": "guid", "merchantCode": "ACME-1", "name": "Acme Inc", "status": "Active", "createdAt": "...", "hasActiveCredential": true, "allowedIps": ["1.2.3.4"] }
 ```
-`status` ∈ `Pending | Active | Suspended | Closed` (PascalCase).
+`status` ∈ `Active | Frozen | Closed` (PascalCase). No separate "Pending" review state — a merchant is
+`Active` immediately on creation.
 
 ### `GET /api/v1/ops/merchants/{id}` — `ops.merchants.view`
 Same row shape, single object.
@@ -588,7 +589,7 @@ known decimals if you need to display it.
 | Callback | `status` | `Pending`, `Notified`, `Abandoned` | PascalCase |
 | Wallet | `status` | `Active`, `Disabled`, `Suspended` | PascalCase |
 | Staff account | `status` | `Active`, `Disabled` | PascalCase |
-| Merchant | `status` | `Pending`, `Active`, `Suspended`, `Closed` | PascalCase |
+| Merchant | `status` | `Active`, `Frozen`, `Closed` | PascalCase |
 
 ---
 

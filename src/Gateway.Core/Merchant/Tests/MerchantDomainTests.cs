@@ -21,8 +21,8 @@ public sealed class MerchantDomainTests
 
         merchant.MerchantCode.ShouldBe("ACME-1");
         merchant.Name.ShouldBe("Acme Payments");
-        merchant.Status.ShouldBe(MerchantStatus.Pending);
-        merchant.CanTransact.ShouldBeFalse();
+        merchant.Status.ShouldBe(MerchantStatus.Active);
+        merchant.CanTransact.ShouldBeTrue();
     }
 
     [Fact]

@@ -2,7 +2,9 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Domain;
 
 public enum MerchantStatus
 {
-    Pending = 1,
+    /// <summary>The normal operating state — set directly on <c>Create</c>, no separate review/approval step
+    /// (there used to be a <c>Pending</c> state gating this; removed — nothing in the codebase ever left a
+    /// merchant sitting in it, every creation path activated immediately anyway).</summary>
     Active = 2,
 
     /// <summary>An admin risk-hold. A frozen merchant cannot transact (deposit-address requests, user

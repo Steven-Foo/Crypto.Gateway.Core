@@ -522,3 +522,24 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260821062223_RemoveMerchantPendingStatus'
+)
+BEGIN
+    UPDATE [merchant].[Merchant] SET [Status] = 'Active' WHERE [Status] = 'Pending';
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260821062223_RemoveMerchantPendingStatus'
+)
+BEGIN
+    INSERT INTO [merchant].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260821062223_RemoveMerchantPendingStatus', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

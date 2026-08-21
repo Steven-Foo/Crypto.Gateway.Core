@@ -38,9 +38,8 @@ public interface IMerchantRegistrar
         CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Transitions a newly-registered (Pending) merchant to Active so it can transact — the same step
-    /// <c>DevMerchantSeeder</c> performs for the dev test merchant. Registration leaves a merchant Pending
-    /// by default (a real onboarding review gate); staff-driven creation calls this immediately after.
+    /// Unfreezes a <c>Frozen</c> merchant back to <c>Active</c>. A newly-registered merchant is already
+    /// <c>Active</c> (no separate approval step) — this exists purely to reverse <see cref="FreezeAsync"/>.
     /// </summary>
     Task<Result> ActivateAsync(Guid merchantId, CancellationToken cancellationToken = default);
 

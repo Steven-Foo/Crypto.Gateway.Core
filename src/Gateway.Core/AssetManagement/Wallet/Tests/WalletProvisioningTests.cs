@@ -105,8 +105,8 @@ public sealed class WalletProvisioningTests : IAsyncLifetime
     private static async Task<Guid> SeedActiveMerchantAsync(bool active = true)
     {
         await using var context = MerchantContext();
-        var merchant = MerchantEntity.Create($"ACME-{Guid.NewGuid():N}"[..12], "Acme", null).Value;
-        if (active) merchant.Activate(DateTimeOffset.UtcNow);
+        var merchant = MerchantEntity.Create($"ACME-{Guid.NewGuid():N}"[..12], "Acme", null).Value; // Active by default on Create
+        if (!active) merchant.Freeze(DateTimeOffset.UtcNow);
         context.Merchants.Add(merchant);
         await context.SaveChangesAsync(Ct);
         return merchant.Id;
@@ -200,7 +200,7 @@ public sealed class WalletProvisioningTests : IAsyncLifetime
     [Fact]
     public async Task Provisioning_is_refused_for_a_merchant_that_cannot_transact()
     {
-        var merchantId = await SeedActiveMerchantAsync(active: false); // Pending
+        var merchantId = await SeedActiveMerchantAsync(active: false); // Frozen
         await SeedTronDepositHdWalletAsync();
 
         await using var wallet = WalletContext();
