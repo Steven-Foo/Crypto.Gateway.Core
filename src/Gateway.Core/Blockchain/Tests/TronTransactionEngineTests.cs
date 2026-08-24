@@ -259,6 +259,43 @@ public sealed class TronTransactionEngineTests
         status!.Succeeded.ShouldBeFalse();
     }
 
+    /// <summary>
+    /// Regression: a native system-contract transaction (DelegateResource, FreezeBalanceV2, a plain TRX
+    /// transfer) never gets a receipt.result at all — the node only populates that for a smart-contract (VM)
+    /// call. The real vector this was caught on: a confirmed Nile DelegateResource whose raw response was
+    /// exactly this shape (blockNumber present, receipt only carrying net_usage, no result anywhere) — the
+    /// old code read the absent receipt.result as failure and left it stuck in Broadcast forever.
+    /// </summary>
+    [Fact]
+    public async Task Status_is_succeeded_for_a_mined_native_transaction_with_no_receipt_result()
+    {
+        var rpc = new FakeTronTxRpc
+        {
+            OnGetInfo = _ => new TronTransactionInfoDto { Id = "abc", BlockNumber = 100, Receipt = new TronReceiptDto { Result = null } },
+        };
+
+        var status = await Broadcaster(rpc).GetTransactionStatusAsync(Chain.Tron, "abc", CancellationToken.None);
+
+        status.ShouldNotBeNull();
+        status!.Succeeded.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Status_is_not_succeeded_when_the_top_level_result_is_FAILED()
+    {
+        // A genuine native-transaction failure: mined (block present) but the node's top-level result says
+        // FAILED — distinct from, and independent of, receipt.result (which stays absent for a native tx).
+        var rpc = new FakeTronTxRpc
+        {
+            OnGetInfo = _ => new TronTransactionInfoDto { Id = "abc", BlockNumber = 100, Result = "FAILED" },
+        };
+
+        var status = await Broadcaster(rpc).GetTransactionStatusAsync(Chain.Tron, "abc", CancellationToken.None);
+
+        status.ShouldNotBeNull();
+        status!.Succeeded.ShouldBeFalse();
+    }
+
     // ── DTO deserialization (raw node JSON) ──
 
     [Fact]

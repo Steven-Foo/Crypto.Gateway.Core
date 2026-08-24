@@ -65,9 +65,28 @@ public sealed class TronTransactionBroadcaster(
         if (info?.BlockNumber is not { } block || block <= 0)
             return null;
 
-        // For a smart-contract call, success is receipt.result == SUCCESS; a mined-but-reverted tx
-        // returns a block with Succeeded=false, so the withdrawal is held for ops, never settled.
-        var succeeded = string.Equals(info.Receipt?.Result, TronConstants.ContractRetSuccess, StringComparison.Ordinal);
+        // The node's failure signal is the TOP-LEVEL `result` field ("FAILED" only on genuine failure, absent
+        // on success — native and smart-contract alike). `receipt.result` is a SEPARATE, VM-only field: the
+        // node only ever populates it for a smart-contract call (e.g. a TRC-20 transfer), never for a native
+        // system contract (a plain TRX transfer, FreezeBalanceV2, DelegateResource, ...). So a successful
+        // native transaction has BOTH fields absent — treating an absent receipt.result as failure (the old
+        // bug here) silently marked every successful native tx as reverted and left it stuck forever.
+        var topLevelFailed = string.Equals(info.Result, TronConstants.TransactionResultFailed, StringComparison.Ordinal);
+        var receiptResult = info.Receipt?.Result;
+        var receiptFailed = !string.IsNullOrEmpty(receiptResult)
+            && !string.Equals(receiptResult, TronConstants.ContractRetSuccess, StringComparison.Ordinal);
+
+        if (!topLevelFailed && receiptResult is null && info.Result is null)
+        {
+            // Both signals absent: the common native-transaction success shape. Log once, defensively — if
+            // TRON's real failure shape ever differs from what's documented here, this makes it visible
+            // instead of silently mis-classifying again.
+            logger.LogDebug(
+                "Tron tx {TxHash} mined at block {Block} with no top-level result and no receipt.result — " +
+                "treating as a successful native transaction.", transactionHash, block);
+        }
+
+        var succeeded = !topLevelFailed && !receiptFailed;
         return new TransactionStatus(block, succeeded, new System.Numerics.BigInteger(info.Fee)); // fee in sun, for gas accounting
     }
 }

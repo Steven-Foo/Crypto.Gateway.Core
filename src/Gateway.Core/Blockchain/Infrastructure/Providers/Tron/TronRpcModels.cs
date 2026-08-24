@@ -30,8 +30,12 @@ public static class TronConstants
     /// <summary>The native-transaction contract type for a plain TRX value transfer (no smart contract).</summary>
     public const string TransferContractType = "TransferContract";
 
-    /// <summary>The <c>ret[].contractRet</c> value marking a transaction as having actually executed.</summary>
+    /// <summary>The <c>receipt.result</c> value marking a smart-contract (VM) call as having actually
+    /// executed — never populated for a native system contract (§ see <see cref="TronTransactionInfoDto.Result"/>).</summary>
     public const string ContractRetSuccess = "SUCCESS";
+
+    /// <summary>The node's top-level <c>gettransactioninfobyid</c> failure signal — present only on a genuine failure.</summary>
+    public const string TransactionResultFailed = "FAILED";
 }
 
 /// <summary>Response shape of <c>/wallet/getblockbylimitnext</c> (native, non-eth-compatible API).</summary>
@@ -166,6 +170,15 @@ public sealed record TronTransactionInfoDto
     [JsonPropertyName("id")] public string? Id { get; init; }
     [JsonPropertyName("blockNumber")] public long? BlockNumber { get; init; }
     [JsonPropertyName("receipt")] public TronReceiptDto? Receipt { get; init; }
+
+    /// <summary>
+    /// The node's top-level failure signal — present as <c>"FAILED"</c> only when the transaction genuinely
+    /// failed (native or smart-contract alike); absent entirely on success. Distinct from
+    /// <see cref="TronReceiptDto.Result"/>, which the node only ever populates for a smart-contract (VM) call
+    /// and never for a native system contract (a plain TRX transfer, <c>FreezeBalanceV2</c>,
+    /// <c>DelegateResource</c>, ...) — so success for a native transaction shows up as BOTH fields absent.
+    /// </summary>
+    [JsonPropertyName("result")] public string? Result { get; init; }
 
     /// <summary>Total fee the sender paid for this transaction, in sun (energy_fee + net_fee + any burn).
     /// Used by 5c platform gas accounting.</summary>
