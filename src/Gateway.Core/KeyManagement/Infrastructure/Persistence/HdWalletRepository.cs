@@ -29,6 +29,17 @@ public sealed class HdWalletRepository(KeyManagementDbContext context) : IHdWall
     public Task<HdWallet?> FindByIdAsync(Guid hdWalletId, CancellationToken cancellationToken = default) =>
         context.HdWallets.SingleOrDefaultAsync(w => w.Id == hdWalletId, cancellationToken);
 
+    public async Task<IReadOnlyList<DevReseedCandidate>> ListActiveDevelopmentWalletsAsync(CancellationToken cancellationToken = default) =>
+        await context.HdWallets.AsNoTracking()
+            .Where(w => w.SecretProvider == SecretProviderKind.InMemoryDevelopment
+                && !w.IsImported
+                && w.Status == HdWalletStatus.Active
+                && w.PublicKeyReference != null
+                && ((w.MerchantId != null && w.Purpose == HdWalletPurpose.Deposit)
+                    || (w.MerchantId == null && w.Purpose == HdWalletPurpose.Withdrawal)))
+            .Select(w => new DevReseedCandidate(w.Id, w.MerchantId, w.Chain, w.PublicKeyReference!))
+            .ToListAsync(cancellationToken);
+
     public Task<DerivedKey?> FindDerivedKeyAsync(Guid derivedKeyId, CancellationToken cancellationToken = default) =>
         context.DerivedKeys.AsNoTracking().SingleOrDefaultAsync(k => k.Id == derivedKeyId, cancellationToken);
 

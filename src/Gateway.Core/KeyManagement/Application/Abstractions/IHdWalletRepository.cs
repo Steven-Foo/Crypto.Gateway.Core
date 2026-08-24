@@ -20,10 +20,32 @@ public enum HdWalletAddOutcome
 /// </summary>
 public sealed record DepositSigningKeyInfo(Guid DerivedKeyId, Chain Chain, string SecretReference, long DerivationIndex);
 
+/// <summary>
+/// One existing dev-mode HD wallet eligible for the startup xpub re-seed (see
+/// <c>Infrastructure.Secrets.DevHdWalletReseeder</c>): a watch-only wallet whose secret lives in the writable
+/// in-memory store, so a process restart loses its account xpub unless something re-derives it.
+/// <see cref="MerchantId"/> is null for the platform withdrawal pool wallet, set for a merchant deposit wallet.
+/// </summary>
+public sealed record DevReseedCandidate(Guid Id, Guid? MerchantId, Chain Chain, string PublicKeyReference);
+
 public interface IHdWalletRepository
 {
     /// <summary>The single active <em>platform</em> wallet for this chain and purpose (MerchantId is null).</summary>
     Task<HdWallet?> FindActiveAsync(Chain chain, HdWalletPurpose purpose, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Every active, non-imported HD wallet the startup re-seeder both CAN and MUST repopulate after a
+    /// restart: a merchant deposit wallet (<c>MerchantId</c> set, <c>Purpose = Deposit</c>) or the platform
+    /// withdrawal pool wallet (<c>MerchantId</c> null, <c>Purpose = Withdrawal</c>) — the two shapes
+    /// <c>DevHdWalletProvisioner</c> itself mints, and therefore the only ones whose xpub is safely
+    /// reproducible from (merchant id, chain) alone.
+    ///
+    /// Deliberately narrower than "every <see cref="Domain.SecretProviderKind.InMemoryDevelopment"/> wallet":
+    /// a platform wallet seeded directly from config (<c>DevHdWalletSeeder</c>, any purpose) already carries
+    /// its correct xpub via <c>DevSecrets</c> at construction and must never be touched here — recomputing one
+    /// under the withdrawal-pool formula would silently overwrite its real, correct key with the wrong value.
+    /// </summary>
+    Task<IReadOnlyList<DevReseedCandidate>> ListActiveDevelopmentWalletsAsync(CancellationToken cancellationToken = default);
 
     /// <summary>The merchant's own active wallet for this chain and purpose, or null if not yet provisioned.</summary>
     Task<HdWallet?> FindActiveForMerchantAsync(Guid merchantId, Chain chain, HdWalletPurpose purpose, CancellationToken cancellationToken = default);

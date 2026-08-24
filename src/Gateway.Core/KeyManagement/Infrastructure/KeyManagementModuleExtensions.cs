@@ -113,7 +113,10 @@ public static class KeyManagementModuleExtensions
 
         // Per-merchant wallets are created on first deposit, each with its own seed. Production replaces this
         // with a KMS-backed IHdWalletProvisioner behind the same port — never an in-memory seed in prod (§10).
-        services.AddSingleton<IHdWalletProvisioner, DevHdWalletProvisioner>();
+        // Registered under its own concrete type too (not just the port), so DevHdWalletReseeder below can
+        // reuse its deterministic xpub-resolution methods directly — same singleton instance either way.
+        services.AddSingleton<DevHdWalletProvisioner>();
+        services.AddSingleton<IHdWalletProvisioner>(sp => sp.GetRequiredService<DevHdWalletProvisioner>());
 
         // Registers a directly-imported platform key (e.g. the dev/testnet hot wallet). It depends on the
         // in-memory ISecretProvider registered just above, so it is genuinely absent in production — where a
@@ -123,6 +126,12 @@ public static class KeyManagementModuleExtensions
         // Retained for any platform-wallet dev seeding described in config; per-merchant deposit wallets no
         // longer rely on it (they are provisioned lazily above).
         services.AddHostedService<DevHdWalletSeeder>();
+
+        // Restores every already-existing dev wallet's account xpub into the in-memory store above, which a
+        // restart otherwise empties (see DevHdWalletReseeder for why). Registered last so it runs after the
+        // store/provisioner it depends on are wired, and before any later dev seeder (e.g. the withdrawal
+        // pool) that also allocates from an existing HD wallet.
+        services.AddHostedService<DevHdWalletReseeder>();
 
         return services;
     }
