@@ -105,11 +105,16 @@ public static class KeyManagementModuleExtensions
             .Get<Dictionary<string, string>>() ?? new Dictionary<string, string>();
 
         // A writable singleton store: pre-seeded from config (including appsettings.Local.json), and written to
-        // at runtime by the provisioner when it mints a per-merchant wallet's account xpub. Registered both as
-        // the concrete type (for the provisioner) and as the ISecretProvider the derivation path reads.
+        // at runtime by the provisioner when it mints a per-merchant wallet's account xpub. Registered under
+        // its own concrete type too (for the provisioner/reseeder, which read/write it directly).
         var store = new MutableInMemorySecretStore(secrets);
         services.AddSingleton(store);
-        services.AddSingleton<ISecretProvider>(store);
+
+        // The ISecretProvider the derivation/signing path actually reads. Wraps the store above: an xpub or
+        // imported-key lookup passes straight through unchanged, but a "{seedReference}#{index}" signing
+        // request — which the plain store can never answer, since it only ever holds the public xpub — gets
+        // re-derived on the spot from the same deterministic dev seed (§10: nothing is ever persisted).
+        services.AddSingleton<ISecretProvider, DevHdWalletSigningSecretProvider>();
 
         // Per-merchant wallets are created on first deposit, each with its own seed. Production replaces this
         // with a KMS-backed IHdWalletProvisioner behind the same port — never an in-memory seed in prod (§10).

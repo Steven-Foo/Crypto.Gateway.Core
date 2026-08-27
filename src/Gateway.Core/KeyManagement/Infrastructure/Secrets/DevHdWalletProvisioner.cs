@@ -1,5 +1,3 @@
-using System.Security.Cryptography;
-using System.Text;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Domain;
 using CryptoPaymentEngine.SharedKernel;
@@ -12,12 +10,15 @@ namespace CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Secrets;
 /// <summary>
 /// DEVELOPMENT AND TESTS ONLY. Mints a merchant's HD wallet with its own seed, exports the BIP-44 account
 /// xpub, and stores <em>only that public key</em> in the writable dev store — matching the dev model where
-/// no seed is ever persisted (§10); the fake signer needs no key, and real dev signing is deferred.
+/// no seed is ever persisted (§10); the fake signer needs no key. Real signing over these wallets is served
+/// by <see cref="DevHdWalletSigningSecretProvider"/>, which re-derives the same seed one step further, only
+/// at the moment of signing.
 ///
-/// The seed is derived deterministically from a fixed dev constant and the merchant id, so a merchant's dev
-/// addresses are reproducible across runs and in tests, while remaining distinct <em>per merchant</em> (the
-/// property the separate-seed custody model exists to give). This is DEV entropy only — production mints a
-/// true-random seed inside a KMS/HSM behind the same <see cref="IHdWalletProvisioner"/> port (deferred).
+/// The seed is derived deterministically (<see cref="DevHdWalletDeterministicSeed"/>) from a fixed dev
+/// constant and the merchant id, so a merchant's dev addresses are reproducible across runs and in tests,
+/// while remaining distinct <em>per merchant</em> (the property the separate-seed custody model exists to
+/// give). This is DEV entropy only — production mints a true-random seed inside a KMS/HSM behind the same
+/// <see cref="IHdWalletProvisioner"/> port (deferred).
 ///
 /// Because the xpub is a pure, reproducible function of (merchant id, chain) — or (chain) alone for the
 /// platform pool — <see cref="ResolveMerchantDepositXpub"/>/<see cref="ResolvePlatformWithdrawalXpub"/> are
@@ -28,10 +29,6 @@ public sealed class DevHdWalletProvisioner(
     MutableInMemorySecretStore secrets, TimeProvider timeProvider, IOptions<DevelopmentKeyCustodyOptions> options)
     : IHdWalletProvisioner
 {
-    // Not a production key or a real seed — a dev-only KDF salt that turns a merchant id into throwaway
-    // deterministic entropy. Changing it re-derives all dev addresses. PUBLIC in this repo, so never for real funds.
-    private const string DevMasterSalt = "cpe-dev-hdwallet-master-v1-not-for-production";
-
     public Task<Result<HdWallet>> ProvisionMerchantDepositWalletAsync(
         Guid merchantId, Chain chain, CancellationToken cancellationToken = default)
     {
@@ -96,7 +93,7 @@ public sealed class DevHdWalletProvisioner(
         // throwaway public-salt seed. REQUIRED before sending real mainnet funds (the salt is public here).
         return !string.IsNullOrWhiteSpace(configuredXpub)
             ? configuredXpub.Trim()
-            : new ExtKey(Encoders.Hex.EncodeData(DeriveSeed(merchantId)))
+            : new ExtKey(Encoders.Hex.EncodeData(DevHdWalletDeterministicSeed.ForMerchant(merchantId)))
                 .Derive(KeyPath.Parse($"44'/{coin}'/0'/0")).Neuter().ToString(Network.Main);
     }
 
@@ -110,19 +107,7 @@ public sealed class DevHdWalletProvisioner(
         // throwaway public-salt seed. REQUIRED before sending real mainnet funds (the salt is public here).
         return !string.IsNullOrWhiteSpace(configuredXpub)
             ? configuredXpub.Trim()
-            : new ExtKey(Encoders.Hex.EncodeData(DerivePlatformSeed(chain)))
+            : new ExtKey(Encoders.Hex.EncodeData(DevHdWalletDeterministicSeed.ForPlatformWithdrawal(chain)))
                 .Derive(KeyPath.Parse($"44'/{coin}'/0'/0")).Neuter().ToString(Network.Main);
-    }
-
-    private static byte[] DeriveSeed(Guid merchantId)
-    {
-        using var hmac = new HMACSHA512(Encoding.UTF8.GetBytes(DevMasterSalt));
-        return hmac.ComputeHash(merchantId.ToByteArray()); // 64 bytes → a valid BIP-32 master seed
-    }
-
-    private static byte[] DerivePlatformSeed(Chain chain)
-    {
-        using var hmac = new HMACSHA512(Encoding.UTF8.GetBytes(DevMasterSalt));
-        return hmac.ComputeHash(Encoding.UTF8.GetBytes($"platform:withdrawal:{chain}")); // deterministic dev seed, distinct from any merchant's
     }
 }
