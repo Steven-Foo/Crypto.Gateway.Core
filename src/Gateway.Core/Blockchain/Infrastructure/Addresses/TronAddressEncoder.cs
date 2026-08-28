@@ -34,4 +34,20 @@ public sealed class TronAddressEncoder : IAddressEncoder
 
         return raw;
     }
+
+    public bool IsValidAddress(string address)
+    {
+        if (string.IsNullOrWhiteSpace(address))
+            return false;
+
+        try
+        {
+            ToRawAddress(address);
+            return true;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
 }

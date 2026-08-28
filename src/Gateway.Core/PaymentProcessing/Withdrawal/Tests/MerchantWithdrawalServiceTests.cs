@@ -1,4 +1,5 @@
 using System.Numerics;
+using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application;
@@ -35,7 +36,8 @@ public sealed class MerchantWithdrawalServiceTests
         bool canTransact = true,
         int settlementDelayDays = 0,
         BigInteger? settled = null,
-        BigInteger? merchantThreshold = null)
+        BigInteger? merchantThreshold = null,
+        IAddressEncoderFactory? addresses = null)
     {
         var repo = new FakeRepo();
         var ledgerQuery = new FakeLedgerQuery(balance ?? BigInteger.Parse("10000000"), settled);
@@ -49,6 +51,7 @@ public sealed class MerchantWithdrawalServiceTests
             new FakeApprovalThreshold(merchantThreshold),
             new SettledBalanceGate(ledgerQuery, TimeProvider.System),
             new FakeLedger(reserveSucceeds),
+            addresses ?? new AlwaysValidAddresses(),
             TimeProvider.System);
         return (service, repo);
     }
@@ -187,6 +190,17 @@ public sealed class MerchantWithdrawalServiceTests
             .Error!.Code.ShouldBe(WithdrawalErrors.ExceedsMerchantWithdrawalLimit.Code);
     }
 
+    [Fact]
+    public async Task A_settlement_wallet_with_a_malformed_address_is_rejected_before_reserving()
+    {
+        var (service, repo) = Compose(settlement: "not-a-real-address", addresses: new RejectingAddresses());
+
+        var result = await service.RequestAsync(Command(BigInteger.Parse("3000000")), Ct);
+
+        result.Error!.Code.ShouldBe(WithdrawalErrors.DestinationInvalid.Code);
+        repo.Withdrawals.ShouldBeEmpty();
+    }
+
     // ── fakes ──
 
     private sealed class FakeRepo : IWithdrawalRepository
@@ -290,5 +304,26 @@ public sealed class MerchantWithdrawalServiceTests
     {
         public Task<Result> ReserveAsync(ReserveWithdrawalRequest request, CancellationToken cancellationToken = default) =>
             Task.FromResult(succeeds ? Result.Success() : Result.Failure(Error.Conflict("test.reserve_failed", "insufficient")));
+    }
+
+    /// <summary>Default for tests unrelated to address validation — the "TSettlementWallet" placeholder used
+    /// throughout this file keeps working unchanged.</summary>
+    private sealed class AlwaysValidAddresses : IAddressEncoderFactory
+    {
+        public bool Supports(Chain chain) => true;
+        public IAddressEncoder For(Chain chain) => new StubEncoder(chain, isValid: true);
+    }
+
+    private sealed class RejectingAddresses : IAddressEncoderFactory
+    {
+        public bool Supports(Chain chain) => true;
+        public IAddressEncoder For(Chain chain) => new StubEncoder(chain, isValid: false);
+    }
+
+    private sealed class StubEncoder(Chain chain, bool isValid) : IAddressEncoder
+    {
+        public Chain Chain => chain;
+        public string Encode(ReadOnlySpan<byte> publicKey) => throw new NotSupportedException();
+        public bool IsValidAddress(string address) => isValid;
     }
 }

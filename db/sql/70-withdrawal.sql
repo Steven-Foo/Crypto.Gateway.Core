@@ -335,3 +335,24 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260828033940_AddWithdrawalEnergyUsed'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [EnergyUsed] decimal(38,0) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260828033940_AddWithdrawalEnergyUsed'
+)
+BEGIN
+    INSERT INTO [withdrawal].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260828033940_AddWithdrawalEnergyUsed', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

@@ -10,8 +10,12 @@ public sealed record BroadcastResult(string TransactionHash);
 /// The on-chain status of a broadcast transaction, for confirmation tracking. <see cref="FeeSun"/> is the
 /// native-coin fee the sender actually paid (TRX in sun for TRON), read from the receipt — used by 5c platform
 /// gas accounting; defaults to zero (the in-memory engine charges no fee, so dev books no gas cost, §14).
+/// <see cref="EnergyUsed"/> is the real energy the transaction actually consumed (TRON's <c>energy_usage_total</c>
+/// — covers energy paid from the sender's own available/delegated pool AND any shortfall burned as
+/// <see cref="FeeSun"/>) — a distinct, non-currency resource-usage metric, never a fee or a cost figure;
+/// defaults to zero for a native transfer, which spends no energy at all.
 /// </summary>
-public sealed record TransactionStatus(long BlockNumber, bool Succeeded, BigInteger FeeSun = default);
+public sealed record TransactionStatus(long BlockNumber, bool Succeeded, BigInteger FeeSun = default, BigInteger EnergyUsed = default);
 
 /// <summary>
 /// Broadcasts an <em>already-signed</em> transaction and reads back its status (§8). It only ever sees a

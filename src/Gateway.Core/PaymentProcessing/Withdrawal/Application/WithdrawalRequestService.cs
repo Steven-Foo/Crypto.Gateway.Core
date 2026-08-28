@@ -1,4 +1,5 @@
 using System.Numerics;
+using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application.Abstractions;
@@ -36,10 +37,18 @@ public sealed class WithdrawalRequestService(
     IMerchantApprovalThreshold merchantApprovalThreshold,
     SettledBalanceGate settledBalance,
     IWithdrawalLedger ledger,
+    IAddressEncoderFactory addressEncoders,
     TimeProvider timeProvider) : IWithdrawalRequestService
 {
     public async Task<Result<WithdrawalResult>> RequestAsync(RequestWithdrawalCommand command, CancellationToken cancellationToken = default)
     {
+        // Format-only check, before anything else is touched: catches a typo or malformed address outright,
+        // so no funds are ever reserved against a destination that could never receive them. It proves
+        // nothing about whether the address belongs to anyone, or is the one the caller actually meant —
+        // no software can tell that apart from a different, equally valid address (§ IAddressEncoder).
+        if (addressEncoders.Supports(command.Chain) && !addressEncoders.For(command.Chain).IsValidAddress(command.DestinationAddress))
+            return Result.Failure<WithdrawalResult>(WithdrawalErrors.DestinationInvalid);
+
         var policy = policies.For(command.Chain);
         var withdrawal = await repository.FindByMerchantTransactionIdAsync(command.MerchantId, WithdrawalKind.User, command.MerchantTransactionId, cancellationToken);
 

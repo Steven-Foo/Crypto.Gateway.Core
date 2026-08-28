@@ -87,6 +87,7 @@ public sealed class TronTransactionBroadcaster(
         }
 
         var succeeded = !topLevelFailed && !receiptFailed;
-        return new TransactionStatus(block, succeeded, new System.Numerics.BigInteger(info.Fee)); // fee in sun, for gas accounting
+        var energyUsed = info.Receipt?.EnergyUsageTotal is { } total ? new System.Numerics.BigInteger(total) : System.Numerics.BigInteger.Zero;
+        return new TransactionStatus(block, succeeded, new System.Numerics.BigInteger(info.Fee), energyUsed); // fee in sun, energy in units — never the same thing (§14)
     }
 }

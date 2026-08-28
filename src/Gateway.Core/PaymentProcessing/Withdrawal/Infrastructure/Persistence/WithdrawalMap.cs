@@ -51,6 +51,10 @@ public sealed class WithdrawalMap : IEntityTypeConfiguration<WithdrawalEntity>
         builder.Property(w => w.FailureReason).HasMaxLength(512);
         builder.Property(w => w.Confirmations);
 
+        // BigInteger -> decimal(38,0) via UseBigIntegerMoney, same as Amount/Fee — but this is a resource-usage
+        // count, not money. Null until confirmed; distinct column, never conflated with Fee (§14).
+        builder.Property(w => w.EnergyUsed);
+
         builder.Property<byte[]>("RowVersion").IsRowVersion();
 
         builder.Ignore(w => w.HasSignedTransaction);

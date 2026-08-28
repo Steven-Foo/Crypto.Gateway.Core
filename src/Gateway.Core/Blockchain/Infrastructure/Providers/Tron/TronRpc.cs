@@ -116,6 +116,16 @@ public sealed class TronRpc(HttpClient http) : ITronRpc, ITronTxRpc, ITronResour
             ?? throw new JsonRpcException("triggersmartcontract", "empty response.");
     }
 
+    public async Task<TronConstantContractResultDto> TriggerConstantContractAsync(
+        TriggerConstantContractRequest request, CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PostAsJsonAsync("wallet/triggerconstantcontract", request, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        return await response.Content.ReadFromJsonAsync<TronConstantContractResultDto>(cancellationToken)
+            ?? throw new JsonRpcException("triggerconstantcontract", "empty response.");
+    }
+
     public async Task<JsonElement> CreateTransactionAsync(
         CreateTransactionRequest request, CancellationToken cancellationToken = default)
     {

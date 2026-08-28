@@ -1,6 +1,7 @@
 using System.Numerics;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Contracts;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Contracts;
+using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure.Treasury;
@@ -108,6 +109,10 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
         services.AddSingleton<IMerchantFeeSchedule>(new FakeFees(Fee));
         services.AddSingleton<IMerchantWithdrawalLimits>(new UnsetWithdrawalLimits());
         services.AddSingleton<IMerchantApprovalThreshold>(new UnsetApprovalThreshold());
+        // The "TDestination"/"TReceiver" placeholders this file uses throughout aren't real checksummed
+        // addresses — this test is about the reserve→send pipeline, not address format, so validation is a
+        // permissive no-op here (unlike the dedicated request-service tests, which cover the real check).
+        services.AddSingleton<IAddressEncoderFactory>(new AlwaysValidAddressEncoders());
         services.AddSingleton<InMemoryTransactionEngine>();
         services.AddSingleton<ITransactionBuilder>(sp => sp.GetRequiredService<InMemoryTransactionEngine>());
         services.AddSingleton<ITransactionBroadcaster>(sp => sp.GetRequiredService<InMemoryTransactionEngine>());
@@ -634,6 +639,19 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
         public Task<BlockRef?> GetBlockAsync(Chain chain, long blockNumber, CancellationToken cancellationToken = default) =>
             Task.FromResult<BlockRef?>(new BlockRef(blockNumber, "0xblock"));
         public Task<long> GetFinalizedHeightAsync(Chain chain, CancellationToken cancellationToken = default) => Task.FromResult(1000L);
+    }
+
+    private sealed class AlwaysValidAddressEncoders : IAddressEncoderFactory
+    {
+        public bool Supports(Chain chain) => true;
+        public IAddressEncoder For(Chain chain) => new PassthroughEncoder(chain);
+    }
+
+    private sealed class PassthroughEncoder(Chain chain) : IAddressEncoder
+    {
+        public Chain Chain => chain;
+        public string Encode(ReadOnlySpan<byte> publicKey) => throw new NotSupportedException();
+        public bool IsValidAddress(string address) => true;
     }
 
     private sealed class NoOpLock : IDistributedLockFactory

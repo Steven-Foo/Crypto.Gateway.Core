@@ -108,9 +108,22 @@ public sealed class WithdrawalProcessingService(
 
             // Approved: build → sign FROM the leased wallet → persist the signed blob (→ Signing, stamping the
             // SourceWalletId that leases the wallet) → broadcast.
-            var unsigned = await transactionBuilder.BuildTransferAsync(
-                new BuildWithdrawalRequest(withdrawal.Chain, withdrawal.AssetId, lease.Address, withdrawal.DestinationAddress, withdrawal.Amount),
-                cancellationToken);
+            UnsignedTransaction unsigned;
+            try
+            {
+                unsigned = await transactionBuilder.BuildTransferAsync(
+                    new BuildWithdrawalRequest(withdrawal.Chain, withdrawal.AssetId, lease.Address, withdrawal.DestinationAddress, withdrawal.Amount),
+                    cancellationToken);
+            }
+            catch (Exception ex) when (ex is FormatException or InvalidOperationException or NotSupportedException or ArgumentException)
+            {
+                // Deterministic: the SAME inputs will fail the SAME way every time (a malformed destination
+                // address, an unsupported asset, a definitive node rejection of this exact transfer) — retrying
+                // forever would only ever strand the reserve. Pre-broadcast, so releasing it is safe. Anything
+                // else (a network blip, a timeout) is NOT caught here — it falls to the outer catch below and
+                // is retried next pass, same as before.
+                return await FailAsync(withdrawal, $"build: {ex.Message}", cancellationToken);
+            }
 
             var signed = await signer.SignAsync(
                 new SigningRequest(withdrawal.Id, withdrawal.Chain, unsigned.Payload, lease.KeyReference), cancellationToken);

@@ -122,6 +122,69 @@ public sealed class AddressEncoderTests
         Should.Throw<FormatException>(() => TronAddressEncoder.ToRawAddress(bitcoinish));
     }
 
+    // ── IsValidAddress: format-only, catches a typo before funds are ever reserved ──
+
+    [Theory]
+    [InlineData("TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t")] // the published USDT-TRC20 contract address
+    [InlineData("TUEZSdKsoDHQMeZwihtdoBiN46zxhGWYdH")] // the published BIP-44 vector address
+    public void Tron_accepts_a_well_formed_address(string address) =>
+        new TronAddressEncoder().IsValidAddress(address).ShouldBeTrue();
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("not-base58!!")]                          // not Base58 at all
+    [InlineData("TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6X")]     // one character flipped ⇒ checksum mismatch
+    [InlineData("1BvBMSEYstWetqTFn5Au4m4GFg7xJaNVN2")]     // valid Base58Check, but Bitcoin's 0x00 prefix, not TRON's 0x41
+    public void Tron_rejects_a_malformed_address(string? address) =>
+        new TronAddressEncoder().IsValidAddress(address!).ShouldBeFalse();
+
+    [Theory]
+    [InlineData("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA9604AB")] // 42 hex digits — too many
+    [InlineData("d8dA6BF26964aF9D7eEd9e03E53415D37aA9604")]     // missing the 0x prefix
+    [InlineData("0xZZZa6BF26964aF9D7eEd9e03E53415D37aA9604")]   // non-hex characters
+    public void Ethereum_rejects_a_malformed_address(string address) =>
+        new EthereumAddressEncoder().IsValidAddress(address).ShouldBeFalse();
+
+    [Fact]
+    public void Ethereum_accepts_an_all_lowercase_address_uncheckummed()
+    {
+        // EIP-55: a plain lowercase address is valid, just without the mixed-case typo checksum.
+        var address = new EthereumAddressEncoder().Encode(UncompressedKey());
+        new EthereumAddressEncoder().IsValidAddress(address.ToLowerInvariant()).ShouldBeTrue();
+    }
+
+    [Fact]
+    public void Ethereum_rejects_a_mixed_case_address_whose_checksum_does_not_match()
+    {
+        var address = new EthereumAddressEncoder().Encode(UncompressedKey());
+        // Flip the case of exactly one letter — still 40 valid hex digits, but no longer the EIP-55 checksum.
+        var flippedChar = address[2..].First(char.IsAsciiLetter);
+        var flipped = char.IsUpper(flippedChar) ? char.ToLowerInvariant(flippedChar) : char.ToUpperInvariant(flippedChar);
+        var corrupted = address.Replace(flippedChar, flipped);
+
+        new EthereumAddressEncoder().IsValidAddress(corrupted).ShouldBeFalse();
+    }
+
+    [Fact]
+    public void Solana_accepts_a_well_formed_32_byte_address() =>
+        new SolanaAddressEncoder().IsValidAddress(new string('1', 32)).ShouldBeTrue(); // the System Program id
+
+    [Theory]
+    [InlineData("")]
+    [InlineData("not-base58!!")]
+    [InlineData("11111111111111111111111111111")]         // valid Base58, but decodes to fewer than 32 bytes
+    public void Solana_rejects_a_malformed_address(string address) =>
+        new SolanaAddressEncoder().IsValidAddress(address).ShouldBeFalse();
+
+    private static byte[] UncompressedKey()
+    {
+        var key = new byte[65];
+        key[0] = 0x04;
+        new Random(20260827).NextBytes(key.AsSpan(1));
+        return key;
+    }
+
     // ── Factory ──────────────────────────────────────────────────────────────
 
     [Fact]

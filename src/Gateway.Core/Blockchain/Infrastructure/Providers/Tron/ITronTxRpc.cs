@@ -17,6 +17,15 @@ public interface ITronTxRpc
         TriggerSmartContractRequest request, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// <c>/wallet/triggerconstantcontract</c> — simulates a smart-contract call read-only: no signature, no
+    /// fee, no broadcast, no funds moved. Returns the energy the call would actually cost against current
+    /// chain state. Used to estimate a transfer's real cost before deciding whether staked energy covers it
+    /// or a rental is needed — never part of the money-out path itself.
+    /// </summary>
+    Task<TronConstantContractResultDto> TriggerConstantContractAsync(
+        TriggerConstantContractRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// <c>/wallet/createtransaction</c> — builds an unsigned native-TRX <c>TransferContract</c>. Returns the raw
     /// transaction JSON (txID / raw_data / raw_data_hex), or a <c>{ "Error": … }</c> object on rejection.
     /// </summary>

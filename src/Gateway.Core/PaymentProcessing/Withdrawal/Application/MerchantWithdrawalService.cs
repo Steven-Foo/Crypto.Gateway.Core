@@ -1,4 +1,5 @@
 using System.Numerics;
+using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application.Abstractions;
@@ -37,6 +38,7 @@ public sealed class MerchantWithdrawalService(
     IMerchantApprovalThreshold merchantApprovalThreshold,
     SettledBalanceGate settledBalance,
     IWithdrawalLedger ledger,
+    IAddressEncoderFactory addressEncoders,
     TimeProvider timeProvider) : IMerchantWithdrawalService
 {
     public async Task<Result<WithdrawalResult>> RequestAsync(MerchantWithdrawalCommand command, CancellationToken cancellationToken = default)
@@ -56,10 +58,14 @@ public sealed class MerchantWithdrawalService(
             if (merchant is null || !merchant.CanTransact)
                 return Result.Failure<WithdrawalResult>(WithdrawalErrors.MerchantCannotTransact);
 
-            // Destination is the whitelisted settlement wallet — NEVER client-supplied (§10).
+            // Destination is the whitelisted settlement wallet — NEVER client-supplied (§10). A defensive
+            // format re-check here (the primary check belongs at registration time) — catches a malformed
+            // wallet before ever reserving funds against it, same reasoning as the user-payout path.
             var destination = await settlements.FindSettlementAddressAsync(command.MerchantId, command.Chain, cancellationToken);
             if (string.IsNullOrWhiteSpace(destination))
                 return Result.Failure<WithdrawalResult>(WithdrawalErrors.SettlementWalletNotRegistered);
+            if (addressEncoders.Supports(command.Chain) && !addressEncoders.For(command.Chain).IsValidAddress(destination))
+                return Result.Failure<WithdrawalResult>(WithdrawalErrors.DestinationInvalid);
 
             // Settled (withdrawable) balance — only funds matured past the merchant's T+N may cash out; also the
             // base for the percentage liquidity cap below. At T+0 this equals the full balance, so the settled

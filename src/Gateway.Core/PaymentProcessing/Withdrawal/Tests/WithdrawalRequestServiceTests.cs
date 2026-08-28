@@ -1,4 +1,5 @@
 using System.Numerics;
+using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application;
@@ -26,7 +27,8 @@ public sealed class WithdrawalRequestServiceTests
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
-    private static WithdrawalRequestService Compose(MerchantWithdrawalLimits? limits = null, BigInteger? merchantThreshold = null)
+    private static WithdrawalRequestService Compose(
+        MerchantWithdrawalLimits? limits = null, BigInteger? merchantThreshold = null, IAddressEncoderFactory? addresses = null)
     {
         var ledger = new AmpleLedgerQuery();
         return new WithdrawalRequestService(
@@ -38,6 +40,7 @@ public sealed class WithdrawalRequestServiceTests
             new FakeApprovalThreshold(merchantThreshold),
             new SettledBalanceGate(ledger, TimeProvider.System),
             new FakeLedger(),
+            addresses ?? new AlwaysValidAddresses(),
             TimeProvider.System);
     }
 
@@ -91,6 +94,27 @@ public sealed class WithdrawalRequestServiceTests
         var result = await Compose(merchantThreshold: new BigInteger(1_000_000)).RequestAsync(Command(new BigInteger(50_000)), Ct);
         result.IsSuccess.ShouldBeTrue();
         result.Value.Status.ShouldBe(WithdrawalStatus.Approved.ToString());
+    }
+
+    [Fact]
+    public async Task A_malformed_destination_address_is_rejected_before_anything_is_reserved()
+    {
+        var service = Compose(addresses: new RejectingAddresses());
+        var result = await service.RequestAsync(Command(new BigInteger(5_000)), Ct);
+
+        result.IsFailure.ShouldBeTrue();
+        result.Error!.Code.ShouldBe(WithdrawalErrors.DestinationInvalid.Code);
+    }
+
+    [Fact]
+    public async Task An_unsupported_chain_skips_address_validation_rather_than_throwing()
+    {
+        // Capability segregation (§8): an address port that doesn't cover this chain must be a no-op here,
+        // not a hard failure — the same "absent capability" posture used everywhere else in the codebase.
+        var service = Compose(addresses: new UnsupportedChainAddresses());
+        var result = await service.RequestAsync(Command(new BigInteger(5_000)), Ct);
+
+        result.IsSuccess.ShouldBeTrue();
     }
 
     // ── fakes ──
@@ -183,5 +207,32 @@ public sealed class WithdrawalRequestServiceTests
     {
         public Task<Result> ReserveAsync(ReserveWithdrawalRequest request, CancellationToken cancellationToken = default) =>
             Task.FromResult(Result.Success());
+    }
+
+    /// <summary>Default for tests unrelated to address validation — every address is treated as well-formed,
+    /// so the "TDest" placeholder used throughout this file keeps working unchanged.</summary>
+    private sealed class AlwaysValidAddresses : IAddressEncoderFactory
+    {
+        public bool Supports(Chain chain) => true;
+        public IAddressEncoder For(Chain chain) => new StubEncoder(chain, isValid: true);
+    }
+
+    private sealed class RejectingAddresses : IAddressEncoderFactory
+    {
+        public bool Supports(Chain chain) => true;
+        public IAddressEncoder For(Chain chain) => new StubEncoder(chain, isValid: false);
+    }
+
+    private sealed class UnsupportedChainAddresses : IAddressEncoderFactory
+    {
+        public bool Supports(Chain chain) => false;
+        public IAddressEncoder For(Chain chain) => throw new NotSupportedException();
+    }
+
+    private sealed class StubEncoder(Chain chain, bool isValid) : IAddressEncoder
+    {
+        public Chain Chain => chain;
+        public string Encode(ReadOnlySpan<byte> publicKey) => throw new NotSupportedException();
+        public bool IsValidAddress(string address) => isValid;
     }
 }

@@ -213,6 +213,71 @@ public sealed class TronTransactionEngineTests
         result.Error!.Code.ShouldBe("broadcast.malformed");
     }
 
+    // ── Energy estimator (simulation-only, never part of the money-out path) ──
+
+    private static TronEnergyEstimator Estimator(FakeTronTxRpc rpc, AssetDto? asset) =>
+        new(rpc, new FakeAssetCatalog(asset));
+
+    [Fact]
+    public async Task Estimator_reports_the_real_energy_a_clean_simulated_transfer_would_cost()
+    {
+        var rpc = new FakeTronTxRpc
+        {
+            OnTriggerConstant = _ => new TronConstantContractResultDto
+            {
+                Result = new TronTriggerReturnDto { Result = true }, // no message ⇒ the simulated call completed cleanly
+                EnergyUsed = 64_285,
+            },
+        };
+
+        var estimate = await Estimator(rpc, UsdtAsset()).EstimateTransferEnergyAsync(
+            new EstimateTransferEnergyRequest(Chain.Tron, UsdtAssetId, HotWallet, UsdtBase58, 1_000_000), CancellationToken.None);
+
+        estimate.WouldSucceed.ShouldBeTrue();
+        estimate.EnergyUsed.ShouldBe(new BigInteger(64_285));
+        estimate.FailureReason.ShouldBeNull();
+
+        // Same ABI-encoded call a real send would make — proves the estimate is of the actual transfer, not
+        // an approximation of it.
+        rpc.LastConstantTrigger!.Parameter.ShouldBe(TronAbi.EncodeTransfer(UsdtBase58, 1_000_000));
+        rpc.LastConstantTrigger.OwnerAddress.ShouldBe(TronAddress.ToRawHex(HotWallet));
+    }
+
+    [Fact]
+    public async Task Estimator_reports_failure_and_reason_for_a_reverted_simulation()
+    {
+        // The exact shape observed live against Nile: result.result=true (the node ran the simulation), but
+        // a populated message is the real failure signal.
+        var rpc = new FakeTronTxRpc
+        {
+            OnTriggerConstant = _ => new TronConstantContractResultDto
+            {
+                Result = new TronTriggerReturnDto { Result = true, Message = "REVERT opcode executed" },
+                EnergyUsed = 793,
+            },
+        };
+
+        var estimate = await Estimator(rpc, UsdtAsset()).EstimateTransferEnergyAsync(
+            new EstimateTransferEnergyRequest(Chain.Tron, UsdtAssetId, HotWallet, UsdtBase58, 1_000_000), CancellationToken.None);
+
+        estimate.WouldSucceed.ShouldBeFalse();
+        estimate.EnergyUsed.ShouldBe(new BigInteger(793));
+        estimate.FailureReason.ShouldBe("REVERT opcode executed");
+    }
+
+    [Fact]
+    public async Task Estimator_rejects_a_native_trx_asset() =>
+        await Should.ThrowAsync<NotSupportedException>(() =>
+            Estimator(new FakeTronTxRpc(), new AssetDto(UsdtAssetId, Chain.Tron, "TRX", null, 6, IsNative: true))
+                .EstimateTransferEnergyAsync(
+                    new EstimateTransferEnergyRequest(Chain.Tron, UsdtAssetId, HotWallet, UsdtBase58, 1_000_000), CancellationToken.None));
+
+    [Fact]
+    public async Task Estimator_rejects_an_unknown_asset() =>
+        await Should.ThrowAsync<InvalidOperationException>(() =>
+            Estimator(new FakeTronTxRpc(), asset: null).EstimateTransferEnergyAsync(
+                new EstimateTransferEnergyRequest(Chain.Tron, UsdtAssetId, HotWallet, UsdtBase58, 1_000_000), CancellationToken.None));
+
     // ── Status classification ──
 
     [Fact]
@@ -278,6 +343,34 @@ public sealed class TronTransactionEngineTests
 
         status.ShouldNotBeNull();
         status!.Succeeded.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Status_carries_the_receipts_real_energy_usage_for_recording()
+    {
+        var rpc = new FakeTronTxRpc
+        {
+            OnGetInfo = _ => new TronTransactionInfoDto
+            {
+                Id = "abc", BlockNumber = 100, Receipt = new TronReceiptDto { Result = "SUCCESS", EnergyUsageTotal = 64_285 },
+            },
+        };
+
+        var status = await Broadcaster(rpc).GetTransactionStatusAsync(Chain.Tron, "abc", CancellationToken.None);
+
+        status.ShouldNotBeNull();
+        status!.EnergyUsed.ShouldBe(new BigInteger(64_285));
+    }
+
+    [Fact]
+    public async Task Status_defaults_energy_used_to_zero_for_a_native_transaction_with_no_receipt_field()
+    {
+        var rpc = new FakeTronTxRpc { OnGetInfo = _ => new TronTransactionInfoDto { Id = "abc", BlockNumber = 100 } };
+
+        var status = await Broadcaster(rpc).GetTransactionStatusAsync(Chain.Tron, "abc", CancellationToken.None);
+
+        status.ShouldNotBeNull();
+        status!.EnergyUsed.ShouldBe(BigInteger.Zero);
     }
 
     [Fact]
@@ -424,7 +517,9 @@ public sealed class TronTransactionEngineTests
     private sealed class FakeTronTxRpc : ITronTxRpc
     {
         public TriggerSmartContractRequest? LastTrigger { get; private set; }
+        public TriggerConstantContractRequest? LastConstantTrigger { get; private set; }
         public Func<TriggerSmartContractRequest, TronTriggerResultDto> OnTrigger { get; init; } = _ => throw new NotImplementedException();
+        public Func<TriggerConstantContractRequest, TronConstantContractResultDto> OnTriggerConstant { get; init; } = _ => throw new NotImplementedException();
         public Func<CreateTransactionRequest, JsonElement> OnCreate { get; init; } = _ => throw new NotImplementedException();
         public Func<JsonElement, TronBroadcastResultDto> OnBroadcast { get; init; } = _ => throw new NotImplementedException();
         public Func<string, TronTransactionInfoDto?> OnGetInfo { get; init; } = _ => null;
@@ -433,6 +528,12 @@ public sealed class TronTransactionEngineTests
         {
             LastTrigger = request;
             return Task.FromResult(OnTrigger(request));
+        }
+
+        public Task<TronConstantContractResultDto> TriggerConstantContractAsync(TriggerConstantContractRequest request, CancellationToken ct = default)
+        {
+            LastConstantTrigger = request;
+            return Task.FromResult(OnTriggerConstant(request));
         }
 
         public Task<JsonElement> CreateTransactionAsync(CreateTransactionRequest request, CancellationToken ct = default) =>

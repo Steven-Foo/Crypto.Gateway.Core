@@ -7,6 +7,12 @@ public static class WithdrawalErrors
     public static readonly Error DestinationRequired =
         Error.Validation("withdrawal.destination_required", "A destination address is required.");
 
+    /// <summary>The address is well-formed enough to be rejected outright — a typo, wrong chain's format,
+    /// or malformed checksum. This is a format check only; it cannot and does not prove the address belongs
+    /// to anyone, or that it's the address the caller actually meant to use (§ IAddressEncoder.IsValidAddress).</summary>
+    public static readonly Error DestinationInvalid =
+        Error.Validation("withdrawal.destination_invalid", "The destination address is not a valid address for this chain.");
+
     public static readonly Error AmountNotPositive =
         Error.Validation("withdrawal.amount_not_positive", "The withdrawal amount must be greater than zero.");
 

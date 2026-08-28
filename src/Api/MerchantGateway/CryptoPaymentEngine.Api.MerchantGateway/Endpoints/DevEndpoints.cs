@@ -234,5 +234,54 @@ public static class DevEndpoints
             var result = await reloads.SubmitSignedAsync(id, signed, http.RequestAborted);
             return result.IsFailure ? Results.BadRequest(new { error = result.Error!.Message }) : Results.Ok(new { submitted = true, reloadId = id });
         });
+
+        // Simulates a transfer — no signature, no broadcast, no funds moved — to find out how much energy it
+        // would REALLY cost right now (a brand-new recipient costs meaningfully more than one who already
+        // holds the token; the fixed 131,000 safety default doesn't know the difference). Only registered
+        // when the real TRON engine is wired (Withdrawal:LiveTron=true); estimator is null otherwise.
+        group.MapGet("/estimate-energy", async (
+            string chain, string from, string to, decimal amount, string? assetSymbol,
+            IAssetCatalog assets, IEnergyEstimator? estimator, HttpContext http) =>
+        {
+            if (estimator is null)
+            {
+                return Results.BadRequest(new
+                {
+                    error = "No energy estimator registered — requires the real TRON engine (set Withdrawal:LiveTron=true).",
+                });
+            }
+
+            if (!Enum.TryParse<Chain>(chain, ignoreCase: true, out var parsed))
+                return Results.BadRequest(new { error = $"Unknown chain '{chain}'." });
+
+            var symbol = string.IsNullOrWhiteSpace(assetSymbol) ? "USDT" : assetSymbol;
+            var asset = await assets.FindAsync(parsed, symbol, http.RequestAborted);
+            if (asset is null)
+                return Results.BadRequest(new { error = $"No {symbol} asset configured for {parsed}." });
+
+            var baseUnits = new BigInteger(decimal.Truncate(amount * (decimal)Math.Pow(10, asset.Decimals)));
+            if (baseUnits <= BigInteger.Zero)
+                return Results.BadRequest(new { error = "Amount must be positive." });
+
+            var estimate = await estimator.EstimateTransferEnergyAsync(
+                new EstimateTransferEnergyRequest(parsed, asset.AssetId, from, to, baseUnits), http.RequestAborted);
+
+            return Results.Ok(new
+            {
+                chain = parsed.ToString(),
+                from,
+                to,
+                amount,
+                asset = asset.Symbol,
+                estimate.WouldSucceed,
+                energyUsed = estimate.EnergyUsed.ToString(CultureInfo.InvariantCulture),
+                estimate.FailureReason,
+                whatNext = estimate.WouldSucceed
+                    ? "This is the real energy cost of THIS specific transfer, right now. Compare it against the " +
+                      "wallet's current available energy (Tronscan, or getaccountresource on TronGrid) to decide " +
+                      "whether staked/delegated energy already covers it or a rental is needed."
+                    : "The simulated transfer failed — see FailureReason (e.g. an insufficient balance at 'from').",
+            });
+        });
     }
 }

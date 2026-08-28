@@ -119,6 +119,9 @@ public sealed class WithdrawalTronTestnetFlowTests : IAsyncLifetime
         services.AddSingleton<IMerchantWithdrawalLimits>(new UnsetWithdrawalLimits());
         services.AddSingleton<IMerchantApprovalThreshold>(new UnsetApprovalThreshold());
         services.AddSingleton<IChainStatusReader>(new StubChainStatus());
+        // The real encoder — Destination above is a genuinely valid Base58Check TRON address, so this
+        // exercises the actual request-time validation the same way production does, not a stub.
+        services.AddSingleton<IAddressEncoderFactory>(new AddressEncoderFactory([new TronAddressEncoder()]));
 
         // Ample hot-wallet float so the physical gate always clears — this test exercises the real signer +
         // build/broadcast stack, not the insufficient-balance park.
@@ -312,6 +315,11 @@ public sealed class WithdrawalTronTestnetFlowTests : IAsyncLifetime
                 Transaction = JsonSerializer.Deserialize<JsonElement>(tx.ToJsonString()),
             });
         }
+
+        // Not exercised here — this flow test covers real build/sign/broadcast, not the separate,
+        // simulation-only estimator (covered by TronTransactionEngineTests).
+        public Task<TronConstantContractResultDto> TriggerConstantContractAsync(TriggerConstantContractRequest request, CancellationToken ct = default) =>
+            throw new NotImplementedException();
 
         public Task<JsonElement> CreateTransactionAsync(CreateTransactionRequest request, CancellationToken ct = default)
         {

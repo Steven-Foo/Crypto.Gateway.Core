@@ -113,6 +113,14 @@ public sealed class Withdrawal : Entity<Guid>
     /// </summary>
     public int? Confirmations { get; private set; }
 
+    /// <summary>
+    /// The real energy this transaction actually consumed on-chain (TRON's <c>energy_usage_total</c>),
+    /// recorded once at <see cref="Confirm"/>. A resource-usage count, NOT a currency amount and NOT related
+    /// to <see cref="Fee"/> — that stays exactly what it always meant, the amount charged to the customer.
+    /// Null until confirmed; zero for a native transfer (spends no energy).
+    /// </summary>
+    public BigInteger? EnergyUsed { get; private set; }
+
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
 
@@ -271,13 +279,16 @@ public sealed class Withdrawal : Entity<Guid>
     /// optional <paramref name="gasFeeSun"/>/<paramref name="gasAssetId"/> carry the native-coin fee the
     /// platform paid on-chain, so the Ledger can book it as a platform gas expense (5c); both default to
     /// "no gas" (fee 0, no asset) when the engine charged no fee or no gas asset is configured.
+    /// <paramref name="energyUsed"/> is a separate, purely observational figure — how much energy the
+    /// transaction actually consumed — recorded on the row but never fed into ledger/fee logic.
     /// </summary>
-    public Result Confirm(DateTimeOffset now, BigInteger gasFeeSun = default, Guid? gasAssetId = null)
+    public Result Confirm(DateTimeOffset now, BigInteger gasFeeSun = default, Guid? gasAssetId = null, BigInteger energyUsed = default)
     {
         if (Status != WithdrawalStatus.Broadcast)
             return Result.Failure(WithdrawalErrors.InvalidStateTransition);
 
         Status = WithdrawalStatus.Confirmed;
+        EnergyUsed = energyUsed < BigInteger.Zero ? BigInteger.Zero : energyUsed;
         UpdatedAt = now;
         Raise(new WithdrawalConfirmed(
             Guid.CreateVersion7(), now, Id, MerchantId, AssetId, ToBaseUnits(Amount), ToBaseUnits(Fee), TransactionHash!, now,

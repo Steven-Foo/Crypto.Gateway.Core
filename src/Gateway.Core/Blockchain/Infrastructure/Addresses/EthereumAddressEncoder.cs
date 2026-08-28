@@ -1,3 +1,4 @@
+using System.Linq;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.SharedKernel;
 using Nethereum.Util;
@@ -16,6 +17,25 @@ public sealed class EthereumAddressEncoder : IAddressEncoder
     {
         var hash = Secp256k1PublicKey.Keccak20(publicKey);
         return ToEip55(Convert.ToHexString(hash).ToLowerInvariant());
+    }
+
+    /// <summary>
+    /// Structural check: "0x" + 40 hex digits. A mixed-case address must additionally match the EIP-55
+    /// checksum (a typo flips a hex digit's case roughly as often as its value, so the checksum catches
+    /// many of those); an all-lowercase or all-uppercase address is valid but uncheckummed, per EIP-55.
+    /// </summary>
+    public bool IsValidAddress(string address)
+    {
+        if (string.IsNullOrWhiteSpace(address) || !address.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var hex = address[2..];
+        if (hex.Length != 40 || !hex.All(Uri.IsHexDigit))
+            return false;
+
+        var lower = hex.ToLowerInvariant();
+        var isUncheckummed = hex == lower || hex == hex.ToUpperInvariant();
+        return isUncheckummed || ToEip55(lower) == address;
     }
 
     /// <summary>

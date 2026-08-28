@@ -122,6 +122,32 @@ public sealed class WithdrawalDomainTests
     }
 
     [Fact]
+    public void Confirm_records_energy_used_as_a_purely_observational_figure_separate_from_fee()
+    {
+        var w = Approved(requiresApproval: false);
+        w.BeginSigning(Guid.CreateVersion7(), Now);
+        w.MarkBroadcast("0xtxhash", Now);
+
+        w.Confirm(Now, gasFeeSun: new BigInteger(5000), gasAssetId: null, energyUsed: new BigInteger(64_285)).IsSuccess.ShouldBeTrue();
+
+        w.EnergyUsed.ShouldBe(new BigInteger(64_285));
+        // Fee is untouched by energy recording — the two must never be conflated (§14).
+        w.Fee.ShouldBe(Fee);
+    }
+
+    [Fact]
+    public void Confirm_defaults_energy_used_to_zero_when_not_supplied()
+    {
+        var w = Approved(requiresApproval: false);
+        w.BeginSigning(Guid.CreateVersion7(), Now);
+        w.MarkBroadcast("0xtxhash", Now);
+
+        w.Confirm(Now).IsSuccess.ShouldBeTrue();
+
+        w.EnergyUsed.ShouldBe(BigInteger.Zero);
+    }
+
+    [Fact]
     public void Fail_before_broadcast_releases_the_funds()
     {
         var w = Approved(requiresApproval: false, callbackUrl: "https://merchant.test/cb");

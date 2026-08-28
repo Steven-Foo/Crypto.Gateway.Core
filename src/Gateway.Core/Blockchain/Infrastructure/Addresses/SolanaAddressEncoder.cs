@@ -24,4 +24,19 @@ public sealed class SolanaAddressEncoder : IAddressEncoder
 
         return Base58.Encode(publicKey);
     }
+
+    public bool IsValidAddress(string address)
+    {
+        if (string.IsNullOrWhiteSpace(address))
+            return false;
+
+        try
+        {
+            return Base58.Decode(address).Length == PublicKeyLength;
+        }
+        catch (FormatException)
+        {
+            return false;
+        }
+    }
 }

@@ -19,6 +19,15 @@ public interface IAddressEncoder
     /// Solana takes the <b>32-byte ed25519</b> public key.
     /// </summary>
     string Encode(ReadOnlySpan<byte> publicKey);
+
+    /// <summary>
+    /// True when <paramref name="address"/> is a structurally well-formed address for this chain — correct
+    /// format/length and, where the chain has one, a valid checksum. This is a format check only: it proves
+    /// nothing about whether the address belongs to anyone, has ever been used, or is the address the caller
+    /// actually meant to use — no software can tell "correct" apart from "a different, equally valid address"
+    /// from the string alone. It exists to catch typos and malformed input before funds are ever reserved.
+    /// </summary>
+    bool IsValidAddress(string address);
 }
 
 public interface IAddressEncoderFactory

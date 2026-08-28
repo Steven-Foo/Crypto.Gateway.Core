@@ -152,6 +152,10 @@ public static class BlockchainInfrastructureExtensions
         // is signed by the staking wallet's key via the same ISigner (§10). Real TRON here (vs the in-memory
         // builder in AddInMemoryTransactionEngine).
         services.TryAddScoped<IResourceOperationBuilder, TronResourceOperationBuilder>();
+
+        // Simulation-only, read-only pre-flight cost estimate (triggerconstantcontract) — never part of the
+        // money-out path itself, just informs a stake-vs-rent decision before a real send is attempted.
+        services.TryAddScoped<IEnergyEstimator, TronEnergyEstimator>();
         return services;
     }
 

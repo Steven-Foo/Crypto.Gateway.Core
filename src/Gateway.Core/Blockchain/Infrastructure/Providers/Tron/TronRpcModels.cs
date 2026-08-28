@@ -150,6 +150,34 @@ public sealed record TronTriggerReturnDto
 }
 
 /// <summary>
+/// Request body for <c>/wallet/triggerconstantcontract</c> — simulates a smart-contract call against
+/// current chain state. No signature, no fee_limit, no broadcast: the node runs it read-only and reports
+/// what WOULD happen, including the energy it would actually cost. Same shape as
+/// <see cref="TriggerSmartContractRequest"/> minus the fields only a real (paid) call needs.
+/// </summary>
+public sealed record TriggerConstantContractRequest
+{
+    [JsonPropertyName("owner_address")] public required string OwnerAddress { get; init; }
+    [JsonPropertyName("contract_address")] public required string ContractAddress { get; init; }
+    [JsonPropertyName("function_selector")] public string FunctionSelector { get; init; } = "transfer(address,uint256)";
+    [JsonPropertyName("parameter")] public required string Parameter { get; init; }
+    [JsonPropertyName("visible")] public bool Visible { get; init; }
+}
+
+/// <summary>
+/// Response of <c>/wallet/triggerconstantcontract</c>. <see cref="EnergyUsed"/> is the real answer — how
+/// much energy this exact call would consume, right now, against current chain state. <c>Result.Result</c>
+/// being <c>true</c> only means the node accepted and ran the simulation; a populated
+/// <see cref="TronTriggerReturnDto.Message"/> (e.g. "REVERT opcode executed") is what actually signals the
+/// simulated call failed — an empty/absent message means it completed cleanly.
+/// </summary>
+public sealed record TronConstantContractResultDto
+{
+    [JsonPropertyName("result")] public TronTriggerReturnDto? Result { get; init; }
+    [JsonPropertyName("energy_used")] public long EnergyUsed { get; init; }
+}
+
+/// <summary>
 /// Response of <c>/wallet/broadcasttransaction</c>. Here <c>result</c> is a top-level bool (unlike the
 /// build, whose <c>result</c> is an object). <see cref="Message"/> is hex-encoded ASCII on failure.
 /// </summary>
@@ -188,4 +216,12 @@ public sealed record TronTransactionInfoDto
 public sealed record TronReceiptDto
 {
     [JsonPropertyName("result")] public string? Result { get; init; }
+
+    /// <summary>
+    /// The real total energy this MINED transaction consumed — covers energy paid from the sender's own
+    /// available/delegated pool AND any shortfall the sender burned TRX to cover. This is the figure to
+    /// record as "energy used"; it is a resource-usage count, not a fee or a currency amount. Absent for a
+    /// native transfer (no VM execution, so nothing to report here — see <see cref="TronTransactionInfoDto.Result"/>).
+    /// </summary>
+    [JsonPropertyName("energy_usage_total")] public long? EnergyUsageTotal { get; init; }
 }

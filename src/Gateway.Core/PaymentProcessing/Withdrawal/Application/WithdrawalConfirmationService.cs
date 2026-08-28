@@ -54,7 +54,7 @@ public sealed class WithdrawalConfirmationService(
             // platform gas cost (5c). Both are inert in dev (in-memory engine charges no fee) and where no gas
             // asset is configured for the chain.
             if (confirmations >= policies.For(withdrawal.Chain).Confirmations
-                && withdrawal.Confirm(now, status.FeeSun, gasAccounting.Resolve(withdrawal.Chain)).IsSuccess)
+                && withdrawal.Confirm(now, status.FeeSun, gasAccounting.Resolve(withdrawal.Chain), status.EnergyUsed).IsSuccess)
                 confirmedCount++;
         }
 
