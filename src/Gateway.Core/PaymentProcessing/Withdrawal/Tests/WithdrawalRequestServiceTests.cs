@@ -201,6 +201,9 @@ public sealed class WithdrawalRequestServiceTests
         public Task<(IReadOnlyList<MerchantJournalView> Items, int TotalCount)> GetJournalsAsync(
             Guid? merchantId, Guid? referenceId, DateTimeOffset? fromDate, DateTimeOffset? toDate, int page, int pageSize, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
+        public Task<(IReadOnlyList<MerchantBalanceChangeView> Items, int TotalCount)> GetMerchantBalanceHistoryAsync(
+            Guid merchantId, Guid? assetId, DateTimeOffset? fromDate, DateTimeOffset? toDate, int page, int pageSize, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 
     private sealed class FakeLedger : IWithdrawalLedger

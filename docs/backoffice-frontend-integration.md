@@ -394,7 +394,7 @@ Response:
 
 ---
 
-## 9a. Merchant balance — manual credit/debit
+## 9a. Merchant balance — manual credit/debit, and balance history
 
 A staff-initiated correction to a merchant's ledger balance — **not** backed by a real on-chain
 deposit/withdrawal (e.g. a support-ticket goodwill credit, or clawing back an over-credit). Gated on
@@ -437,6 +437,74 @@ withdrawal.
 
 Both endpoints: 404 if the merchant `id` doesn't exist; 400 for an unrecognized `chain`/`coin` or an `amount`
 that's non-positive or finer than the asset's decimal precision.
+
+### `GET /api/v1/ops/merchants/{id}/balance/history` — `ops.merchants.view`
+
+The merchant's full "account statement" — every event that actually credited or debited their balance,
+newest first: real deposits, deposit reversals, withdrawal reserves/releases, and manual credits/debits from
+the two endpoints above. This is a **read**, gated the same as the rest of the merchant details payload —
+not `ops.balances.adjust`, which is reserved for the two money-moving actions above.
+
+Query params (all optional, standard pagination §4): `chain` + `coin` (must be supplied **together** — same
+rule as elsewhere in this API, `chain` alone or `coin` alone is a 400), `fromDate`, `toDate`.
+
+Response `data` — same level as `page`/`pageSize`/`items`:
+```json
+{
+  "merchantId": "guid",
+  "page": 1, "pageSize": 50, "totalCount": 6,
+  "items": [
+    {
+      "journalId": "guid",
+      "type": "manual_debit",
+      "referenceType": "Adjustment",
+      "referenceId": "guid",
+      "direction": "Debit",
+      "amount": 1.0,
+      "amountBaseUnits": "1000000",
+      "assetId": "guid",
+      "coin": "USDT",
+      "network": "Tron",
+      "reason": "Manual debit: testing",
+      "createdAt": "2026-08-28T08:04:07.9960755+00:00"
+    }
+  ]
+}
+```
+
+**`type`** is the field to build UI around — a friendly category derived from the raw `referenceType` +
+`direction`:
+
+| `type` | Meaning | `direction` |
+|---|---|---|
+| `deposit` | Real on-chain deposit credited | Credit (always) |
+| `deposit_reversal` | A confirmed deposit got orphaned by a reorg and reversed | Debit (always) |
+| `withdrawal_reserve` | Funds locked when a payout (user or merchant cash-out) was requested | Debit (always) |
+| `withdrawal_release` | Reserved funds returned — that withdrawal was rejected/failed/cancelled | Credit (always) |
+| `manual_credit` | Staff manual credit (§9a above) | Credit (always) |
+| `manual_debit` | Staff manual debit (§9a above) | Debit (always) |
+| `other` | Anything not in the six types above (not expected in normal operation) | either |
+
+`amount` is always positive (display decimal, §5); use `direction` (or `type`) to know whether it added or
+removed funds, e.g. render `direction == "Credit" ? "+" : "-"` in front of `amount`. `amountBaseUnits` is the
+exact integer string, same "watch this one" exception as §17 and this section's own balance field.
+
+**Two things that trip people up:**
+- **A successful withdrawal shows only ONE row here, not two.** The money actually leaves the merchant's
+  balance at `withdrawal_reserve` time — settlement (the withdrawal actually confirming on-chain) does
+  **not** create a second row, because settlement only relocates funds between two *platform-internal*
+  accounts, never touching the merchant's balance again. So `withdrawal_reserve` with no matching
+  `withdrawal_release` means the payout succeeded; `withdrawal_reserve` **followed by** a
+  `withdrawal_release` (usually moments later) means it failed/was rejected and the funds came straight
+  back — net effect zero, but both rows stay visible since this is a full history, not a running total.
+- **`referenceId` is the underlying Deposit/Withdrawal/Adjustment id**, not a `PaymentIntent`/invoice id —
+  useful for deep-linking to §12/§13, but don't expect it to match `systemOrderNumber` on those screens for
+  every row (an intent-less deposit, for instance, has no `PaymentIntent` at all).
+
+**Known gaps, not built today:** no running balance-after-this-entry column (would need a historical balance
+snapshot per posting, not just the current cache); no way to see which staff member made a `manual_credit`/
+`manual_debit` row directly here — cross-reference `audit.AuditEntry` via §8 for that; no `type` filter query
+param (client-side filter on the returned page for now).
 
 ---
 

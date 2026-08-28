@@ -18,6 +18,25 @@ public sealed record MerchantJournalView(
     DateTimeOffset CreatedAt);
 
 /// <summary>
+/// One event that actually moved a merchant's <c>MerchantLiability</c> balance — the "account statement"
+/// view, distinct from <see cref="MerchantJournalView"/>/<see cref="ILedgerQuery.GetJournalsAsync"/>: a
+/// <c>WithdrawalSettle</c> journal carries the merchant's id for reporting but never touches their liability
+/// line (the balance already moved at reserve time; settle only relocates <c>WithdrawalClearing</c> →
+/// <c>TreasuryAsset</c>/<c>FeeRevenue</c>) — that journal is deliberately excluded here, never shown as a
+/// zero-amount row. Every row returned genuinely changed <see cref="Amount"/> in the direction of
+/// <see cref="Direction"/>.
+/// </summary>
+public sealed record MerchantBalanceChangeView(
+    Guid JournalId,
+    string ReferenceType,
+    Guid ReferenceId,
+    Guid AssetId,
+    string Description,
+    string Direction,
+    BigInteger Amount,
+    DateTimeOffset CreatedAt);
+
+/// <summary>
 /// The Ledger module's public, read-only balance projection. A merchant's spendable balance is the
 /// balance of its <c>MerchantLiability</c> account for the asset — <em>derived</em> from the immutable
 /// journal (via the rebuildable <c>AccountBalance</c> cache), never a stored, mutable number
@@ -73,6 +92,22 @@ public interface ILedgerQuery
     Task<(IReadOnlyList<MerchantJournalView> Items, int TotalCount)> GetJournalsAsync(
         Guid? merchantId,
         Guid? referenceId,
+        DateTimeOffset? fromDate,
+        DateTimeOffset? toDate,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// One merchant's balance history ("account statement") — newest first, every entry that actually
+    /// credited or debited their <c>MerchantLiability</c> balance (real deposits/reversals, withdrawal
+    /// reserves/releases, manual credits/debits), and nothing that didn't (see
+    /// <see cref="MerchantBalanceChangeView"/> for why <c>WithdrawalSettle</c> is excluded). All filters
+    /// beyond <paramref name="merchantId"/> are optional and combine with AND.
+    /// </summary>
+    Task<(IReadOnlyList<MerchantBalanceChangeView> Items, int TotalCount)> GetMerchantBalanceHistoryAsync(
+        Guid merchantId,
+        Guid? assetId,
         DateTimeOffset? fromDate,
         DateTimeOffset? toDate,
         int page,

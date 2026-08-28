@@ -138,4 +138,52 @@ public sealed class LedgerQuery(LedgerDbContext context) : ILedgerQuery
 
         return (items, totalCount);
     }
+
+    public async Task<(IReadOnlyList<MerchantBalanceChangeView> Items, int TotalCount)> GetMerchantBalanceHistoryAsync(
+        Guid merchantId,
+        Guid? assetId,
+        DateTimeOffset? fromDate,
+        DateTimeOffset? toDate,
+        int page,
+        int pageSize,
+        CancellationToken cancellationToken = default)
+    {
+        // INNER JOIN on the merchant's own MerchantLiability account line — the money-critical difference
+        // from GetJournalsAsync: a journal that carries this merchant's id but never posted a line against
+        // their liability account (WithdrawalSettle) simply has no matching row here, never a zero-amount
+        // placeholder.
+        var query =
+            from entry in context.JournalEntries.AsNoTracking()
+            join account in context.Accounts.AsNoTracking() on entry.AccountId equals account.Id
+            join journal in context.Journals.AsNoTracking() on entry.JournalId equals journal.Id
+            where account.AccountType == AccountType.MerchantLiability
+               && account.OwnerType == OwnerType.Merchant
+               && account.OwnerId == merchantId
+               && (assetId == null || journal.AssetId == assetId)
+               && (fromDate == null || journal.CreatedAt >= fromDate)
+               && (toDate == null || journal.CreatedAt <= toDate)
+            select new { journal, entry };
+
+        var totalCount = await query.CountAsync(cancellationToken);
+
+        var rows = await query
+            .OrderByDescending(x => x.journal.CreatedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .ToListAsync(cancellationToken);
+
+        var items = rows
+            .Select(x => new MerchantBalanceChangeView(
+                x.journal.Id,
+                x.journal.ReferenceType.ToString(),
+                x.journal.ReferenceId,
+                x.journal.AssetId,
+                x.journal.Description,
+                (x.entry.IsDebit ? EntryDirection.Debit : EntryDirection.Credit).ToString(),
+                x.entry.IsDebit ? x.entry.Debit : x.entry.Credit,
+                x.journal.CreatedAt))
+            .ToList();
+
+        return (items, totalCount);
+    }
 }

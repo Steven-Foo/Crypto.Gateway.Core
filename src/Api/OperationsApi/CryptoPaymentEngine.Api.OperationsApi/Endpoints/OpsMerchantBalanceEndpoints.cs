@@ -2,6 +2,7 @@ using CryptoPaymentEngine.Api.OperationsApi.Models;
 using CryptoPaymentEngine.Api.OperationsApi.Security;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application;
+using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Application;
 using CryptoPaymentEngine.Gateway.Core.Platform.Audit.Application;
 using CryptoPaymentEngine.SharedKernel;
@@ -24,6 +25,7 @@ public static class OpsMerchantBalanceEndpoints
     {
         app.MapPost("/api/v1/ops/merchants/{id:guid}/balance/credit", CreditAsync).RequirePermission(OpsPermissions.Balances.Adjust);
         app.MapPost("/api/v1/ops/merchants/{id:guid}/balance/debit", DebitAsync).RequirePermission(OpsPermissions.Balances.Adjust);
+        app.MapGet("/api/v1/ops/merchants/{id:guid}/balance/history", HistoryAsync).RequirePermission(OpsPermissions.Merchants.View);
     }
 
     private static async Task<IResult> CreditAsync(
@@ -81,6 +83,93 @@ public static class OpsMerchantBalanceEndpoints
             error = (string?)null,
         });
     }
+
+    /// <summary>
+    /// A merchant's full balance history ("account statement") — every real deposit/reversal, withdrawal
+    /// reserve/release, and manual credit/debit, newest first. Read-only, gated the same as the rest of the
+    /// merchant details payload (<see cref="OpsPermissions.Merchants.View"/>) — this is a report, not the
+    /// sensitive money-moving action (that's <see cref="OpsPermissions.Balances.Adjust"/>, above).
+    /// </summary>
+    private static async Task<IResult> HistoryAsync(
+        Guid id, ILedgerQuery ledger, IAssetCatalog assets, HttpContext http,
+        string? chain = null, string? coin = null,
+        DateTimeOffset? fromDate = null, DateTimeOffset? toDate = null,
+        int page = 1, int pageSize = 50)
+    {
+        if (page < 1) page = 1;
+        if (pageSize < 1) pageSize = 50;
+        if (pageSize > 200) pageSize = 200;
+
+        Guid? assetId = null;
+        if (!string.IsNullOrWhiteSpace(coin))
+        {
+            if (string.IsNullOrWhiteSpace(chain) || !Enum.TryParse<Chain>(chain, ignoreCase: true, out var parsedChain))
+                return Bad("chain is required (and must be a known chain) when coin is set.");
+
+            var asset = await assets.FindAsync(parsedChain, coin.Trim().ToUpperInvariant(), http.RequestAborted);
+            if (asset is null)
+                return Bad($"Unknown coin '{coin}' on {parsedChain}.");
+
+            assetId = asset.AssetId;
+        }
+
+        var (items, total) = await ledger.GetMerchantBalanceHistoryAsync(id, assetId, fromDate, toDate, page, pageSize, http.RequestAborted);
+
+        // Resolve each row's coin/network/decimals once per distinct asset, not once per row.
+        var assetsById = new Dictionary<Guid, AssetDto?>();
+        foreach (var distinctAssetId in items.Select(i => i.AssetId).Distinct())
+            assetsById[distinctAssetId] = await assets.FindByIdAsync(distinctAssetId, http.RequestAborted);
+
+        return Results.Ok(new
+        {
+            isSuccess = true,
+            data = new
+            {
+                merchantId = id,
+                page,
+                pageSize,
+                totalCount = total,
+                items = items.Select(i =>
+                {
+                    var asset = assetsById.GetValueOrDefault(i.AssetId);
+                    var decimals = asset?.Decimals ?? 6;
+                    return new
+                    {
+                        journalId = i.JournalId,
+                        type = FriendlyType(i.ReferenceType, i.Direction),
+                        referenceType = i.ReferenceType,
+                        referenceId = i.ReferenceId,
+                        direction = i.Direction,
+                        amount = AmountConversion.ToDisplay(i.Amount, decimals),
+                        amountBaseUnits = i.Amount.ToString(),
+                        assetId = i.AssetId,
+                        coin = asset?.Symbol,
+                        network = asset?.Chain.ToString(),
+                        reason = i.Description,
+                        createdAt = i.CreatedAt,
+                    };
+                }),
+            },
+            error = (string?)null,
+        });
+    }
+
+    /// <summary>
+    /// A frontend-friendly category for a balance-history row, derived from the raw
+    /// <c>(ReferenceType, Direction)</c> pair. <c>Adjustment</c> is the one reference type that needs
+    /// <paramref name="direction"/> to disambiguate — every other reference type only ever moves the
+    /// merchant's liability in one fixed direction.
+    /// </summary>
+    private static string FriendlyType(string referenceType, string direction) => (referenceType, direction) switch
+    {
+        ("Deposit", _) => "deposit",
+        ("DepositReversal", _) => "deposit_reversal",
+        ("WithdrawalReserve", _) => "withdrawal_reserve",
+        ("WithdrawalRelease", _) => "withdrawal_release",
+        ("Adjustment", "Credit") => "manual_credit",
+        ("Adjustment", "Debit") => "manual_debit",
+        _ => "other",
+    };
 
     /// <summary>Shared validation: merchant exists, chain/coin resolve to a known asset, amount is a storable
     /// positive base-unit value at the asset's precision. Returns a non-null <c>Error</c> IResult on any failure.</summary>
