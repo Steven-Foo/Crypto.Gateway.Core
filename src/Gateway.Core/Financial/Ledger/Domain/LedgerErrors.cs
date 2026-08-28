@@ -46,6 +46,9 @@ public static class LedgerErrors
     public static readonly Error InsufficientBalance =
         Error.Conflict("ledger.insufficient_balance", "The merchant's balance is insufficient for this withdrawal.");
 
+    public static readonly Error InsufficientBalanceForAdjustment =
+        Error.Conflict("ledger.insufficient_balance_for_adjustment", "The merchant's balance is insufficient for this manual debit.");
+
     public static readonly Error NotFound =
         Error.NotFound("ledger.not_found", "Ledger record not found.");
 }

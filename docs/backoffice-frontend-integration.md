@@ -168,6 +168,7 @@ The full, current list (also use this endpoint at runtime — don't hardcode, th
 | `ops.audit.view` | Search the audit log |
 | `ops.wallets.view` | Search/browse wallets |
 | `ops.wallets.manage` | Suspend/resume a wallet |
+| `ops.balances.adjust` | Manually credit/debit a merchant's ledger balance — granted to the Admin role only by default (see §9a) |
 
 ---
 
@@ -305,7 +306,22 @@ Paginated. Row (`MerchantAdminView`):
 `Active` immediately on creation.
 
 ### `GET /api/v1/ops/merchants/{id}` — `ops.merchants.view`
-Same row shape, single object.
+`data` is the same row shape as the list above, **unchanged** — this is a deployed contract and stays flat.
+A new **sibling field**, `balances`, rides alongside it in the same response with the merchant's ledger
+balance for every active asset (zero balances are included, not omitted, so the array's length is stable):
+```json
+{
+  "isSuccess": true,
+  "data": { "merchantId": "guid", "merchantCode": "ACME-1", "...": "..." },
+  "balances": [
+    { "assetId": "guid", "network": "Tron", "coin": "USDT", "balance": 1250.5, "balanceBaseUnits": "1250500000" }
+  ],
+  "error": null
+}
+```
+`balance` is the usual display decimal (§5); `balanceBaseUnits` is the exact integer in base units as a
+**string** (same "watch this one" exception as §17's ledger search) — prefer it over `balance` for anything
+that needs to round-trip exactly, since `balance` can lose precision once cast through a client-side float.
 
 ### `GET /api/v1/ops/merchants/{id}/allowed-ips` — `ops.merchants.view`
 ```json
@@ -375,6 +391,52 @@ Response:
 ```json
 { "merchantId": "guid", "allowedIps": ["1.2.3.4"], "invalidIps": [], "cloudflare": { "added": 1, "removed": 0 } }
 ```
+
+---
+
+## 9a. Merchant balance — manual credit/debit
+
+A staff-initiated correction to a merchant's ledger balance — **not** backed by a real on-chain
+deposit/withdrawal (e.g. a support-ticket goodwill credit, or clawing back an over-credit). Gated on
+`ops.balances.adjust`, which is deliberately **not** granted by `ops.merchants.manage` or bundled into any
+other code — by default only the seeded Admin role (`"*"`) can call these two endpoints; a custom role needs
+this exact code added explicitly via §6. Posts immediately — there is no second-approver/threshold step
+today, regardless of amount, so treat this as a sensitive, rarely-used action in the UI (e.g. a confirmation
+dialog), not a routine one. Every call is fully audit-logged (§8: `merchant.balance_credited` /
+`merchant.balance_debited`, with the amount/asset/reason in `reason`).
+
+Both endpoints share the same request body:
+```json
+{
+  "chain": "Tron",
+  "coin": "USDT",
+  "amount": 50.0,
+  "reason": "string, required, max 512 — shown in the audit log, make it meaningful",
+  "adjustmentId": "guid, optional"
+}
+```
+`amount` is a **display-unit decimal** (§5), like everywhere else except §9a's own balance field and §17.
+`adjustmentId` is optional — omit it for a normal one-off action; supply a stable value (e.g. a support-ticket
+id) if the client might retry the same logical request, so a retried call replays safely instead of posting
+twice. There is no idempotency without it beyond the usual "don't double-click" UI care.
+
+### `POST /api/v1/ops/merchants/{id}/balance/credit` — `ops.balances.adjust`
+Adds `amount` to the merchant's balance. Response:
+```json
+{ "isSuccess": true, "data": { "merchantId": "guid", "assetId": "guid", "coin": "USDT", "network": "Tron", "outcome": "Posted" }, "error": null }
+```
+`outcome` is `"Posted"` normally, or `"AlreadyPosted"` if `adjustmentId` matches a prior call (safe replay,
+nothing double-credited).
+
+### `POST /api/v1/ops/merchants/{id}/balance/debit` — `ops.balances.adjust`
+Subtracts `amount` from the merchant's balance. Same response shape as credit.
+**409** if the merchant's current balance is smaller than `amount` — the merchant's real, spendable ledger
+balance is the only thing that gates a debit (never the platform's own running credit/debit history), so
+this is a straightforward "not enough funds" the UI should surface plainly, same as an insufficient-balance
+withdrawal.
+
+Both endpoints: 404 if the merchant `id` doesn't exist; 400 for an unrecognized `chain`/`coin` or an `amount`
+that's non-positive or finer than the asset's decimal precision.
 
 ---
 

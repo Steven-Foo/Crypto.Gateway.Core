@@ -165,6 +165,7 @@ app.MapOpsMerchantApi();
 app.MapOpsMerchantFeeApi();
 app.MapOpsWalletApi();
 app.MapOpsMerchantSettlementApi();
+app.MapOpsMerchantBalanceApi();
 app.MapOpsPaymentIntentApi();
 app.MapOpsTransactionApi();
 app.MapOpsDepositTransactionApi();

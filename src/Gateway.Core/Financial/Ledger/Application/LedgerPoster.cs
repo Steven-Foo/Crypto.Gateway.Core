@@ -27,6 +27,24 @@ public sealed record SettleWithdrawalCommand(Guid WithdrawalId, Guid MerchantId,
 public sealed record ReleaseWithdrawalCommand(Guid WithdrawalId, Guid MerchantId, Guid AssetId, BigInteger Amount, BigInteger Fee);
 
 /// <summary>
+/// A staff-initiated manual credit to a merchant's balance — NOT backed by a real on-chain deposit, so it
+/// must never touch <see cref="AccountType.TreasuryAsset"/> (Reconciliation compares that against real
+/// on-chain balances; a manual credit posted there would create a permanent false drift). <paramref name="Reason"/>
+/// is mandatory (enforced by the caller — an Ops endpoint) and lands in the journal description for audit.
+/// <paramref name="AdjustmentId"/> is the idempotency key with <see cref="JournalReferenceType.Adjustment"/>;
+/// omit it to mint a fresh one, or supply a stable value so a retried staff action replays safely instead of
+/// double-posting.
+/// </summary>
+public sealed record CreditMerchantBalanceCommand(Guid MerchantId, Guid AssetId, BigInteger Amount, string Reason, Guid? AdjustmentId = null);
+
+/// <summary>
+/// The mirror of <see cref="CreditMerchantBalanceCommand"/>: a staff-initiated manual debit. Guarded by the
+/// exact same atomic negative-balance check a withdrawal reserve uses — it can never overdraw the merchant,
+/// regardless of concurrent activity.
+/// </summary>
+public sealed record DebitMerchantBalanceCommand(Guid MerchantId, Guid AssetId, BigInteger Amount, string Reason, Guid? AdjustmentId = null);
+
+/// <summary>
 /// Book the native-coin (gas/energy) cost the platform bore for one on-chain operation. <paramref name="ReferenceId"/>
 /// is the operation's id (e.g. the withdrawal id) — the idempotency key with <c>GasCost</c>. <paramref name="GasAssetId"/>
 /// denominates the fee (TRX for TRON); <paramref name="FeeSun"/> is the fee in that asset's base units.
@@ -45,6 +63,10 @@ public interface ILedgerPoster
     Task<Result<PostingOutcome>> ReleaseWithdrawalAsync(ReleaseWithdrawalCommand command, CancellationToken cancellationToken = default);
 
     Task<Result<PostingOutcome>> RecordGasSpentAsync(RecordGasSpentCommand command, CancellationToken cancellationToken = default);
+
+    Task<Result<PostingOutcome>> CreditMerchantBalanceAsync(CreditMerchantBalanceCommand command, CancellationToken cancellationToken = default);
+
+    Task<Result<PostingOutcome>> DebitMerchantBalanceAsync(DebitMerchantBalanceCommand command, CancellationToken cancellationToken = default);
 }
 
 /// <summary>
@@ -178,6 +200,72 @@ public sealed class LedgerPoster(
 
         var description = command.Description ?? $"Gas cost ({command.ReferenceType})";
         return await PostAsync(JournalReferenceType.GasCost, command.ReferenceId, command.GasAssetId, merchantId: null, description, lines, cancellationToken);
+    }
+
+    /// <summary>
+    /// Manual credit: DEBIT ManualAdjustmentCredit (a one-directional, non-reconciled bucket — never
+    /// TreasuryAsset), CREDIT MerchantLiability. Idempotent on <c>(Adjustment, adjustmentId)</c> — a retried
+    /// staff action with the same id safely no-ops instead of double-crediting. Split from the debit side's
+    /// account (<see cref="AccountType.ManualAdjustmentDebit"/>) so this account only ever grows from zero and
+    /// can never itself trip the negative-balance guard.
+    /// </summary>
+    public async Task<Result<PostingOutcome>> CreditMerchantBalanceAsync(CreditMerchantBalanceCommand command, CancellationToken cancellationToken = default)
+    {
+        if (command.Amount <= BigInteger.Zero || !MoneyLimits.IsStorable(command.Amount))
+            return Result.Failure<PostingOutcome>(LedgerErrors.NonPositiveAmount);
+
+        var adjustment = await accounts.GetOrCreateAsync(AccountType.ManualAdjustmentCredit, OwnerType.System, null, command.AssetId, cancellationToken);
+        var liability = await accounts.GetOrCreateAsync(AccountType.MerchantLiability, OwnerType.Merchant, command.MerchantId, command.AssetId, cancellationToken);
+
+        List<PostingLine> lines =
+        [
+            PostingLine.Debit(adjustment.Id, command.Amount),
+            PostingLine.Credit(liability.Id, command.Amount),
+        ];
+
+        return await PostAsync(
+            JournalReferenceType.Adjustment, command.AdjustmentId ?? Guid.CreateVersion7(), command.AssetId, command.MerchantId,
+            $"Manual credit: {command.Reason}", lines, cancellationToken);
+    }
+
+    /// <summary>
+    /// Manual debit: the mirror of <see cref="CreditMerchantBalanceAsync"/> — DEBIT MerchantLiability, CREDIT
+    /// ManualAdjustmentDebit (its own one-directional bucket, distinct from the credit side's — so how much
+    /// has ever been manually credited can never gate whether a debit is allowed; only the merchant's own
+    /// liability balance does). The negative-balance guard (same mechanism a withdrawal reserve relies on)
+    /// rejects an overdraw atomically; translated to a clean
+    /// <see cref="LedgerErrors.InsufficientBalanceForAdjustment"/> rather than surfacing as an incident.
+    /// </summary>
+    public async Task<Result<PostingOutcome>> DebitMerchantBalanceAsync(DebitMerchantBalanceCommand command, CancellationToken cancellationToken = default)
+    {
+        if (command.Amount <= BigInteger.Zero || !MoneyLimits.IsStorable(command.Amount))
+            return Result.Failure<PostingOutcome>(LedgerErrors.NonPositiveAmount);
+
+        var adjustment = await accounts.GetOrCreateAsync(AccountType.ManualAdjustmentDebit, OwnerType.System, null, command.AssetId, cancellationToken);
+        var liability = await accounts.GetOrCreateAsync(AccountType.MerchantLiability, OwnerType.Merchant, command.MerchantId, command.AssetId, cancellationToken);
+
+        List<PostingLine> lines =
+        [
+            PostingLine.Debit(liability.Id, command.Amount),
+            PostingLine.Credit(adjustment.Id, command.Amount),
+        ];
+
+        var journal = Journal.Post(
+            JournalReferenceType.Adjustment, command.AdjustmentId ?? Guid.CreateVersion7(), command.AssetId, command.MerchantId,
+            $"Manual debit: {command.Reason}", lines, timeProvider.GetUtcNow());
+
+        if (journal.IsFailure)
+            return Result.Failure<PostingOutcome>(journal.Error!);
+
+        try
+        {
+            var outcome = await postingStore.PostAsync(journal.Value, cancellationToken);
+            return Result.Success(outcome);
+        }
+        catch (LedgerPostingException ex) when (ex.Error.Code == LedgerErrors.BalanceWouldGoNegative.Code)
+        {
+            return Result.Failure<PostingOutcome>(LedgerErrors.InsufficientBalanceForAdjustment);
+        }
     }
 
     private async Task<Result<PostingOutcome>> PostAsync(

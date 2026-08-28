@@ -3,6 +3,8 @@ using CryptoPaymentEngine.Api.OperationsApi.Models;
 using CryptoPaymentEngine.Api.OperationsApi.Security;
 using CryptoPaymentEngine.Api.OperationsApi.Services;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts;
+using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
+using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Application;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.Platform.Audit.Application;
@@ -53,12 +55,34 @@ public static class OpsMerchantEndpoints
         });
     }
 
-    private static async Task<IResult> GetMerchantAsync(Guid id, IMerchantRegistrar registrar, HttpContext http)
+    /// <summary>
+    /// <c>data</c> stays exactly the existing <see cref="MerchantAdminView"/> shape — an already-documented,
+    /// deployed frontend contract — so <c>balances</c> is added as its own sibling field alongside it rather
+    /// than nesting <c>data</c> under a new wrapper.
+    /// </summary>
+    private static async Task<IResult> GetMerchantAsync(
+        Guid id, IMerchantRegistrar registrar, ILedgerQuery ledger, IAssetCatalog assets, HttpContext http)
     {
         var result = await registrar.GetAsync(id, http.RequestAborted);
-        return result.IsFailure
-            ? Results.Json(new { isSuccess = false, error = result.Error!.Message }, statusCode: StatusCodes.Status404NotFound)
-            : Results.Ok(new { isSuccess = true, data = result.Value, error = (string?)null });
+        if (result.IsFailure)
+            return Results.Json(new { isSuccess = false, error = result.Error!.Message }, statusCode: StatusCodes.Status404NotFound);
+
+        var activeAssets = await assets.GetActiveAsync(http.RequestAborted);
+        var balances = new List<object>(activeAssets.Count);
+        foreach (var asset in activeAssets)
+        {
+            var balance = await ledger.GetMerchantBalanceAsync(id, asset.AssetId, http.RequestAborted);
+            balances.Add(new
+            {
+                assetId = asset.AssetId,
+                network = asset.Chain.ToString(),
+                coin = asset.Symbol,
+                balance = AmountConversion.ToDisplay(balance, asset.Decimals),
+                balanceBaseUnits = balance.ToString(),
+            });
+        }
+
+        return Results.Ok(new { isSuccess = true, data = result.Value, balances, error = (string?)null });
     }
 
     private static async Task<IResult> SetStatusAsync(

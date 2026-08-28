@@ -90,6 +90,15 @@ public static class OpsPermissions
         public const string View = "ops.energy.view";
     }
 
+    public static class Balances
+    {
+        // Manual credit/debit — moves real merchant liability without an on-chain deposit/withdrawal behind
+        // it, so this code is deliberately granted to Admin only (never bundled with Merchants.Manage). The
+        // balance itself is just part of the merchant details payload, gated by Merchants.View like the rest
+        // of that response — no separate "view" code for it.
+        public const string Adjust = "ops.balances.adjust";
+    }
+
     /// <summary>Every known code, flattened — what backs <c>GET /api/v1/ops/permissions</c> (the catalog a
     /// Roles-editor UI assigns from). Reflection-free on purpose: an explicit list is easier to audit than a
     /// reflective scan, and this file is the one place that has to stay in sync with the endpoints anyway.</summary>
@@ -108,5 +117,6 @@ public static class OpsPermissions
         Treasury.Manage,
         Sweep.View,
         Energy.View,
+        Balances.Adjust,
     ];
 }

@@ -30,6 +30,25 @@ public enum AccountType
     /// total of gas the platform has spent.
     /// </summary>
     PlatformFunding = 6,
+
+    /// <summary>
+    /// The counterparty for a staff-initiated manual CREDIT to a merchant's balance. Debit-normal, and
+    /// deliberately never touched by anything else — the same one-directional shape as
+    /// <see cref="NetworkFeeExpense"/>, so it only ever grows and can never be driven negative by an
+    /// unrelated debit history. Split from <see cref="ManualAdjustmentDebit"/> (rather than one netted
+    /// account) specifically so a legitimate manual debit is never blocked by how much has ever been
+    /// manually credited — only the merchant's own liability balance gates a debit. Deliberately <em>not</em>
+    /// reconciled against any on-chain address, so a manual correction (unlike a real deposit) never desyncs
+    /// Reconciliation's TreasuryAsset-vs-on-chain comparison.
+    /// </summary>
+    ManualAdjustmentCredit = 7,
+
+    /// <summary>
+    /// The mirror of <see cref="ManualAdjustmentCredit"/>, for a staff-initiated manual DEBIT. Credit-normal,
+    /// one-directional (only ever credited, same reasoning as <see cref="PlatformFunding"/>), and — like its
+    /// counterpart — never reconciled against any on-chain address.
+    /// </summary>
+    ManualAdjustmentDebit = 8,
 }
 
 /// <summary>The side on which an account's balance naturally increases.</summary>
