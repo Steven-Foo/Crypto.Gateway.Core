@@ -20,6 +20,27 @@ public sealed record WithdrawalView(
 /// <summary>Ops search filters — every field optional and AND-combined. <see cref="AssetId"/> is resolved
 /// from a "coin" symbol by the caller (the host owns <c>IAssetCatalog</c>, Withdrawal does not — §4.5).
 /// <see cref="Kind"/> is the withdrawal-kind name ("User" | "Merchant"); an unrecognised value is ignored.</summary>
+/// <summary>
+/// The effective-status vocabulary the Ops read rows expose and <see cref="WithdrawalAdminFilter.Status"/>
+/// accepts. Published here (not in Infrastructure) so a host can validate an incoming filter value and return
+/// a 400 — an operator must never be handed a silently empty queue because they typed a status that does not
+/// exist.
+/// </summary>
+public static class WithdrawalEffectiveStatuses
+{
+    public static readonly string[] All =
+    [
+        "pending", "pending_merchant_approval", "pending_approval",
+        "insufficient_balance", "awaiting_release", "confirmed", "failed",
+        // Merchant settlements, which this system records rather than pays: waiting for an admin audit,
+        // waiting for finance to pay it externally, and paid-and-verified.
+        "pending_admin_audit", "pending_finance_transfer", "finance_settled",
+    ];
+
+    public static bool IsKnown(string value) =>
+        All.Contains(value.Trim().ToLowerInvariant());
+}
+
 public sealed record WithdrawalAdminFilter(
     Guid? MerchantId,
     Guid? SystemOrderNumber,
@@ -33,7 +54,13 @@ public sealed record WithdrawalAdminFilter(
     /// <summary>Narrows to any of these merchants — how a merchant-<em>name</em> search (resolved to ids by the
     /// host via Merchant's <c>IMerchantDirectory</c>, §4.5) is expressed here without Withdrawal knowing
     /// Merchant's schema. AND-combined with <see cref="MerchantId"/> if both happen to be set.</summary>
-    IReadOnlyList<Guid>? MerchantIds = null);
+    IReadOnlyList<Guid>? MerchantIds = null,
+    /// <summary>Narrows to one <em>effective</em> status — the collapsed vocabulary the read rows expose
+    /// ("pending", "pending_merchant_approval", "pending_approval", "insufficient_balance",
+    /// "awaiting_release", "confirmed", "failed"), not the domain enum, so the caller filters on exactly what
+    /// it sees. Applied in SQL over the whole result set: without it a settlement queue can only find the work
+    /// that happens to be on the page it loaded. An unrecognised value matches nothing (never everything).</summary>
+    string? Status = null);
 
 /// <summary>The Ops transaction-search read model for one withdrawal. <see cref="Status"/> is the effective,
 /// already-collapsed vocabulary ("pending" | "pending_approval" | "insufficient_balance" | "awaiting_release" |
@@ -57,7 +84,14 @@ public sealed record WithdrawalAdminRow(
     string? TransactionHash,
     Guid? SourceWalletId,
     DateTimeOffset CreatedAt,
-    string Kind);
+    string Kind,
+    /// <summary>Who audited a merchant settlement, who recorded its external payment, and which company
+    /// wallet paid it. All null for a user payout, which this system pays itself.</summary>
+    string? AuditedBy = null,
+    DateTimeOffset? AuditedAt = null,
+    string? CompletedBy = null,
+    DateTimeOffset? CompletedAt = null,
+    string? SettlementSourceAddress = null);
 
 /// <summary>Aggregate totals across the ENTIRE filtered set — not the current page — behind the Ops
 /// withdrawal-transactions screen's summary row. Both sums are exact base-unit integer strings (§14).
@@ -83,4 +117,12 @@ public interface IWithdrawalDirectory
     /// <summary>Same filter as <see cref="SearchAsync"/>, but aggregated over the whole matching set instead
     /// of one page — the Ops screen's summary totals.</summary>
     Task<WithdrawalTotals> GetTotalsAsync(WithdrawalAdminFilter filter, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Count of withdrawals per <em>effective</em> status, as one grouped SQL COUNT — the work-queue summary a
+    /// dashboard shows. Keyed by the same collapsed vocabulary
+    /// (<see cref="WithdrawalEffectiveStatuses"/>) the rows and the status filter use, so the dashboard tile
+    /// and the list it links to can never disagree about what a number means.
+    /// </summary>
+    Task<IReadOnlyDictionary<string, int>> GetStatusCountsAsync(CancellationToken cancellationToken = default);
 }

@@ -39,7 +39,7 @@ public static class OpsSweepEndpoints
         if (!string.IsNullOrWhiteSpace(chain))
         {
             if (!Enum.TryParse<Chain>(chain, ignoreCase: true, out var parsed))
-                return Bad($"Unknown chain '{chain}'.");
+                return Bad(OpsErrorCodes.InvalidChain, $"Unknown chain '{chain}'.");
             chainFilter = parsed;
         }
 
@@ -48,7 +48,7 @@ public static class OpsSweepEndpoints
         {
             normalisedStatus = Statuses.FirstOrDefault(s => string.Equals(s, status, StringComparison.OrdinalIgnoreCase));
             if (normalisedStatus is null)
-                return Bad($"Unknown status '{status}'. Expected one of: {string.Join(", ", Statuses)}.");
+                return Bad(OpsErrorCodes.InvalidStatus, $"Unknown status '{status}'. Expected one of: {string.Join(", ", Statuses)}.");
         }
 
         var filter = new SweepAdminFilter(chainFilter, normalisedStatus, walletId, AssetId: null, fromDate, toDate);
@@ -89,10 +89,9 @@ public static class OpsSweepEndpoints
         {
             isSuccess = true,
             data = new { page, pageSize, totalCount = total, summary, items = rows },
-            error = (string?)null,
+            error = (string?)null, errorCode = (string?)null,
         });
     }
 
-    private static IResult Bad(string message) =>
-        Results.Json(new { isSuccess = false, error = message }, statusCode: StatusCodes.Status400BadRequest);
+    private static IResult Bad(string errorCode, string message) => OpsResults.Bad(errorCode, message);
 }

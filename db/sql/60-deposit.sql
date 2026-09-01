@@ -218,3 +218,24 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [deposit].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260901072830_AddDepositKind'
+)
+BEGIN
+    ALTER TABLE [deposit].[Deposit] ADD [Kind] nvarchar(16) NOT NULL DEFAULT ('Customer');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [deposit].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260901072830_AddDepositKind'
+)
+BEGIN
+    INSERT INTO [deposit].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260901072830_AddDepositKind', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

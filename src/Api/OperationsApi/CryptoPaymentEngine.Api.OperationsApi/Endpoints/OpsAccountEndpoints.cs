@@ -36,7 +36,7 @@ public static class OpsAccountEndpoints
         {
             isSuccess = true,
             data = new { page, pageSize, totalCount = total, items },
-            error = (string?)null,
+            error = (string?)null, errorCode = (string?)null,
         });
     }
 
@@ -44,8 +44,8 @@ public static class OpsAccountEndpoints
     {
         var result = await accounts.GetAsync(id, http.RequestAborted);
         return result.IsFailure
-            ? Fail(result.Error!)
-            : Results.Ok(new { isSuccess = true, data = result.Value, error = (string?)null });
+            ? OpsResults.Fail(result.Error!)
+            : Results.Ok(new { isSuccess = true, data = result.Value, error = (string?)null, errorCode = (string?)null });
     }
 
     private static async Task<IResult> CreateAsync(
@@ -53,7 +53,7 @@ public static class OpsAccountEndpoints
     {
         var result = await accounts.CreateAsync(request.Username, request.RoleId, http.RequestAborted);
         if (result.IsFailure)
-            return Fail(result.Error!);
+            return OpsResults.Fail(result.Error!);
 
         var actor = AuditActor.From(http);
         await audit.LogAsync(new LogAuditEntryCommand(
@@ -70,7 +70,7 @@ public static class OpsAccountEndpoints
                 password = result.Value.Password,
                 warning = "Store this password securely — it will never be shown again.",
             },
-            error = (string?)null,
+            error = (string?)null, errorCode = (string?)null,
         });
     }
 
@@ -80,13 +80,13 @@ public static class OpsAccountEndpoints
         var actor = AuditActor.From(http);
         var result = await accounts.SetStatusAsync(id, request.Active, actor.StaffUserId, http.RequestAborted);
         if (result.IsFailure)
-            return Fail(result.Error!);
+            return OpsResults.Fail(result.Error!);
 
         await audit.LogAsync(new LogAuditEntryCommand(
             actor.StaffUserId, actor.Username, "account.status_changed", "StaffUser", id.ToString(),
             $"active={request.Active}", actor.IpAddress), http.RequestAborted);
 
-        return Results.Ok(new { isSuccess = true, data = result.Value, error = (string?)null });
+        return Results.Ok(new { isSuccess = true, data = result.Value, error = (string?)null, errorCode = (string?)null });
     }
 
     private static async Task<IResult> ChangeRoleAsync(
@@ -94,21 +94,21 @@ public static class OpsAccountEndpoints
     {
         var result = await accounts.ChangeRoleAsync(id, request.RoleId, http.RequestAborted);
         if (result.IsFailure)
-            return Fail(result.Error!);
+            return OpsResults.Fail(result.Error!);
 
         var actor = AuditActor.From(http);
         await audit.LogAsync(new LogAuditEntryCommand(
             actor.StaffUserId, actor.Username, "account.role_changed", "StaffUser", id.ToString(),
             $"roleId={request.RoleId}", actor.IpAddress), http.RequestAborted);
 
-        return Results.Ok(new { isSuccess = true, data = result.Value, error = (string?)null });
+        return Results.Ok(new { isSuccess = true, data = result.Value, error = (string?)null, errorCode = (string?)null });
     }
 
     private static async Task<IResult> ResetPasswordAsync(Guid id, IStaffAccountService accounts, IAuditLogger audit, HttpContext http)
     {
         var result = await accounts.ResetPasswordAsync(id, http.RequestAborted);
         if (result.IsFailure)
-            return Fail(result.Error!);
+            return OpsResults.Fail(result.Error!);
 
         var actor = AuditActor.From(http);
         await audit.LogAsync(new LogAuditEntryCommand(
@@ -125,18 +125,7 @@ public static class OpsAccountEndpoints
                 password = result.Value.Password,
                 warning = "Store this password securely — it will never be shown again.",
             },
-            error = (string?)null,
+            error = (string?)null, errorCode = (string?)null,
         });
-    }
-
-    private static IResult Fail(Error error)
-    {
-        var status = error.Type switch
-        {
-            ErrorType.NotFound => StatusCodes.Status404NotFound,
-            ErrorType.Conflict => StatusCodes.Status409Conflict,
-            _ => StatusCodes.Status400BadRequest,
-        };
-        return Results.Json(new { isSuccess = false, error = error.Message }, statusCode: status);
     }
 }

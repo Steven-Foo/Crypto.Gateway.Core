@@ -75,7 +75,33 @@ public sealed class PaymentIntentDirectory(PaymentIntentDbContext context, TimeP
             totalExpected.ToString(CultureInfo.InvariantCulture), distinctAssetCount, matchedDepositIds);
     }
 
-    private IQueryable<PaymentIntentEntity> Filtered(PaymentIntentAdminFilter filter) =>
+    private IQueryable<PaymentIntentEntity> Filtered(PaymentIntentAdminFilter filter)
+    {
+        var query = FilteredCore(filter);
+        if (string.IsNullOrWhiteSpace(filter.Status))
+            return query;
+
+        // The inverse of EffectiveStatus, and it must stay that way: a filter that disagreed with the
+        // projection would exclude rows the same screen labels with the exact status being filtered on.
+        // "expired"/"pending" straddle the Waiting status on the clock, so both compare ExpiresAt against the
+        // same `now` the projection uses — captured once here so paging is consistent within a request.
+        var now = timeProvider.GetUtcNow();
+
+        return filter.Status.Trim().ToLowerInvariant() switch
+        {
+            "confirmed" => query.Where(i => i.Status == PaymentIntentStatus.Matched),
+            "failed" => query.Where(i => i.Status == PaymentIntentStatus.Failed),
+            "expired" => query.Where(i =>
+                i.Status == PaymentIntentStatus.Expired
+                || (i.Status == PaymentIntentStatus.Waiting && now >= i.ExpiresAt)),
+            "pending" => query.Where(i => i.Status == PaymentIntentStatus.Waiting && now < i.ExpiresAt),
+            // Unknown value ⇒ no rows. Never every row: an operator filtering a queue must not be shown the
+            // unfiltered set as though it were the match.
+            _ => query.Where(i => false),
+        };
+    }
+
+    private IQueryable<PaymentIntentEntity> FilteredCore(PaymentIntentAdminFilter filter) =>
         context.PaymentIntents.AsNoTracking()
             .Where(i => filter.MerchantId == null || i.MerchantId == filter.MerchantId)
             .Where(i => filter.MerchantIds == null || filter.MerchantIds.Contains(i.MerchantId))

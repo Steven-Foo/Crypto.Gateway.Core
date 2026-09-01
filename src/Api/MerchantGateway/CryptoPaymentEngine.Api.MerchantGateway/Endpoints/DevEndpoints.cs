@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Mvc;
 using System.Collections.Concurrent;
 using System.Globalization;
 using System.Numerics;
@@ -239,9 +240,12 @@ public static class DevEndpoints
         // would REALLY cost right now (a brand-new recipient costs meaningfully more than one who already
         // holds the token; the fixed 131,000 safety default doesn't know the difference). Only registered
         // when the real TRON engine is wired (Withdrawal:LiveTron=true); estimator is null otherwise.
+        // [FromServices] on the estimator is REQUIRED, not decoration: a *nullable* service parameter is not
+        // inferred as a service, so minimal APIs treat it as a body parameter — which on a MapGet throws at
+        // routing-build time and takes down EVERY endpoint in this host, not just this one.
         group.MapGet("/estimate-energy", async (
             string chain, string from, string to, decimal amount, string? assetSymbol,
-            IAssetCatalog assets, IEnergyEstimator? estimator, HttpContext http) =>
+            IAssetCatalog assets, [FromServices] IEnergyEstimator? estimator, HttpContext http) =>
         {
             if (estimator is null)
             {

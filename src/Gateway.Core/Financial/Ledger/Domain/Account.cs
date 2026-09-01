@@ -85,6 +85,8 @@ public sealed class Account : Entity<Guid>
         AccountType.FeeRevenue => NormalSide.Credit,
         AccountType.WithdrawalClearing => NormalSide.Credit,
         AccountType.PlatformFunding => NormalSide.Credit,
+        AccountType.WithdrawalWalletTopUp => NormalSide.Credit,
+        AccountType.ExternalSettlement => NormalSide.Credit,
         AccountType.ManualAdjustmentCredit => NormalSide.Debit,
         AccountType.ManualAdjustmentDebit => NormalSide.Credit,
         _ => throw new ArgumentOutOfRangeException(nameof(type), type, "Unknown account type has no defined normal side."),

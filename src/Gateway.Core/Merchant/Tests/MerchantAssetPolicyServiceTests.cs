@@ -39,7 +39,7 @@ public sealed class MerchantAssetPolicyServiceTests
         var merchant = ActiveMerchant();
         var (service, repo) = Compose(merchant);
 
-        var result = await service.SetFeesAsync(merchant.Id, Asset, new BigInteger(5), 100, new BigInteger(3), 50, Ct);
+        var result = await service.SetFeesAsync(merchant.Id, Asset, new BigInteger(5), 100, new BigInteger(3), 50, cancellationToken: Ct);
 
         result.IsSuccess.ShouldBeTrue();
         repo.Saves.ShouldBe(1);
@@ -79,7 +79,7 @@ public sealed class MerchantAssetPolicyServiceTests
     {
         var merchant = ActiveMerchant();
         var (service, _) = Compose(merchant);
-        await service.SetFeesAsync(merchant.Id, Asset, new BigInteger(5), 100, new BigInteger(3), 50, Ct);
+        await service.SetFeesAsync(merchant.Id, Asset, new BigInteger(5), 100, new BigInteger(3), 50, cancellationToken: Ct);
 
         // Set only a maximum; minimum stays unset (null ⇒ config default).
         await service.SetWithdrawalLimitsAsync(merchant.Id, Asset, null, new BigInteger(9_000), Ct);
@@ -113,7 +113,7 @@ public sealed class MerchantAssetPolicyServiceTests
         merchant.SetAssetPolicy(Asset, new BigInteger(100), new BigInteger(10), new BigInteger(1000), FeeSchedule.None, Now);
         var (service, _) = Compose(merchant);
 
-        var result = await service.SetFeesAsync(merchant.Id, Asset, new BigInteger(7), 200, new BigInteger(4), 25, Ct);
+        var result = await service.SetFeesAsync(merchant.Id, Asset, new BigInteger(7), 200, new BigInteger(4), 25, cancellationToken: Ct);
 
         result.IsSuccess.ShouldBeTrue();
         var policy = merchant.AssetPolicies.ShouldHaveSingleItem();
@@ -130,8 +130,9 @@ public sealed class MerchantAssetPolicyServiceTests
         var merchant = ActiveMerchant();
         var (service, repo) = Compose(merchant);
 
-        // 10000 bps = 100% deposit fee — unsolvable gross-up, rejected by FeeSchedule.Create.
-        var result = await service.SetFeesAsync(merchant.Id, Asset, BigInteger.Zero, 10_000, BigInteger.Zero, 0, Ct);
+        // 10001 bps is over 100% — meaningless at any rate, rejected by FeeSchedule.Create. (100% itself is
+        // now accepted, since the fee is deducted rather than grossed up.)
+        var result = await service.SetFeesAsync(merchant.Id, Asset, BigInteger.Zero, 10_001, BigInteger.Zero, 0, cancellationToken: Ct);
 
         result.IsFailure.ShouldBeTrue();
         result.Error!.Code.ShouldBe(MerchantErrors.FeeBpsInvalid.Code);
@@ -144,7 +145,7 @@ public sealed class MerchantAssetPolicyServiceTests
     {
         var (service, _) = Compose(ActiveMerchant());
 
-        var result = await service.SetFeesAsync(Guid.CreateVersion7(), Asset, BigInteger.Zero, 100, BigInteger.Zero, 0, Ct);
+        var result = await service.SetFeesAsync(Guid.CreateVersion7(), Asset, BigInteger.Zero, 100, BigInteger.Zero, 0, cancellationToken: Ct);
 
         result.IsFailure.ShouldBeTrue();
         result.Error!.Code.ShouldBe(MerchantErrors.NotFound.Code);
@@ -157,7 +158,7 @@ public sealed class MerchantAssetPolicyServiceTests
         merchant.Close(Now);
         var (service, repo) = Compose(merchant);
 
-        var result = await service.SetFeesAsync(merchant.Id, Asset, BigInteger.Zero, 100, BigInteger.Zero, 0, Ct);
+        var result = await service.SetFeesAsync(merchant.Id, Asset, BigInteger.Zero, 100, BigInteger.Zero, 0, cancellationToken: Ct);
 
         result.IsFailure.ShouldBeTrue();
         result.Error!.Code.ShouldBe(MerchantErrors.Closed.Code);
@@ -169,7 +170,7 @@ public sealed class MerchantAssetPolicyServiceTests
     {
         var merchant = ActiveMerchant();
         var (service, _) = Compose(merchant);
-        await service.SetFeesAsync(merchant.Id, Asset, new BigInteger(5), 100, new BigInteger(3), 50, Ct);
+        await service.SetFeesAsync(merchant.Id, Asset, new BigInteger(5), 100, new BigInteger(3), 50, cancellationToken: Ct);
 
         var list = await service.ListAsync(merchant.Id, Ct);
 
@@ -219,7 +220,7 @@ public sealed class MerchantAssetPolicyServiceTests
     {
         var merchant = ActiveMerchant();
         var (service, _) = Compose(merchant);
-        await service.SetFeesAsync(merchant.Id, Asset, new BigInteger(5), 100, new BigInteger(3), 50, Ct);
+        await service.SetFeesAsync(merchant.Id, Asset, new BigInteger(5), 100, new BigInteger(3), 50, cancellationToken: Ct);
 
         await service.SetMerchantWithdrawalCapAsync(merchant.Id, Asset, null, 5000, Ct);
 
@@ -263,7 +264,7 @@ public sealed class MerchantAssetPolicyServiceTests
     {
         var merchant = ActiveMerchant();
         var (service, _) = Compose(merchant);
-        await service.SetFeesAsync(merchant.Id, Asset, new BigInteger(5), 100, new BigInteger(3), 50, Ct);
+        await service.SetFeesAsync(merchant.Id, Asset, new BigInteger(5), 100, new BigInteger(3), 50, cancellationToken: Ct);
         await service.SetMerchantWithdrawalCapAsync(merchant.Id, Asset, null, 5000, Ct);
 
         await service.SetApprovalThresholdAsync(merchant.Id, Asset, new BigInteger(2_000_000), Ct);

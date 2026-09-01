@@ -8,20 +8,41 @@ namespace CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application;
 
 /// <summary>
 /// Credit a confirmed deposit to a merchant. <paramref name="Amount"/> is the gross received (base units);
-/// <paramref name="Fee"/> is the platform's deposit fee, taken off the top so the merchant is credited
-/// <c>Amount − Fee</c> and the platform earns <c>Fee</c> (payer-on-top pricing). Fee defaults to zero.
+/// <paramref name="Fee"/> is the platform's fee, deducted from what arrived so the merchant is credited
+/// <c>Amount − Fee</c> and the platform earns <c>Fee</c>. The payer is never charged more than the invoice
+/// states. Fee defaults to zero. <paramref name="IsTopUp"/> selects the journal reference type, which is what
+/// exempts a merchant top-up from the T+N settlement hold (see <c>LedgerQuery</c>).
 /// </summary>
-public sealed record CreditDepositCommand(Guid DepositId, Guid MerchantId, Guid AssetId, BigInteger Amount, BigInteger Fee = default, string? Description = null);
+public sealed record CreditDepositCommand(Guid DepositId, Guid MerchantId, Guid AssetId, BigInteger Amount, BigInteger Fee = default, string? Description = null, bool IsTopUp = false);
 
 /// <summary>
 /// Reverse a previously-credited deposit that was orphaned by a reorg. Posts a compensating journal — never
 /// edits. Must reverse the <em>same</em> split that was credited, so the caller passes the identical
 /// <paramref name="Fee"/> (derived deterministically from the same confirmed amount).
 /// </summary>
-public sealed record ReverseDepositCommand(Guid DepositId, Guid MerchantId, Guid AssetId, BigInteger Amount, BigInteger Fee = default, string? Description = null);
+public sealed record ReverseDepositCommand(Guid DepositId, Guid MerchantId, Guid AssetId, BigInteger Amount, BigInteger Fee = default, string? Description = null, bool IsTopUp = false);
 
-/// <summary>Settle a confirmed withdrawal: funds leave custody, the platform fee becomes revenue.</summary>
-public sealed record SettleWithdrawalCommand(Guid WithdrawalId, Guid MerchantId, Guid AssetId, BigInteger Amount, BigInteger Fee);
+/// <summary>
+/// Settle a confirmed withdrawal: the merchant's reserved funds are discharged and the platform fee becomes
+/// revenue.
+///
+/// <para><paramref name="ExternallySettled"/> selects which account absorbs the amount, and it is the one
+/// field here that must not be got wrong. False (the default, and every automated payout) means the platform
+/// paid from its own hot wallet, so <c>TreasuryAsset</c> is credited — custody genuinely fell. True means an
+/// operations admin paid the merchant from a company wallet outside platform custody, so
+/// <c>ExternalSettlement</c> is credited instead and custody is left alone: no watched address was debited,
+/// and crediting TreasuryAsset would drift reconciliation downward by every such settlement (§14).</para>
+/// </summary>
+public sealed record SettleWithdrawalCommand(
+    Guid WithdrawalId, Guid MerchantId, Guid AssetId, BigInteger Amount, BigInteger Fee, bool ExternallySettled = false);
+
+/// <summary>
+/// Record company funds moved into a hot withdrawal wallet to keep the payout pipeline funded.
+/// <paramref name="TopUpId"/> is the recorded top-up's id — the idempotency key, so re-posting the same
+/// recorded transfer is a no-op. The transfer itself has already happened on-chain and been verified; this
+/// only books it.
+/// </summary>
+public sealed record RecordTopUpCommand(Guid TopUpId, Guid AssetId, BigInteger Amount, string? Description = null);
 
 /// <summary>Release a rejected/failed withdrawal: reserved funds return to the merchant.</summary>
 public sealed record ReleaseWithdrawalCommand(Guid WithdrawalId, Guid MerchantId, Guid AssetId, BigInteger Amount, BigInteger Fee);
@@ -63,6 +84,8 @@ public interface ILedgerPoster
     Task<Result<PostingOutcome>> ReleaseWithdrawalAsync(ReleaseWithdrawalCommand command, CancellationToken cancellationToken = default);
 
     Task<Result<PostingOutcome>> RecordGasSpentAsync(RecordGasSpentCommand command, CancellationToken cancellationToken = default);
+
+    Task<Result<PostingOutcome>> RecordTopUpAsync(RecordTopUpCommand command, CancellationToken cancellationToken = default);
 
     Task<Result<PostingOutcome>> CreditMerchantBalanceAsync(CreditMerchantBalanceCommand command, CancellationToken cancellationToken = default);
 
@@ -135,12 +158,23 @@ public sealed class LedgerPoster(
             return Result.Failure<PostingOutcome>(LedgerErrors.NonPositiveAmount);
 
         var clearing = await accounts.GetOrCreateAsync(AccountType.WithdrawalClearing, OwnerType.System, null, command.AssetId, cancellationToken);
-        var treasury = await accounts.GetOrCreateAsync(AccountType.TreasuryAsset, OwnerType.Treasury, null, command.AssetId, cancellationToken);
+
+        // WHICH account absorbs the amount depends on whether OUR custody actually paid it.
+        //   Automated payout  → the platform's own hot wallet was debited on-chain ⇒ credit TreasuryAsset
+        //                       (custody genuinely fell, and reconciliation must see that).
+        //   Finance settlement → an admin paid from a company wallet outside platform custody ⇒ credit
+        //                       ExternalSettlement. No watched address moved, so touching TreasuryAsset here
+        //                       would decrement custody that never left, drifting reconciliation downward by
+        //                       every settlement ever made (§14).
+        // The merchant side is identical either way: the reserve is discharged and the fee earned.
+        var counterparty = command.ExternallySettled
+            ? await accounts.GetOrCreateAsync(AccountType.ExternalSettlement, OwnerType.System, null, command.AssetId, cancellationToken)
+            : await accounts.GetOrCreateAsync(AccountType.TreasuryAsset, OwnerType.Treasury, null, command.AssetId, cancellationToken);
 
         var lines = new List<PostingLine>
         {
             PostingLine.Debit(clearing.Id, total),
-            PostingLine.Credit(treasury.Id, command.Amount),
+            PostingLine.Credit(counterparty.Id, command.Amount),
         };
 
         if (command.Fee > BigInteger.Zero)
@@ -200,6 +234,35 @@ public sealed class LedgerPoster(
 
         var description = command.Description ?? $"Gas cost ({command.ReferenceType})";
         return await PostAsync(JournalReferenceType.GasCost, command.ReferenceId, command.GasAssetId, merchantId: null, description, lines, cancellationToken);
+    }
+
+    /// <summary>
+    /// Book company funds moved into a hot withdrawal wallet: DEBIT TreasuryAsset (we now hold more crypto in
+    /// an address we watch — without this, reconciliation would report drift equal to every top-up ever made);
+    /// CREDIT WithdrawalWalletTopUp (a System-owned contribution account).
+    ///
+    /// <para>The credit deliberately does NOT touch any merchant account. A top-up is operating liquidity, not
+    /// merchant money, so it must leave <c>merchant withdrawable = deposits − fees − settlements − payouts</c>
+    /// exactly as it was — that invariant holds here by construction, not by convention (§14).</para>
+    /// </summary>
+    public async Task<Result<PostingOutcome>> RecordTopUpAsync(RecordTopUpCommand command, CancellationToken cancellationToken = default)
+    {
+        if (command.Amount <= BigInteger.Zero || !MoneyLimits.IsStorable(command.Amount))
+            return Result.Failure<PostingOutcome>(LedgerErrors.NonPositiveAmount);
+
+        var treasury = await accounts.GetOrCreateAsync(AccountType.TreasuryAsset, OwnerType.Treasury, null, command.AssetId, cancellationToken);
+        var topUp = await accounts.GetOrCreateAsync(AccountType.WithdrawalWalletTopUp, OwnerType.System, null, command.AssetId, cancellationToken);
+
+        List<PostingLine> lines =
+        [
+            PostingLine.Debit(treasury.Id, command.Amount),
+            PostingLine.Credit(topUp.Id, command.Amount),
+        ];
+
+        var description = command.Description ?? "Hot withdrawal wallet top-up";
+        return await PostAsync(
+            JournalReferenceType.WithdrawalWalletTopUp, command.TopUpId, command.AssetId, merchantId: null,
+            description, lines, cancellationToken);
     }
 
     /// <summary>
@@ -284,25 +347,25 @@ public sealed class LedgerPoster(
 
     public Task<Result<PostingOutcome>> CreditDepositAsync(CreditDepositCommand command, CancellationToken cancellationToken = default) =>
         PostDepositAsync(
-            JournalReferenceType.Deposit,
+            command.IsTopUp ? JournalReferenceType.MerchantTopUp : JournalReferenceType.Deposit,
             command.DepositId,
             command.MerchantId,
             command.AssetId,
             command.Amount,
             command.Fee,
-            command.Description ?? "Deposit credit",
+            command.Description ?? (command.IsTopUp ? "Merchant top-up credit" : "Deposit credit"),
             credit: true,
             cancellationToken);
 
     public Task<Result<PostingOutcome>> ReverseDepositAsync(ReverseDepositCommand command, CancellationToken cancellationToken = default) =>
         PostDepositAsync(
-            JournalReferenceType.DepositReversal,
+            command.IsTopUp ? JournalReferenceType.MerchantTopUpReversal : JournalReferenceType.DepositReversal,
             command.DepositId,
             command.MerchantId,
             command.AssetId,
             command.Amount,
             command.Fee,
-            command.Description ?? "Deposit reversal (reorg/orphan)",
+            command.Description ?? (command.IsTopUp ? "Merchant top-up reversal (reorg/orphan)" : "Deposit reversal (reorg/orphan)"),
             credit: false,
             cancellationToken);
 

@@ -25,6 +25,11 @@ public sealed class MerchantAssetPolicyMap : IEntityTypeConfiguration<MerchantAs
         builder.Property(p => p.WithdrawalFee).IsRequired();
         builder.Property(p => p.WithdrawalFeeBps).IsRequired().HasDefaultValue(0);
 
+        // Merchant top-up pricing. Defaults to zero and, unlike deposit/withdrawal, never falls back to the
+        // platform default fee — a merchant is not charged to fund its own float unless staff say so.
+        builder.Property(p => p.TopUpFeeFixed).IsRequired().HasDefaultValueSql("0");
+        builder.Property(p => p.TopUpFeeBps).IsRequired().HasDefaultValue(0);
+
         // Merchant-withdrawal (earnings cash-out) liquidity cap — distinct from the user Min/MaxWithdrawal.
         // Null flat + 0 bps = no cap. BigInteger? → decimal(38,0) nullable.
         builder.Property(p => p.MerchantWithdrawalFlatCap);
@@ -45,12 +50,12 @@ public sealed class MerchantAssetPolicyMap : IEntityTypeConfiguration<MerchantAs
         {
             t.HasCheckConstraint(
                 "CK_MerchantAssetPolicy_NonNegative",
-                "[SweepThreshold] >= 0 AND [WithdrawalFee] >= 0 AND [DepositFeeFixed] >= 0 AND ([MinimumWithdrawal] IS NULL OR [MinimumWithdrawal] >= 0) AND ([MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= 0)");
+                "[SweepThreshold] >= 0 AND [WithdrawalFee] >= 0 AND [DepositFeeFixed] >= 0 AND [TopUpFeeFixed] >= 0 AND ([MinimumWithdrawal] IS NULL OR [MinimumWithdrawal] >= 0) AND ([MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= 0)");
 
-            // Deposit bps stays below 100% so the payer-on-top gross-up is always solvable; withdrawal bps ≤ 100%.
+            // Every fee is deducted from what arrives, so all three rates share the same 0-100% bound.
             t.HasCheckConstraint(
                 "CK_MerchantAssetPolicy_FeeBps",
-                "[DepositFeeBps] >= 0 AND [DepositFeeBps] < 10000 AND [WithdrawalFeeBps] >= 0 AND [WithdrawalFeeBps] <= 10000");
+                "[DepositFeeBps] >= 0 AND [DepositFeeBps] <= 10000 AND [WithdrawalFeeBps] >= 0 AND [WithdrawalFeeBps] <= 10000 AND [TopUpFeeBps] >= 0 AND [TopUpFeeBps] <= 10000");
 
             t.HasCheckConstraint(
                 "CK_MerchantAssetPolicy_WithdrawalRange",

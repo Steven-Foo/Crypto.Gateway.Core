@@ -5,19 +5,19 @@ using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Infrastructure.Mon
 using CryptoPaymentEngine.SharedKernel;
 using MongoDB.Driver;
 using Shouldly;
-using Testcontainers.MongoDb;
 using Xunit;
 
 namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Tests;
 
 /// <summary>
-/// The codebase's first MongoDB store, proven against a real Mongo (Testcontainers): a resource snapshot
+/// The codebase's first MongoDB store, proven against a REAL Mongo — the local service by default, or
+/// whatever <c>CPE_TEST_MONGO</c> points at (see <see cref="MongoTestDatabase"/>). A resource snapshot
 /// upserts and reads back with BigInteger amounts intact (stored as strings, so no precision loss), and a
 /// re-upsert overwrites the wallet's single current document rather than duplicating it.
 /// </summary>
 public sealed class MongoWalletResourceStoreTests : IAsyncLifetime
 {
-    private MongoDbContainer? _container;
+    private MongoClient _client = null!;
     private MongoWalletResourceStore _store = null!;
     private bool _available;
 
@@ -25,34 +25,31 @@ public sealed class MongoWalletResourceStoreTests : IAsyncLifetime
 
     public async ValueTask InitializeAsync()
     {
-        try
-        {
-            // Build() itself validates (and caches) Docker availability, so it must be inside the guard —
-            // no Docker on this host means skip, not fail. Runs in CI / wherever Docker is present.
-            _container = new MongoDbBuilder().Build();
-            await _container.StartAsync(Ct);
-            var database = new MongoClient(_container.GetConnectionString()).GetDatabase("energy_test");
-            _store = new MongoWalletResourceStore(database);
-            _available = true;
-        }
-        catch
-        {
-            _available = false;
-        }
+        // No Mongo reachable means skip, not fail — the same courtesy the SQL tests extend when LocalDB is
+        // absent. The client is configured to give up in seconds rather than the driver's default 30s.
+        _client = MongoTestDatabase.CreateClient();
+        _available = await MongoTestDatabase.IsAvailableAsync(_client, Ct);
+        if (!_available)
+            return;
+
+        // A dedicated test database, dropped on the way in as well as out: a previous run killed mid-test
+        // must not leave documents that make this one pass (or fail) for the wrong reason.
+        await _client.DropDatabaseAsync(MongoTestDatabase.DatabaseName, Ct);
+        _store = new MongoWalletResourceStore(_client.GetDatabase(MongoTestDatabase.DatabaseName));
     }
 
     public async ValueTask DisposeAsync()
     {
-        if (_container is null)
+        if (!_available)
             return;
 
         try
         {
-            await _container.DisposeAsync();
+            await _client.DropDatabaseAsync(MongoTestDatabase.DatabaseName, CancellationToken.None);
         }
         catch
         {
-            // Docker unavailable — there is nothing to tear down.
+            // Teardown is best-effort; a dropped connection here must not fail an otherwise green run.
         }
     }
 
@@ -64,7 +61,7 @@ public sealed class MongoWalletResourceStoreTests : IAsyncLifetime
     [Fact]
     public async Task Upsert_then_get_round_trips_with_exact_big_integers()
     {
-        Assert.SkipUnless(_available, "Docker is not available for the Mongo integration test.");
+        Assert.SkipUnless(_available, $"No MongoDB at {MongoTestDatabase.ConnectionString} — start the local service or set CPE_TEST_MONGO.");
         var walletId = Guid.CreateVersion7();
         await _store.UpsertAsync(Snapshot(walletId, 3_000_000, ResourceHealth.Low), Ct);
 
@@ -83,7 +80,7 @@ public sealed class MongoWalletResourceStoreTests : IAsyncLifetime
     [Fact]
     public async Task Upsert_overwrites_the_current_snapshot_for_a_wallet()
     {
-        Assert.SkipUnless(_available, "Docker is not available for the Mongo integration test.");
+        Assert.SkipUnless(_available, $"No MongoDB at {MongoTestDatabase.ConnectionString} — start the local service or set CPE_TEST_MONGO.");
         var walletId = Guid.CreateVersion7();
         await _store.UpsertAsync(Snapshot(walletId, 3_000_000, ResourceHealth.Low), Ct);
         await _store.UpsertAsync(Snapshot(walletId, 500_000, ResourceHealth.Critical), Ct);

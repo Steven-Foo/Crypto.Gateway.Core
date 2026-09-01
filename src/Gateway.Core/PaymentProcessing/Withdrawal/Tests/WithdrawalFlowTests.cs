@@ -97,6 +97,7 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
         services.AddScoped<IWithdrawalRequestService, WithdrawalRequestService>();
         services.AddScoped<IWithdrawalApprovalService, WithdrawalApprovalService>();
         services.AddScoped<IWithdrawalFundingService, WithdrawalFundingService>();
+        services.AddScoped<IMerchantPayoutApprovalService, MerchantPayoutApprovalService>();
         services.AddScoped<WithdrawalProcessingService>();
         services.AddScoped<WithdrawalConfirmationService>();
         services.AddSingleton(new GasAccountingOptions()); // 5c: empty ⇒ no gas journal (in-memory engine charges no fee anyway)
@@ -392,26 +393,27 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
     }
 
     [Fact]
-    public async Task An_above_threshold_withdrawal_is_held_for_operator_release_even_when_funded()
+    public async Task An_above_threshold_withdrawal_sends_on_a_single_staff_approval()
     {
         await SeedMerchantBalanceAsync(BigInteger.Parse("10000000"));
-        var amount = BigInteger.Parse("6000000"); // above the 5,000,000 threshold → PendingApproval
+        var amount = BigInteger.Parse("6000000"); // above the 5,000,000 threshold -> PendingApproval
 
         var request = await RequestAsync(amount, "idem-large");
         request.Value.Status.ShouldBe(nameof(WithdrawalStatus.PendingApproval));
 
-        // Approve it (first human touch). The float is ample, but a large payout is held for an explicit
-        // release before it sends — the "large = manual" resume rule.
+        // ONE human touch: an explicit staff approval IS the release, so the processing pass must not park the
+        // same payout again on the identical threshold and demand a second action on another screen. The
+        // release path still exists for the insufficient-float hold (covered by the AwaitingFunds test above).
         var w = await SingleWithdrawalAsync();
         await ApproveAsync(w.Id);
-        await ProcessAsync();
 
-        (await SingleWithdrawalAsync()).Status.ShouldBe(WithdrawalStatus.AwaitingRelease);
-        (await SearchStatusAsync(w.Id)).ShouldBe("awaiting_release");
+        var approved = await SingleWithdrawalAsync();
+        approved.ReleasedAt.ShouldNotBeNull();   // approval stamped the release
+        approved.ReleasedBy.ShouldNotBeNull();
 
-        // Operator releases → it sends and settles on the next pass.
-        (await ReleaseAsync(w.Id)).IsSuccess.ShouldBeTrue();
         await ProcessAsync();
+        (await SingleWithdrawalAsync()).Status.ShouldNotBe(WithdrawalStatus.AwaitingRelease);
+
         await ConfirmAsync();
         await DispatchAsync();
 
@@ -626,11 +628,12 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
         public Task<BigInteger> QuoteDepositFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
             Task.FromResult(BigInteger.Zero);
 
+        /// <summary>These fakes exercise paths unrelated to top-up pricing, so a top-up is quoted free.</summary>
+        public Task<BigInteger> QuoteTopUpFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(BigInteger.Zero);
+
         public Task<BigInteger> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
             Task.FromResult(withdrawalFee);
-
-        public Task<Result<BigInteger>> GrossUpDepositAsync(Guid merchantId, Guid assetId, BigInteger netTarget, CancellationToken cancellationToken = default) =>
-            Task.FromResult(Result.Success(netTarget));
     }
 
     private sealed class StubChainStatus : IChainStatusReader
@@ -663,5 +666,127 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
         {
             public ValueTask DisposeAsync() => ValueTask.CompletedTask;
         }
+    }
+
+    /// <summary>A PORTAL-initiated payout — the flag that sends it through the merchant's own approval first.</summary>
+    private async Task<Result<WithdrawalResult>> RequestFromPortalAsync(BigInteger amount, string merchantTransactionId)
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<IWithdrawalRequestService>()
+            .RequestAsync(
+                new RequestWithdrawalCommand(
+                    Merchant, Asset, Chain.Tron, "TDestination", amount, merchantTransactionId,
+                    CallbackUrl: null, RequiresMerchantApproval: true),
+                Ct);
+    }
+
+    private async Task<Result<WithdrawalResult>> MerchantApproveAsync(Guid id, Guid? asMerchant = null)
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<IMerchantPayoutApprovalService>()
+            .ApproveAsync(asMerchant ?? Merchant, id, "merchant-admin", Ct);
+    }
+
+    private async Task<Result<WithdrawalResult>> MerchantRejectAsync(Guid id)
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        return await scope.ServiceProvider.GetRequiredService<IMerchantPayoutApprovalService>()
+            .RejectAsync(Merchant, id, "merchant-admin", "not authorised internally", Ct);
+    }
+
+    [Fact]
+    public async Task A_portal_payout_below_threshold_sends_once_the_merchant_approves()
+    {
+        await SeedMerchantBalanceAsync(BigInteger.Parse("10000000"));
+
+        // Submitted by a merchant user in the portal: it waits for the merchant's OWN approver, NOT the platform.
+        var request = await RequestFromPortalAsync(BigInteger.Parse("3000000"), "portal-small");
+        request.Value.Status.ShouldBe(nameof(WithdrawalStatus.PendingMerchantApproval));
+
+        // The worker must ignore it while it sits there — nothing may move without the merchant's sign-off.
+        await ProcessAsync();
+        (await SingleWithdrawalAsync()).Status.ShouldBe(WithdrawalStatus.PendingMerchantApproval);
+
+        var w = await SingleWithdrawalAsync();
+        (await MerchantApproveAsync(w.Id)).Value.Status.ShouldBe(nameof(WithdrawalStatus.Approved));
+
+        // Below the platform threshold, so merchant approval alone clears it: it now sends automatically.
+        await ProcessAsync();
+        await ConfirmAsync();
+        await DispatchAsync();
+
+        var settled = await SingleWithdrawalAsync();
+        settled.Status.ShouldBe(WithdrawalStatus.Confirmed);
+        settled.MerchantApprovedBy.ShouldBe("merchant-admin");
+        settled.MerchantApprovedAt.ShouldNotBeNull();
+    }
+
+    [Fact]
+    public async Task A_portal_payout_above_threshold_needs_the_merchant_then_the_platform()
+    {
+        await SeedMerchantBalanceAsync(BigInteger.Parse("10000000"));
+
+        var request = await RequestFromPortalAsync(BigInteger.Parse("6000000"), "portal-large"); // > 5,000,000
+        request.Value.Status.ShouldBe(nameof(WithdrawalStatus.PendingMerchantApproval));
+
+        // Merchant approval does NOT let a large payout skip the platform gate.
+        var w = await SingleWithdrawalAsync();
+        (await MerchantApproveAsync(w.Id)).Value.Status.ShouldBe(nameof(WithdrawalStatus.PendingApproval));
+        (await SearchStatusAsync(w.Id)).ShouldBe("pending_approval");
+
+        await ProcessAsync();
+        (await SingleWithdrawalAsync()).Status.ShouldBe(WithdrawalStatus.PendingApproval); // still nothing moves
+
+        // One platform approval then sends it — no separate release step.
+        await ApproveAsync(w.Id);
+        await ProcessAsync();
+        await ConfirmAsync();
+        await DispatchAsync();
+
+        (await SingleWithdrawalAsync()).Status.ShouldBe(WithdrawalStatus.Confirmed);
+    }
+
+    [Fact]
+    public async Task A_merchant_rejection_releases_the_reserved_funds()
+    {
+        await SeedMerchantBalanceAsync(BigInteger.Parse("10000000"));
+        var amount = BigInteger.Parse("3000000");
+
+        var request = await RequestFromPortalAsync(amount, "portal-reject");
+        request.IsSuccess.ShouldBeTrue();
+
+        var w = await SingleWithdrawalAsync();
+        (await MerchantRejectAsync(w.Id)).Value.Status.ShouldBe(nameof(WithdrawalStatus.Rejected));
+
+        // The reserve must come back to the merchant — a rejection cannot strand their money in clearing.
+        await DispatchAsync();
+        (await BalanceAsync(AccountType.WithdrawalClearing, null)).ShouldBe(BigInteger.Zero);
+        (await BalanceAsync(AccountType.MerchantLiability, Merchant)).ShouldBe(BigInteger.Parse("10000000"));
+    }
+
+    [Fact]
+    public async Task Another_merchant_cannot_approve_this_merchants_payout()
+    {
+        await SeedMerchantBalanceAsync(BigInteger.Parse("10000000"));
+        var request = await RequestFromPortalAsync(BigInteger.Parse("3000000"), "portal-tenant");
+        request.IsSuccess.ShouldBeTrue();
+
+        var w = await SingleWithdrawalAsync();
+
+        // The tenant check: a different merchant passing the real withdrawal id gets "not found", and the
+        // payout is left untouched, still awaiting its own merchant's approval.
+        var result = await MerchantApproveAsync(w.Id, asMerchant: Guid.CreateVersion7());
+        result.Error!.Code.ShouldBe(WithdrawalErrors.NotFound.Code);
+        (await SingleWithdrawalAsync()).Status.ShouldBe(WithdrawalStatus.PendingMerchantApproval);
+    }
+
+    [Fact]
+    public async Task An_api_payout_never_waits_for_merchant_approval()
+    {
+        // The frozen HMAC contract is unchanged: the merchant's server already authorised it by signing.
+        await SeedMerchantBalanceAsync(BigInteger.Parse("10000000"));
+
+        var request = await RequestAsync(BigInteger.Parse("3000000"), "api-unchanged");
+        request.Value.Status.ShouldBe(nameof(WithdrawalStatus.Approved));
     }
 }

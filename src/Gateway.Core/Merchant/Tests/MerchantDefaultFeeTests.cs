@@ -35,7 +35,8 @@ public sealed class MerchantDefaultFeeTests
     [Fact]
     public void Invalid_bps_degrades_to_no_default_rather_than_throwing()
     {
-        // 10000 bps deposit = 100% is rejected by FeeSchedule.Create (gross-up unsolvable) ⇒ None, not a crash.
-        Build(10_000, 0).Schedule.ShouldBe(FeeSchedule.None);
+        // 10001 bps deposit is over 100% ⇒ rejected by FeeSchedule.Create ⇒ None, not a crash. (100% itself is
+        // now valid, since fees are deducted from what arrives rather than grossed up onto the payer.)
+        Build(10_001, 0).Schedule.ShouldBe(FeeSchedule.None);
     }
 }

@@ -114,4 +114,97 @@ public sealed class PaymentIntentDirectoryTests : IAsyncLifetime
         totals.DistinctAssetCount.ShouldBe(0);
         totals.MatchedDepositIds.ShouldBeEmpty();
     }
+
+    // ── effective-status filter (REQ-15) ───────────────────────────────────────────────────────────────
+
+    /// <summary>A clock offset from the real one, so a still-Waiting invoice can be observed after its
+    /// expiry without waiting 30 minutes. "expired" is the one effective status that is time-derived rather
+    /// than stored, which is exactly why it needs its own coverage.</summary>
+    private sealed class ShiftedTimeProvider(TimeSpan offset) : TimeProvider
+    {
+        public override DateTimeOffset GetUtcNow() => System.GetUtcNow().Add(offset);
+    }
+
+    private async Task SeedOnePerStatusAsync()
+    {
+        var now = DateTimeOffset.UtcNow;
+
+        Persisted("PI-WAITING", "1000000");
+
+        var matched = Persisted("PI-MATCHED", "1000000");
+        matched.MatchTo(Guid.CreateVersion7(), "0xtxhash", BigInteger.Parse("1000000"), now);
+
+        var expired = Persisted("PI-EXPIRED", "1000000");
+        expired.Expire(now);
+
+        var failed = Persisted("PI-FAILED", "1000000");
+        failed.Fail("cancelled by ops", now);
+
+        await _context.SaveChangesAsync(Ct);
+    }
+
+    /// <summary>
+    /// The load-bearing test, matching the withdrawal side: filtering by each published status returns
+    /// exactly the rows the unfiltered search labels with it. A filter that disagreed with the projection
+    /// would hide invoices behind a filter the operator believes is applied.
+    /// </summary>
+    [Fact]
+    public async Task Filtering_by_each_effective_status_returns_exactly_the_rows_reported_with_it()
+    {
+        await SeedOnePerStatusAsync();
+
+        var unfiltered = FilterFor(Merchant);
+        var (allRows, _) = await _directory.SearchAsync(unfiltered, 1, 100, Ct);
+
+        allRows.Select(r => r.Status).Distinct().Count()
+            .ShouldBe(PaymentIntentEffectiveStatuses.All.Length);
+
+        foreach (var status in PaymentIntentEffectiveStatuses.All)
+        {
+            var expected = allRows.Where(r => r.Status == status)
+                .Select(r => r.MerchantTransactionId).OrderBy(r => r).ToList();
+            var (filtered, totalCount) = await _directory.SearchAsync(unfiltered with { Status = status }, 1, 100, Ct);
+
+            filtered.Select(r => r.MerchantTransactionId).OrderBy(r => r).ToList().ShouldBe(expected, $"status '{status}'");
+            totalCount.ShouldBe(expected.Count, $"status '{status}'");
+        }
+    }
+
+    /// <summary>
+    /// The money-relevant subtlety: a lapsed-but-not-yet-swept invoice is still <c>Waiting</c> in the
+    /// database but already reads "expired" to payer, merchant and Ops. The filter evaluates the same clock
+    /// the projection does, so it must move with it — searching "expired" finds it, "pending" no longer does.
+    /// </summary>
+    [Fact]
+    public async Task A_lapsed_but_unswept_invoice_filters_as_expired_not_pending()
+    {
+        Persisted("PI-LAPSING", "1000000"); // expires 30 minutes out
+        await _context.SaveChangesAsync(Ct);
+
+        var beforeExpiry = FilterFor(Merchant) with { Status = "pending" };
+        var (pendingNow, _) = await _directory.SearchAsync(beforeExpiry, 1, 100, Ct);
+        pendingNow.Select(r => r.MerchantTransactionId).ShouldBe(["PI-LAPSING"]);
+
+        // Same untouched row, same stored status — only the clock moved.
+        var future = new PaymentIntentDirectory(_context, new ShiftedTimeProvider(TimeSpan.FromHours(1)));
+
+        var (pendingLater, _) = await future.SearchAsync(beforeExpiry, 1, 100, Ct);
+        pendingLater.ShouldBeEmpty();
+
+        var (expiredLater, _) = await future.SearchAsync(FilterFor(Merchant) with { Status = "expired" }, 1, 100, Ct);
+        expiredLater.Select(r => r.MerchantTransactionId).ShouldBe(["PI-LAPSING"]);
+        expiredLater.Single().Status.ShouldBe("expired"); // the filter and the label agree
+    }
+
+    [Fact]
+    public async Task An_unknown_status_matches_nothing_rather_than_everything()
+    {
+        await SeedOnePerStatusAsync();
+
+        var (rows, totalCount) = await _directory.SearchAsync(
+            FilterFor(Merchant) with { Status = "not-a-status" }, 1, 100, Ct);
+
+        rows.ShouldBeEmpty();
+        totalCount.ShouldBe(0);
+    }
 }

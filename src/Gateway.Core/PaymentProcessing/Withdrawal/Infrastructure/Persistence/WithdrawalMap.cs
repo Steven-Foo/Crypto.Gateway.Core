@@ -34,6 +34,8 @@ public sealed class WithdrawalMap : IEntityTypeConfiguration<WithdrawalEntity>
         // original lifecycle names, and the extra headroom keeps future statuses from silently truncating.
         builder.Property(w => w.Status).HasConversion<string>().HasMaxLength(24).IsRequired();
         builder.Property(w => w.ApprovedBy).HasMaxLength(128);
+        builder.Property(w => w.MerchantApprovedBy).HasMaxLength(128);
+        builder.Property(w => w.MerchantApprovedAt);
         builder.Property(w => w.SigningRequestId);
 
         // Why the withdrawal is parked (ops trace) + who/when released a large one for send.
@@ -54,6 +56,14 @@ public sealed class WithdrawalMap : IEntityTypeConfiguration<WithdrawalEntity>
         // BigInteger -> decimal(38,0) via UseBigIntegerMoney, same as Amount/Fee — but this is a resource-usage
         // count, not money. Null until confirmed; distinct column, never conflated with Fee (§14).
         builder.Property(w => w.EnergyUsed);
+
+        // Merchant settlement (paid off-system by an admin): who audited it, who recorded the payment, and
+        // which company wallet it came from. All null for a user payout, which never enters the audit queue.
+        builder.Property(w => w.AuditedBy).HasMaxLength(128);
+        builder.Property(w => w.AuditedAt);
+        builder.Property(w => w.CompletedBy).HasMaxLength(128);
+        builder.Property(w => w.CompletedAt);
+        builder.Property(w => w.SettlementSourceAddress).IsUnicode(false).HasMaxLength(128);
 
         builder.Property<byte[]>("RowVersion").IsRowVersion();
 
@@ -82,5 +92,14 @@ public sealed class WithdrawalMap : IEntityTypeConfiguration<WithdrawalEntity>
             .IsUnique()
             .HasFilter("[Status] IN ('Signing', 'Broadcast')")
             .HasDatabaseName("UX_Withdrawal_InFlight_SourceWallet");
+
+        // A settlement transaction hash may back at most ONE withdrawal. An admin records the hash of a
+        // payment they made off-system, so a mispaste — the same transfer entered against two settlements —
+        // would discharge two merchants' reserves against a single real payment. The DB is the arbiter (§7.3),
+        // not application logic. Filtered, because the column is null for every automated payout.
+        builder.HasIndex(w => w.TransactionHash)
+            .IsUnique()
+            .HasFilter("[SettlementSourceAddress] IS NOT NULL AND [TransactionHash] IS NOT NULL")
+            .HasDatabaseName("UX_Withdrawal_SettlementTxHash");
     }
 }

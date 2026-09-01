@@ -14,6 +14,13 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Events;
 /// the fee it charges can never drift from the fee the deposit was priced at (Withdrawal-symmetric). A
 /// pre-fee event (in-flight before this field existed) deserializes it as null ⇒ the Ledger treats it as
 /// zero, collapsing to the original no-fee journal.</para>
+///
+/// <para><b><see cref="Kind"/></b> is "Customer" or "MerchantTopUp" — a merchant paying itself in, versus a
+/// customer paying the merchant. Carried as a <em>string</em>, not the publisher's enum, so a consumer
+/// depends on the shape and not on Deposit's domain type (§4.5, and Kafka-ready by contract §7.5). It
+/// decides which <c>JournalReferenceType</c> the Ledger posts under, which in turn is what exempts a top-up
+/// from the merchant's T+N settlement hold. Null on an event in flight from before this field existed ⇒
+/// treated as "Customer", the correct reading of every deposit that predates top-up.</para>
 /// </summary>
 public sealed record DepositConfirmed(
     Guid EventId,
@@ -27,4 +34,5 @@ public sealed record DepositConfirmed(
     Chain Chain,
     string TransactionHash,
     int OutputIndex,
-    DateTimeOffset ConfirmedAt) : IDomainEvent, IIntegrationEvent;
+    DateTimeOffset ConfirmedAt,
+    string? Kind = null) : IDomainEvent, IIntegrationEvent;

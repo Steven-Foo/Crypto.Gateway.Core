@@ -21,4 +21,11 @@ public interface ICallbackDeliveryQuery
 {
     Task<IReadOnlyDictionary<Guid, CallbackDeliveryStatusView>> GetStatusesAsync(
         CallbackReferenceType referenceType, IReadOnlyCollection<Guid> referenceIds, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Count of callback deliveries per status, as one grouped SQL COUNT — the dashboard work-queue tile.
+    /// Keyed by the same API status vocabulary <see cref="CallbackDeliveryStatusView.Status"/> reports
+    /// ("PendingNotification" / "Notified" / "Abandoned"), so a tile and the list it links to agree.
+    /// </summary>
+    Task<IReadOnlyDictionary<string, int>> GetStatusCountsAsync(CancellationToken cancellationToken = default);
 }

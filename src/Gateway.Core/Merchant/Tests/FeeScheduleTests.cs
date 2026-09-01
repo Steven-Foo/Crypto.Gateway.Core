@@ -20,7 +20,6 @@ public sealed class FeeScheduleTests
     {
         FeeSchedule.None.QuoteDepositFee(1_000_000).ShouldBe(BigInteger.Zero);
         FeeSchedule.None.QuoteWithdrawalFee(1_000_000).ShouldBe(BigInteger.Zero);
-        FeeSchedule.None.GrossUpForDeposit(1_000_000).Value.ShouldBe(new BigInteger(1_000_000));
     }
 
     [Theory]
@@ -48,43 +47,30 @@ public sealed class FeeScheduleTests
             .ShouldBe(BigInteger.Parse(expected));
     }
 
-    [Theory]
-    [InlineData("1000000", "1000", 50)]      // fixed + 0.5%
-    [InlineData("1000000", "0", 250)]        // 2.5%
-    [InlineData("1000000", "500000", 0)]     // fixed only
-    [InlineData("1", "0", 100)]              // tiny target, 1%
-    [InlineData("987654321", "137", 73)]     // awkward numbers
-    public void GrossUpForDeposit_returns_the_minimal_gross_that_nets_at_least_the_target(string net, string depFixed, int depBps)
-    {
-        var target = BigInteger.Parse(net);
-        var fees = Schedule(BigInteger.Parse(depFixed), depBps, 0, 0);
-
-        var gross = fees.GrossUpForDeposit(target).Value;
-        var netAtGross = gross - fees.QuoteDepositFee(gross);
-
-        // The merchant nets at least what they asked, and this is the SMALLEST gross that does so —
-        // one base unit less would short the merchant.
-        netAtGross.ShouldBeGreaterThanOrEqualTo(target);
-        (gross - BigInteger.One - fees.QuoteDepositFee(gross - BigInteger.One)).ShouldBeLessThan(target);
-    }
-
-    [Fact]
-    public void GrossUpForDeposit_with_no_fee_is_the_identity()
-    {
-        var fees = Schedule(0, 0, 0, 0);
-        fees.GrossUpForDeposit(1_000_000).Value.ShouldBe(new BigInteger(1_000_000));
-    }
-
     [Fact]
     public void Create_rejects_a_negative_fixed_fee() =>
         FeeSchedule.Create(BigInteger.MinusOne, 0, 0, 0).Error!.Code.ShouldBe(MerchantErrors.AmountNegative.Code);
 
     [Theory]
     [InlineData(-1)]
-    [InlineData(10_000)]   // 100% deposit fee cannot be grossed up
     [InlineData(10_001)]
     public void Create_rejects_out_of_range_deposit_bps(int bps) =>
         FeeSchedule.Create(0, bps, 0, 0).Error!.Code.ShouldBe(MerchantErrors.FeeBpsInvalid.Code);
+
+    /// <summary>
+    /// 10 000 bps = 100% is now ACCEPTED for a deposit, as it always was for a withdrawal. It used to be
+    /// rejected because the payer-on-top gross-up became unsolvable at 100% — with the fee deducted from what
+    /// arrives instead, the arithmetic is fine (the merchant is simply credited nothing). Absurd, not
+    /// impossible; the platform decides what it charges, and the domain only guards what it cannot compute.
+    /// </summary>
+    [Fact]
+    public void Create_accepts_a_100_percent_deposit_fee_now_that_it_is_deducted_not_grossed_up()
+    {
+        var schedule = FeeSchedule.Create(0, FeeSchedule.MaxBps, 0, 0);
+
+        schedule.IsSuccess.ShouldBeTrue();
+        schedule.Value.QuoteDepositFee(1_000_000).ShouldBe(new BigInteger(1_000_000));
+    }
 
     [Theory]
     [InlineData(-1)]

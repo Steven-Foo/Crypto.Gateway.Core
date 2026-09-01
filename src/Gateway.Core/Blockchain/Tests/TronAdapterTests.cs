@@ -314,6 +314,9 @@ public sealed class TronAdapterTests
 
         public Task<BigInteger> GetNativeBalanceAsync(string evmHexAddress, CancellationToken ct = default) =>
             Task.FromResult(BigInteger.Zero);
+
+        public Task<TronTransactionInfoDto?> GetTransactionInfoAsync(string transactionId, CancellationToken ct = default) =>
+            Task.FromResult<TronTransactionInfoDto?>(null);
     }
 
     [Fact]

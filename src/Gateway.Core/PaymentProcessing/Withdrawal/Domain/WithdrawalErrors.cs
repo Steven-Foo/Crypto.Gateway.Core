@@ -22,6 +22,9 @@ public static class WithdrawalErrors
     public static readonly Error MerchantTransactionIdRequired =
         Error.Validation("withdrawal.merchant_transaction_id_required", "A merchant transaction id is required.");
 
+    public static readonly Error TransactionHashRequired =
+        Error.Validation("withdrawal.transaction_hash_required", "A transaction hash is required to record an external settlement.");
+
     public static readonly Error BelowMinimum =
         Error.Validation("withdrawal.below_minimum", "The amount is below the minimum withdrawal for this asset.");
 
@@ -51,4 +54,12 @@ public static class WithdrawalErrors
 
     public static readonly Error NotFound =
         Error.NotFound("withdrawal.not_found", "Withdrawal not found.");
+
+    /// <summary>The transaction hash is already recorded against another settlement or top-up. Recording it
+    /// twice would discharge two obligations against one real payment.</summary>
+    public static readonly Error DuplicateSettlementHash =
+        Error.Conflict("withdrawal.duplicate_settlement_hash", "That transaction hash has already been recorded.");
+
+    public static readonly Error HotWalletNotFound =
+        Error.NotFound("withdrawal.hot_wallet_not_found", "No hot withdrawal wallet with that id on this chain.");
 }

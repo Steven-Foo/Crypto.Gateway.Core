@@ -52,14 +52,19 @@ public sealed class ReconciliationService(
         var addresses = await GatherControlledAddressesAsync(chain, cancellationToken);
 
         var onChainTotal = BigInteger.Zero;
+        var byLocation = new Dictionary<CustodyLocation, BigInteger>();
         var unreadable = 0;
 
-        foreach (var address in addresses)
+        foreach (var (address, location) in addresses)
         {
             cancellationToken.ThrowIfCancellationRequested();
             try
             {
-                onChainTotal += await balances.GetBalanceAsync(chain, address, asset.AssetId, cancellationToken);
+                var balance = await balances.GetBalanceAsync(chain, address, asset.AssetId, cancellationToken);
+                onChainTotal += balance;
+
+                // Grouped from the SAME read as the total, so the parts can never disagree with the whole.
+                byLocation[location] = byLocation.GetValueOrDefault(location) + balance;
             }
             catch (OperationCanceledException)
             {
@@ -83,9 +88,17 @@ public sealed class ReconciliationService(
                 ? ReconciliationStatus.Balanced
                 : ReconciliationStatus.Drift;
 
+        // How much of the custody is company float rather than merchant money. Read from the ledger, not the
+        // chain: it is an accounting fact about where the funds came from, which no address balance can show.
+        var toppedUp = await ledger.GetWithdrawalWalletTopUpTotalAsync(asset.AssetId, cancellationToken);
+
         var snapshot = new ReconciliationSnapshot(
             chain, asset.AssetId, asset.Symbol, ledgerHolding, onChainTotal, drift, status,
-            addresses.Count, unreadable, timeProvider.GetUtcNow());
+            addresses.Count, unreadable, timeProvider.GetUtcNow(),
+            ColdTreasuryTotal: byLocation.GetValueOrDefault(CustodyLocation.ColdTreasury),
+            HotPoolTotal: byLocation.GetValueOrDefault(CustodyLocation.HotPool),
+            DepositAddressTotal: byLocation.GetValueOrDefault(CustodyLocation.DepositAddress),
+            ToppedUpTotal: toppedUp);
 
         await store.UpsertAsync(snapshot, cancellationToken);
         await history.AppendAsync(snapshot, cancellationToken);
@@ -93,27 +106,54 @@ public sealed class ReconciliationService(
         LogOutcome(snapshot);
     }
 
-    private async Task<IReadOnlyList<string>> GatherControlledAddressesAsync(Chain chain, CancellationToken cancellationToken)
+    /// <summary>
+    /// Every address the platform controls, each tagged with the role it plays in custody. The roles exist so
+    /// the on-chain total can be broken down for an operator; the SET is what matters for correctness — an
+    /// address missing here is drift the audit invents, and an address counted twice is drift it hides.
+    /// </summary>
+    private async Task<IReadOnlyList<(string Address, CustodyLocation Location)>> GatherControlledAddressesAsync(
+        Chain chain, CancellationToken cancellationToken)
     {
         var platform = await platformWallets.GetPlatformWalletsAsync(chain, cancellationToken);
         var deposits = await depositWallets.ListReceivingDepositAddressesAsync(chain, cancellationToken);
 
         // Platform wallets and deposit addresses are disjoint by design, but dedup defensively so an address
         // can never be double-counted into the on-chain total (that would invent or hide drift).
-        var unique = new HashSet<string>(StringComparer.Ordinal);
+        var unique = new Dictionary<string, CustodyLocation>(StringComparer.Ordinal);
+
         foreach (var wallet in platform)
-            unique.Add(wallet.Address);
+        {
+            // The hot pool is what pays user payouts and what an admin tops up; everything else the Wallet
+            // module calls a platform wallet (energy/staking, a future cold reserve) is grouped as Other so
+            // it is still counted, just not mislabelled as float.
+            var location = string.Equals(wallet.WalletType, HotWithdrawalWalletType, StringComparison.OrdinalIgnoreCase)
+                ? CustodyLocation.HotPool
+                : CustodyLocation.Other;
+            unique[wallet.Address] = location;
+        }
+
         foreach (var deposit in deposits)
-            unique.Add(deposit.Address);
+            unique.TryAdd(deposit.Address, CustodyLocation.DepositAddress);
 
         // The cold treasury holds most of the custody post-sweep, and it is not a Wallet-module row (it is
         // watch-only, keyless — homed in Treasury). Include it, or reconciliation would report a huge false
         // drift once sweeping concentrates funds there.
         var cold = await coldTreasury.GetAsync(chain, cancellationToken);
         if (cold.IsSuccess)
-            unique.Add(cold.Value.Address);
+            unique[cold.Value.Address] = CustodyLocation.ColdTreasury;
 
-        return [.. unique];
+        return [.. unique.Select(kv => (kv.Key, kv.Value))];
+    }
+
+    private const string HotWithdrawalWalletType = "HotWithdrawal";
+
+    /// <summary>Which part of the custody topology an address belongs to — a reporting grouping only.</summary>
+    private enum CustodyLocation
+    {
+        ColdTreasury,
+        HotPool,
+        DepositAddress,
+        Other,
     }
 
     private void LogOutcome(ReconciliationSnapshot s)

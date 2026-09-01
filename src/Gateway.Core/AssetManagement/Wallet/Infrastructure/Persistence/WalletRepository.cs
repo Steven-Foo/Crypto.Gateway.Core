@@ -49,7 +49,9 @@ public sealed class WalletRepository(WalletDbContext context) : IWalletRepositor
             .Where(w => filter.MerchantId == null || w.MerchantId == filter.MerchantId)
             .Where(w => filter.Address == null || w.Address == filter.Address)
             .Where(w => filter.Chain == null || w.Chain == filter.Chain)
-            .Where(w => filter.Status == null || w.Status == filter.Status);
+            .Where(w => filter.Status == null || w.Status == filter.Status)
+            .Where(w => filter.WalletType == null || w.WalletType == filter.WalletType)
+            .Where(w => filter.WalletId == null || w.Id == filter.WalletId);
 
         var totalCount = await query.CountAsync(cancellationToken);
 

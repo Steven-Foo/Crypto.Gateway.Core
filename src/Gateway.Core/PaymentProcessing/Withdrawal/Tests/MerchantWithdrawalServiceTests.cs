@@ -71,7 +71,10 @@ public sealed class MerchantWithdrawalServiceTests
         w.Kind.ShouldBe(WithdrawalKind.Merchant);
         w.DestinationAddress.ShouldBe(Settlement);      // resolved server-side, never client-supplied
         w.Fee.ShouldBe(Fee);                            // the same schedule as a user payout
-        w.Status.ShouldBe(WithdrawalStatus.Approved);   // reserved + below the approval threshold
+        // Reserved and below the approval threshold — but a cash-out is NOT paid by this system, so it waits
+        // for an admin to audit it and finance to pay it externally, rather than entering the automated
+        // build/sign/broadcast pipeline a user payout uses.
+        w.Status.ShouldBe(WithdrawalStatus.PendingAdminAudit);
     }
 
     [Fact]
@@ -276,15 +279,21 @@ public sealed class MerchantWithdrawalServiceTests
         public Task<BigInteger> QuoteDepositFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
             Task.FromResult(BigInteger.Zero);
 
+        /// <summary>These fakes exercise paths unrelated to top-up pricing, so a top-up is quoted free.</summary>
+        public Task<BigInteger> QuoteTopUpFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(BigInteger.Zero);
+
         public Task<BigInteger> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
             Task.FromResult(fee);
-
-        public Task<Result<BigInteger>> GrossUpDepositAsync(Guid merchantId, Guid assetId, BigInteger netTarget, CancellationToken cancellationToken = default) =>
-            Task.FromResult(Result.Success(netTarget));
     }
 
     private sealed class FakeLedgerQuery(BigInteger balance, BigInteger? settled = null) : ILedgerQuery
     {
+        public Task<BigInteger> GetWithdrawalWalletTopUpTotalAsync(Guid assetId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(BigInteger.Zero);
+        public Task<BigInteger> GetExternalSettlementTotalAsync(Guid assetId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(BigInteger.Zero);
+
         public Task<BigInteger> GetMerchantBalanceAsync(Guid merchantId, Guid assetId, CancellationToken cancellationToken = default) =>
             Task.FromResult(balance);
 

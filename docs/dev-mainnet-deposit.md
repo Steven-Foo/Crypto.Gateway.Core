@@ -16,11 +16,20 @@ fee split), matched to the invoice, and the **signed merchant callback fire** �
 
 ## 1 · Bring up the backing services
 ```bash
-docker compose up -d          # SQL Server :1433, Redis :6379, Mongo :27017
-./tools/dev/Setup-LocalEnv.ps1   # creates the DB + applies every module's migrations
+docker compose up -d sqlserver redis   # SQL Server :1433, Redis :6379
+./tools/dev/Setup-LocalEnv.ps1         # creates the DB + applies every module's migrations
 ```
-`docker compose up` also runs the Mongo bootstrap on first init. Redis is what lets the outbox dispatch the
-callback — without it, detection credits the ledger but the callback never fires.
+**MongoDB runs natively**, not from compose — the local Windows service on `localhost:27017` (verified on
+8.2; 8.3 does not run on Windows 10, see `db/README.md` §2). Start it from an elevated shell with
+`net start MongoDB`. Do **not** also start the compose `mongodb` service: both bind 27017 and the loser
+fails, which for the Windows service shows up as a silent 30s start timeout with no log written at all.
+
+Apply the Mongo bootstrap once per environment (`db/mongo/00-bootstrap.js`, needs `mongosh` — a separate
+download from the Server MSI). It is optional for a first run: collections auto-create on write, and the
+bootstrap only adds validators + indexes.
+
+Redis is what lets the outbox dispatch the callback — without it, detection credits the ledger but the
+callback never fires.
 
 ## 2 · Configure your secrets (git-ignored)
 Edit **`src/Api/MerchantGateway/CryptoPaymentEngine.Api.MerchantGateway/appsettings.Local.json`** (already

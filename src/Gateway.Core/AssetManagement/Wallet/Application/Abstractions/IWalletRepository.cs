@@ -11,7 +11,13 @@ public sealed record WalletAdminFilter(
     Guid? MerchantId,
     string? Address,
     Chain? Chain,
-    WalletStatus? Status);
+    WalletStatus? Status,
+    /// <summary>Pins to one wallet — how the single-record detail endpoint (REQ-6) reads a wallet without a
+    /// separate by-id Contract method, since this is already a unique narrowing.</summary>
+    Guid? WalletId = null,
+    /// <summary>Narrows to one kind of wallet — Deposit, HotWithdrawal, Energy, … — so the Ops screen can
+    /// isolate (say) the withdrawal hot pool across the WHOLE result set, not just the page it loaded.</summary>
+    WalletType? WalletType = null);
 
 /// <summary>The Ops wallet-search read row.</summary>
 public sealed record WalletAdminRow(

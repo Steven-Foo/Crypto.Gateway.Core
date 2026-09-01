@@ -34,6 +34,7 @@ public sealed class Deposit : Entity<Guid>
         int outputIndex,
         long blockNumber,
         string blockHash,
+        DepositKind kind,
         DepositStatus status,
         DateTimeOffset now) : base(id)
     {
@@ -48,6 +49,7 @@ public sealed class Deposit : Entity<Guid>
         OutputIndex = outputIndex;
         BlockNumber = blockNumber;
         BlockHash = blockHash;
+        Kind = kind;
         Status = status;
         Confirmations = 0;
         DetectedAt = now;
@@ -79,6 +81,15 @@ public sealed class Deposit : Entity<Guid>
     public int OutputIndex { get; private set; }
     public long BlockNumber { get; private set; }
     public string BlockHash { get; private set; } = null!;
+    /// <summary>
+    /// Customer payment vs merchant top-up, copied from the invoice that reserved this address at detection
+    /// (the merchant declares it when creating the invoice; on-chain the two are indistinguishable). It
+    /// selects which fee quote priced <see cref="Fee"/>, and it is carried on the confirmation event so the
+    /// Ledger posts a top-up under its own reference type — which is what exempts it from the T+N hold.
+    /// A deposit matching no invoice is <see cref="DepositKind.Customer"/>.
+    /// </summary>
+    public DepositKind Kind { get; private set; }
+
     public DepositStatus Status { get; private set; }
     public int Confirmations { get; private set; }
     public DateTimeOffset DetectedAt { get; private set; }
@@ -118,7 +129,8 @@ public sealed class Deposit : Entity<Guid>
         long blockNumber,
         string blockHash,
         DepositPolicy policy,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        DepositKind kind = DepositKind.Customer)
     {
         if (string.IsNullOrWhiteSpace(address))
             return Result.Failure<Deposit>(DepositErrors.AddressRequired);
@@ -139,7 +151,7 @@ public sealed class Deposit : Entity<Guid>
 
         return Result.Success(new Deposit(
             Guid.CreateVersion7(), chain, address.Trim(), walletId, merchantId, assetId, amount, fee,
-            transactionHash.Trim(), outputIndex, blockNumber, blockHash, status, now));
+            transactionHash.Trim(), outputIndex, blockNumber, blockHash, kind, status, now));
     }
 
     /// <summary>
@@ -160,7 +172,7 @@ public sealed class Deposit : Entity<Guid>
             Status = DepositStatus.Confirmed;
             ConfirmedAt = now;
             Raise(new DepositConfirmed(
-                Guid.CreateVersion7(), now, Id, WalletId, MerchantId, AssetId, AmountString, FeeString, Chain, TransactionHash, OutputIndex, now));
+                Guid.CreateVersion7(), now, Id, WalletId, MerchantId, AssetId, AmountString, FeeString, Chain, TransactionHash, OutputIndex, now, Kind.ToString()));
         }
 
         return Result.Success();
@@ -203,7 +215,7 @@ public sealed class Deposit : Entity<Guid>
         if (wasCredited)
         {
             Raise(new DepositOrphaned(
-                Guid.CreateVersion7(), now, Id, MerchantId, AssetId, AmountString, FeeString, Chain, TransactionHash, OutputIndex, now));
+                Guid.CreateVersion7(), now, Id, MerchantId, AssetId, AmountString, FeeString, Chain, TransactionHash, OutputIndex, now, Kind.ToString()));
         }
 
         return Result.Success();

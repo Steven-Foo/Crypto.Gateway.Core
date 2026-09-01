@@ -27,6 +27,11 @@ public sealed class PaymentIntentMap : IEntityTypeConfiguration<PaymentIntentEnt
 
         builder.Property(i => i.CallbackUrl).HasMaxLength(512);
         builder.Property(i => i.Status).HasConversion<string>().HasMaxLength(16).IsRequired();
+
+        // Customer payment vs merchant top-up. Default 'Customer' — every pre-existing invoice is a customer
+        // payment, so the backfill is the correct meaning, not merely a convenient one.
+        builder.Property(i => i.Kind).HasConversion<string>().HasMaxLength(16).IsRequired()
+            .HasDefaultValueSql("'Customer'");
         builder.Property(i => i.MatchedDepositId);
         builder.Property(i => i.AmountMatched);
         builder.Property(i => i.ExpiresAt).IsRequired();

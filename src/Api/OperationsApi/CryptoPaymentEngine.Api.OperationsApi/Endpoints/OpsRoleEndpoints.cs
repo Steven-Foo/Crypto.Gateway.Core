@@ -28,7 +28,7 @@ public static class OpsRoleEndpoints
     }
 
     private static IResult GetPermissionCatalog() =>
-        Results.Ok(new { isSuccess = true, data = new { permissions = OpsPermissions.All }, error = (string?)null });
+        Results.Ok(new { isSuccess = true, data = new { permissions = OpsPermissions.All }, error = (string?)null, errorCode = (string?)null });
 
     private static async Task<IResult> ListAsync(IRoleService roles, HttpContext http, int page = 1, int pageSize = 50)
     {
@@ -42,7 +42,7 @@ public static class OpsRoleEndpoints
         {
             isSuccess = true,
             data = new { page, pageSize, totalCount = total, items },
-            error = (string?)null,
+            error = (string?)null, errorCode = (string?)null,
         });
     }
 
@@ -50,22 +50,22 @@ public static class OpsRoleEndpoints
     {
         var result = await roles.GetAsync(id, http.RequestAborted);
         return result.IsFailure
-            ? Fail(result.Error!)
-            : Results.Ok(new { isSuccess = true, data = result.Value, error = (string?)null });
+            ? OpsResults.Fail(result.Error!)
+            : Results.Ok(new { isSuccess = true, data = result.Value, error = (string?)null, errorCode = (string?)null });
     }
 
     private static async Task<IResult> CreateAsync(CreateRoleRequest request, IRoleService roles, IAuditLogger audit, HttpContext http)
     {
         var result = await roles.CreateAsync(request.Name, request.Description, request.PermissionCodes, http.RequestAborted);
         if (result.IsFailure)
-            return Fail(result.Error!);
+            return OpsResults.Fail(result.Error!);
 
         var actor = AuditActor.From(http);
         await audit.LogAsync(new LogAuditEntryCommand(
             actor.StaffUserId, actor.Username, "role.created", "Role", result.Value.RoleId.ToString(),
             $"name={result.Value.Name}", actor.IpAddress), http.RequestAborted);
 
-        return Results.Ok(new { isSuccess = true, data = result.Value, error = (string?)null });
+        return Results.Ok(new { isSuccess = true, data = result.Value, error = (string?)null, errorCode = (string?)null });
     }
 
     private static async Task<IResult> UpdateDetailsAsync(
@@ -73,14 +73,14 @@ public static class OpsRoleEndpoints
     {
         var result = await roles.UpdateDetailsAsync(id, request.Name, request.Description, http.RequestAborted);
         if (result.IsFailure)
-            return Fail(result.Error!);
+            return OpsResults.Fail(result.Error!);
 
         var actor = AuditActor.From(http);
         await audit.LogAsync(new LogAuditEntryCommand(
             actor.StaffUserId, actor.Username, "role.updated", "Role", id.ToString(), $"name={request.Name}", actor.IpAddress),
             http.RequestAborted);
 
-        return Results.Ok(new { isSuccess = true, data = result.Value, error = (string?)null });
+        return Results.Ok(new { isSuccess = true, data = result.Value, error = (string?)null, errorCode = (string?)null });
     }
 
     private static async Task<IResult> SetPermissionsAsync(
@@ -88,38 +88,27 @@ public static class OpsRoleEndpoints
     {
         var result = await roles.SetPermissionsAsync(id, request.PermissionCodes, http.RequestAborted);
         if (result.IsFailure)
-            return Fail(result.Error!);
+            return OpsResults.Fail(result.Error!);
 
         var actor = AuditActor.From(http);
         await audit.LogAsync(new LogAuditEntryCommand(
             actor.StaffUserId, actor.Username, "role.permissions_changed", "Role", id.ToString(),
             string.Join(',', request.PermissionCodes), actor.IpAddress), http.RequestAborted);
 
-        return Results.Ok(new { isSuccess = true, data = result.Value, error = (string?)null });
+        return Results.Ok(new { isSuccess = true, data = result.Value, error = (string?)null, errorCode = (string?)null });
     }
 
     private static async Task<IResult> DeleteAsync(Guid id, IRoleService roles, IAuditLogger audit, HttpContext http)
     {
         var result = await roles.DeleteAsync(id, http.RequestAborted);
         if (result.IsFailure)
-            return Fail(result.Error!);
+            return OpsResults.Fail(result.Error!);
 
         var actor = AuditActor.From(http);
         await audit.LogAsync(new LogAuditEntryCommand(
             actor.StaffUserId, actor.Username, "role.deleted", "Role", id.ToString(), null, actor.IpAddress),
             http.RequestAborted);
 
-        return Results.Ok(new { isSuccess = true, data = new { roleId = id }, error = (string?)null });
-    }
-
-    private static IResult Fail(Error error)
-    {
-        var status = error.Type switch
-        {
-            ErrorType.NotFound => StatusCodes.Status404NotFound,
-            ErrorType.Conflict => StatusCodes.Status409Conflict,
-            _ => StatusCodes.Status400BadRequest,
-        };
-        return Results.Json(new { isSuccess = false, error = error.Message }, statusCode: status);
+        return Results.Ok(new { isSuccess = true, data = new { roleId = id }, error = (string?)null, errorCode = (string?)null });
     }
 }

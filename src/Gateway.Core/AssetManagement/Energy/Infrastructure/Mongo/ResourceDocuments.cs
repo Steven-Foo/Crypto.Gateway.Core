@@ -30,6 +30,12 @@ public sealed class WalletResourceDocument
     public string AvailableTrxBalance { get; set; } = null!;
     public string? TargetEnergy { get; set; }
     public string? MinimumEnergy { get; set; }
+    // Stored as a real BSON date, NOT the driver's default for DateTimeOffset. A bare DateTimeOffset
+    // serialises as a nested { DateTime, Ticks, Offset } DOCUMENT, which (a) is rejected outright by the
+    // collection's `bsonType: "date"` validator — every resource write silently failed until this was added —
+    // and (b), worse, would make the TTL index on ResourceHistory.ObservedAt expire nothing at all, growing
+    // an "append-only with TTL" collection forever. These are UTC observations, so no offset is lost.
+    [BsonRepresentation(BsonType.DateTime)]
     public DateTimeOffset ObservedAt { get; set; }
 }
 
@@ -45,6 +51,12 @@ public sealed class ResourceHistoryDocument
     public string EnergyAvailable { get; set; } = null!;
     public string BandwidthAvailable { get; set; } = null!;
     public string AvailableTrxBalance { get; set; } = null!;
+    // Stored as a real BSON date, NOT the driver's default for DateTimeOffset. A bare DateTimeOffset
+    // serialises as a nested { DateTime, Ticks, Offset } DOCUMENT, which (a) is rejected outright by the
+    // collection's `bsonType: "date"` validator — every resource write silently failed until this was added —
+    // and (b), worse, would make the TTL index on ResourceHistory.ObservedAt expire nothing at all, growing
+    // an "append-only with TTL" collection forever. These are UTC observations, so no offset is lost.
+    [BsonRepresentation(BsonType.DateTime)]
     public DateTimeOffset ObservedAt { get; set; }
 }
 

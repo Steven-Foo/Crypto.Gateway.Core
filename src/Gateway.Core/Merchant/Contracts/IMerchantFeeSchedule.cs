@@ -18,14 +18,20 @@ public interface IMerchantFeeSchedule
     Task<BigInteger> QuoteDepositFeeAsync(
         Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// The platform fee taken from a <b>merchant top-up</b> of <paramref name="receivedAmount"/> base units —
+    /// the merchant funding its own balance, priced separately from a customer's deposit.
+    ///
+    /// <para>Zero unless an admin has explicitly declared a top-up rate for this merchant: unlike the deposit
+    /// and withdrawal quotes, this deliberately does <em>not</em> fall back to the platform default fee, so a
+    /// merchant is never silently charged to fund its own float. There is also no gross-up counterpart — a
+    /// top-up fee is deducted from what arrives, because there is no third-party payer to carry it.</para>
+    /// </summary>
+    Task<BigInteger> QuoteTopUpFeeAsync(
+        Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default);
+
     /// <summary>The platform fee charged on a withdrawal of <paramref name="amount"/> base units.</summary>
     Task<BigInteger> QuoteWithdrawalFeeAsync(
         Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default);
 
-    /// <summary>
-    /// Payer-pays-on-top: the gross the payer must send so the merchant nets <paramref name="netTarget"/>
-    /// base units after the deposit fee. Used to set a deposit invoice's expected amount.
-    /// </summary>
-    Task<Result<BigInteger>> GrossUpDepositAsync(
-        Guid merchantId, Guid assetId, BigInteger netTarget, CancellationToken cancellationToken = default);
 }

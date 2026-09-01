@@ -32,6 +32,29 @@ public enum AccountType
     PlatformFunding = 6,
 
     /// <summary>
+    /// Company funds an operations admin has moved INTO a hot withdrawal wallet to keep the automated payout
+    /// pipeline funded. Credit-normal, equity-like, System-owned, and <em>not</em> chain-reconciled itself.
+    ///
+    /// <para>The matching debit is <see cref="TreasuryAsset"/>, because a top-up genuinely raises the crypto we
+    /// hold in a watched address — without it, reconciliation would report drift equal to every top-up ever
+    /// made. Crediting here rather than a merchant account is what makes a top-up unable to invent merchant
+    /// money: <c>merchant withdrawable = deposits − fees − settlements − payouts</c> stays true by
+    /// construction (§14). Its balance is the running total of float contributed.</para>
+    /// </summary>
+    WithdrawalWalletTopUp = 7,
+
+    /// <summary>
+    /// Merchant settlements paid by an operations admin from a company wallet OUTSIDE platform custody.
+    /// Credit-normal, System-owned, not chain-reconciled.
+    ///
+    /// <para>It exists because such a payment discharges a merchant obligation without any watched address
+    /// being debited. Crediting <see cref="TreasuryAsset"/> instead — as an on-platform payout correctly does —
+    /// would decrement custody that never moved, drifting reconciliation downward by every settlement ever
+    /// made. Its balance is the running total the company has paid out of pocket on merchants' behalf.</para>
+    /// </summary>
+    ExternalSettlement = 8,
+
+    /// <summary>
     /// The counterparty for a staff-initiated manual CREDIT to a merchant's balance. Debit-normal, and
     /// deliberately never touched by anything else — the same one-directional shape as
     /// <see cref="NetworkFeeExpense"/>, so it only ever grows and can never be driven negative by an
@@ -41,14 +64,14 @@ public enum AccountType
     /// reconciled against any on-chain address, so a manual correction (unlike a real deposit) never desyncs
     /// Reconciliation's TreasuryAsset-vs-on-chain comparison.
     /// </summary>
-    ManualAdjustmentCredit = 7,
+    ManualAdjustmentCredit = 9,
 
     /// <summary>
     /// The mirror of <see cref="ManualAdjustmentCredit"/>, for a staff-initiated manual DEBIT. Credit-normal,
     /// one-directional (only ever credited, same reasoning as <see cref="PlatformFunding"/>), and — like its
     /// counterpart — never reconciled against any on-chain address.
     /// </summary>
-    ManualAdjustmentDebit = 8,
+    ManualAdjustmentDebit = 10,
 }
 
 /// <summary>The side on which an account's balance naturally increases.</summary>
@@ -95,6 +118,27 @@ public enum JournalReferenceType
     /// <summary>Native-coin (gas/energy) cost the platform bore for one on-chain operation — a platform
     /// expense journal, never a merchant's. Keyed with the operation's id for idempotency.</summary>
     GasCost = 10,
+
+    /// <summary>Company funds moved into a hot withdrawal wallet to keep the payout pipeline funded. Keyed
+    /// with the top-up record's id, so re-posting the same recorded transfer is a no-op.</summary>
+    WithdrawalWalletTopUp = 11,
+
+    /// <summary>
+    /// A merchant funding its own balance on-chain. The accounting is identical to a
+    /// <see cref="Deposit"/> (<c>Dr TreasuryAsset / Cr MerchantLiability [+ Cr FeeRevenue]</c>) — real coins
+    /// arrive at a watched address, so custody genuinely rises.
+    ///
+    /// <para>It is a distinct reference type purely so the settled-balance query can tell the two apart:
+    /// that query withholds recent <see cref="Deposit"/>/<see cref="DepositReversal"/> inflow for the
+    /// merchant's T+N settlement period, and a merchant's own float is not customer money awaiting
+    /// chargeback risk — so a top-up is deliberately excluded and is spendable immediately.</para>
+    /// </summary>
+    MerchantTopUp = 12,
+
+    /// <summary>The reorg reversal of a <see cref="MerchantTopUp"/>. Distinct from
+    /// <see cref="DepositReversal"/> for the same reason its counterpart is — and so a reversal always
+    /// mirrors the exact reference type it cancels.</summary>
+    MerchantTopUpReversal = 13,
 }
 
 /// <summary>Which column a posting line lands in. A line is a debit XOR a credit — never both, never neither.</summary>

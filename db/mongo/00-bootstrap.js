@@ -16,7 +16,12 @@
   No mnemonic, seed, private key or secret is ever written to MongoDB.
 ───────────────────────────────────────────────────────────────────────────────*/
 
-const DB_NAME = "cryptopaymentengine";
+// Must match the `Mongo:Database` every host connects to (all three appsettings + docker-compose's
+// MONGO_INITDB_DATABASE all say "CryptoPaymentEngine"). MongoDB forbids two databases whose names differ
+// only by case, so a mismatch here is NOT a cosmetic difference: this script wins the race (it runs from
+// docker-entrypoint-initdb.d on first boot), and the app's first WRITE then dies with
+// "db already exists with different case" — silently breaking every Mongo-backed feature.
+const DB_NAME = "CryptoPaymentEngine";
 const RPC_LOG_TTL_DAYS = 30;
 const WEBHOOK_LOG_TTL_DAYS = 90;
 const RESOURCE_HISTORY_TTL_DAYS = 180;
@@ -226,42 +231,130 @@ ensureIndexes("WebhookLog", [
 ]);
 
 /*── TRON resource tracking (Blockchain/Resources; future Energy module). ──────*/
+/* Shape must match Energy's `WalletResourceDocument` (the ONLY writer — MongoWalletResourceStore).
+   It keys on `_id` = WalletId, uses PascalCase field names, and stores every resource figure as a
+   base-unit STRING (§14). An earlier version of this validator described an imagined camelCase schema
+   with `energy` as a BSON long; it rejected every real write with "Document failed validation", which
+   silently disabled Energy 5a resource monitoring wherever this script had been run. */
 ensureCollection("WalletResource", {
   $jsonSchema: {
     bsonType: "object",
-    required: ["walletId", "updatedAt"],
+    required: ["_id", "Chain", "Address", "Health", "ObservedAt"],
     properties: {
-      walletId: { bsonType: "string" },
-      energy: { bsonType: "long" },
-      bandwidth: { bsonType: "long" },
-      frozenTrx: baseUnitString,
-      delegatedEnergy: { bsonType: "long" },
-      delegatedBandwidth: { bsonType: "long" },
-      updatedAt: { bsonType: "date" },
+      _id: { bsonType: "string" }, // WalletId — the upsert key (one current doc per wallet)
+      Chain: chainEnum,
+      Address: { bsonType: "string" },
+      WalletType: { bsonType: "string" },
+      Health: { enum: ["Healthy", "Low", "Critical"] },
+      EnergyAvailable: baseUnitString,
+      EnergyLimit: baseUnitString,
+      EnergyUsed: baseUnitString,
+      BandwidthAvailable: baseUnitString,
+      FrozenTrxForEnergy: baseUnitString,
+      FrozenTrxForBandwidth: baseUnitString,
+      DelegatedEnergyOut: baseUnitString,
+      DelegatedEnergyIn: baseUnitString,
+      AvailableTrxBalance: baseUnitString,
+      TargetEnergy: { bsonType: ["string", "null"], pattern: "^[0-9]{1,78}$" },
+      MinimumEnergy: { bsonType: ["string", "null"], pattern: "^[0-9]{1,78}$" },
+      ObservedAt: { bsonType: "date" },
     },
   },
 });
-ensureIndexes("WalletResource", [{ keys: { walletId: 1 }, options: { unique: true, name: "ux_walletId" } }]);
-
-ensureCollection("WalletResourceHistory", {
-  $jsonSchema: {
-    bsonType: "object",
-    required: ["walletId", "timestamp"],
-    properties: {
-      walletId: { bsonType: "string" },
-      energy: { bsonType: "long" },
-      bandwidth: { bsonType: "long" },
-      frozenTrx: baseUnitString,
-      delegatedEnergy: { bsonType: "long" },
-      timestamp: { bsonType: "date" },
-    },
-  },
-});
-ensureIndexes("WalletResourceHistory", [
-  { keys: { walletId: 1, timestamp: -1 }, options: { name: "ix_walletId_timestamp" } },
-  { keys: { timestamp: 1 }, options: { name: "ttl_timestamp", expireAfterSeconds: RESOURCE_HISTORY_TTL_DAYS * 86400 } },
+// _id is already unique; index the health/chain the ops screen sorts and filters on.
+ensureIndexes("WalletResource", [
+  { keys: { Health: 1, Chain: 1 }, options: { name: "ix_health_chain" } },
 ]);
 
+/* Collection name is `ResourceHistory` — matching MongoResourceHistoryStore, the only writer. It was
+   previously declared here as `WalletResourceHistory`, a name nothing reads or writes: the app quietly
+   auto-created the real collection WITHOUT the TTL index below, so the append-only history grew forever. */
+ensureCollection("ResourceHistory", {
+  $jsonSchema: {
+    bsonType: "object",
+    required: ["WalletId", "Chain", "ObservedAt"],
+    properties: {
+      WalletId: { bsonType: "string" },
+      Chain: chainEnum,
+      Address: { bsonType: "string" },
+      WalletType: { bsonType: "string" },
+      Health: { enum: ["Healthy", "Low", "Critical"] },
+      EnergyAvailable: baseUnitString,
+      BandwidthAvailable: baseUnitString,
+      AvailableTrxBalance: baseUnitString,
+      ObservedAt: { bsonType: "date" },
+    },
+  },
+});
+ensureIndexes("ResourceHistory", [
+  { keys: { WalletId: 1, ObservedAt: -1 }, options: { name: "ix_walletId_observedAt" } },
+  { keys: { ObservedAt: 1 }, options: { name: "ttl_observedAt", expireAfterSeconds: RESOURCE_HISTORY_TTL_DAYS * 86400 } },
+]);
+
+/*── Reconciliation: ledger-vs-on-chain custody audit. Derived observability, never money truth (§2). ──*/
+
+/* Current snapshot, one per (chain, asset) — MongoReconciliationStore, keyed `_id` = "{Chain}:{AssetId}". */
+ensureCollection("Reconciliation", {
+  $jsonSchema: {
+    bsonType: "object",
+    required: ["_id", "Chain", "AssetId", "Status", "ObservedAt"],
+    properties: {
+      _id: { bsonType: "string" },
+      Chain: chainEnum,
+      AssetId: { bsonType: "string" },
+      AssetSymbol: { bsonType: "string" },
+      // Drift is signed (on-chain minus ledger), so it is NOT baseUnitString — a shortfall is negative.
+      LedgerHolding: baseUnitString,
+      OnChainTotal: baseUnitString,
+      Drift: { bsonType: "string", pattern: "^-?[0-9]{1,78}$" },
+      Status: { enum: ["Balanced", "Drift", "Incomplete"] },
+      AddressesScanned: { bsonType: "int" },
+      AddressesUnreadable: { bsonType: "int" },
+      // Where the custody physically sits — these sum to OnChainTotal. ToppedUpTotal is the ledger-side
+      // figure for company float within it, so operating money is never read as merchant money.
+      ColdTreasuryTotal: baseUnitString,
+      HotPoolTotal: baseUnitString,
+      DepositAddressTotal: baseUnitString,
+      ToppedUpTotal: baseUnitString,
+      ObservedAt: { bsonType: "date" },
+    },
+  },
+});
+
+/* Append-only audit trail — MongoReconciliationHistoryStore. Deliberately NO TTL: this is the custody
+   drift record, the one Mongo collection worth keeping indefinitely. */
+ensureCollection("ReconciliationHistory", {
+  $jsonSchema: {
+    bsonType: "object",
+    required: ["Chain", "AssetId", "Status", "ObservedAt"],
+    properties: {
+      Chain: chainEnum,
+      AssetId: { bsonType: "string" },
+      AssetSymbol: { bsonType: "string" },
+      LedgerHolding: baseUnitString,
+      OnChainTotal: baseUnitString,
+      Drift: { bsonType: "string", pattern: "^-?[0-9]{1,78}$" },
+      Status: { enum: ["Balanced", "Drift", "Incomplete"] },
+      AddressesScanned: { bsonType: "int" },
+      AddressesUnreadable: { bsonType: "int" },
+      // Where the custody physically sits — these sum to OnChainTotal. ToppedUpTotal is the ledger-side
+      // figure for company float within it, so operating money is never read as merchant money.
+      ColdTreasuryTotal: baseUnitString,
+      HotPoolTotal: baseUnitString,
+      DepositAddressTotal: baseUnitString,
+      ToppedUpTotal: baseUnitString,
+      ObservedAt: { bsonType: "date" },
+    },
+  },
+});
+ensureIndexes("ReconciliationHistory", [
+  { keys: { Chain: 1, AssetId: 1, ObservedAt: -1 }, options: { name: "ix_chain_asset_observedAt" } },
+]);
+
+/* SUPERSEDED — nothing writes this. Energy 5b consolidated staking and delegation into the SQL
+   `energy.EnergyOperation` aggregate (a money-adjacent state machine belongs in SQL, not in a derived
+   store, §2). Kept only so an existing dev database is not silently altered; safe to delete outright once
+   no environment predates 5b. */
 ensureCollection("EnergyDelegation", {
   $jsonSchema: {
     bsonType: "object",

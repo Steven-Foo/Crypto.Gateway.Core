@@ -172,6 +172,16 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
                     b.Property<BigInteger>("SweepThreshold")
                         .HasColumnType("decimal(38,0)");
 
+                    b.Property<int>("TopUpFeeBps")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("int")
+                        .HasDefaultValue(0);
+
+                    b.Property<BigInteger>("TopUpFeeFixed")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("decimal(38,0)")
+                        .HasDefaultValueSql("0");
+
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("datetimeoffset");
 
@@ -192,11 +202,11 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
                         {
                             t.HasCheckConstraint("CK_MerchantAssetPolicy_ApprovalThreshold", "[ApprovalThreshold] IS NULL OR [ApprovalThreshold] >= 0");
 
-                            t.HasCheckConstraint("CK_MerchantAssetPolicy_FeeBps", "[DepositFeeBps] >= 0 AND [DepositFeeBps] < 10000 AND [WithdrawalFeeBps] >= 0 AND [WithdrawalFeeBps] <= 10000");
+                            t.HasCheckConstraint("CK_MerchantAssetPolicy_FeeBps", "[DepositFeeBps] >= 0 AND [DepositFeeBps] <= 10000 AND [WithdrawalFeeBps] >= 0 AND [WithdrawalFeeBps] <= 10000 AND [TopUpFeeBps] >= 0 AND [TopUpFeeBps] <= 10000");
 
                             t.HasCheckConstraint("CK_MerchantAssetPolicy_MerchantWithdrawalCap", "[MerchantWithdrawalPercentBps] >= 0 AND [MerchantWithdrawalPercentBps] <= 10000 AND ([MerchantWithdrawalFlatCap] IS NULL OR [MerchantWithdrawalFlatCap] >= 0)");
 
-                            t.HasCheckConstraint("CK_MerchantAssetPolicy_NonNegative", "[SweepThreshold] >= 0 AND [WithdrawalFee] >= 0 AND [DepositFeeFixed] >= 0 AND ([MinimumWithdrawal] IS NULL OR [MinimumWithdrawal] >= 0) AND ([MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= 0)");
+                            t.HasCheckConstraint("CK_MerchantAssetPolicy_NonNegative", "[SweepThreshold] >= 0 AND [WithdrawalFee] >= 0 AND [DepositFeeFixed] >= 0 AND [TopUpFeeFixed] >= 0 AND ([MinimumWithdrawal] IS NULL OR [MinimumWithdrawal] >= 0) AND ([MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= 0)");
 
                             t.HasCheckConstraint("CK_MerchantAssetPolicy_WithdrawalRange", "[MaximumWithdrawal] IS NULL OR [MinimumWithdrawal] IS NULL OR [MaximumWithdrawal] >= [MinimumWithdrawal]");
                         });

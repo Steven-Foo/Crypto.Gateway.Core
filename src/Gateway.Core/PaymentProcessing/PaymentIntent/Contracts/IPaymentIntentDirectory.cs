@@ -31,7 +31,24 @@ public sealed record PaymentIntentAdminFilter(
     /// <summary>Narrows to any of these merchants — how a merchant-<em>name</em> search (resolved to ids by the
     /// host via Merchant's <c>IMerchantDirectory</c>, §4.5) is expressed here without PaymentIntent knowing
     /// Merchant's schema. AND-combined with <see cref="MerchantId"/> if both happen to be set.</summary>
-    IReadOnlyList<Guid>? MerchantIds = null);
+    IReadOnlyList<Guid>? MerchantIds = null,
+    /// <summary>Narrows to one <em>effective</em> status ("pending" | "confirmed" | "expired" | "failed") —
+    /// the collapsed vocabulary the read rows expose, not the domain enum. Note "expired" and "pending" are
+    /// time-dependent (a lapsed-but-not-yet-swept invoice already reads expired), so the filter evaluates the
+    /// same clock the projection does. An unrecognised value matches nothing, never everything.</summary>
+    string? Status = null);
+
+/// <summary>
+/// The effective-status vocabulary the Ops deposit rows expose and <see cref="PaymentIntentAdminFilter.Status"/>
+/// accepts. Published here so a host can reject an unknown value with a 400 rather than hand an operator a
+/// silently empty page.
+/// </summary>
+public static class PaymentIntentEffectiveStatuses
+{
+    public static readonly string[] All = ["pending", "confirmed", "expired", "failed"];
+
+    public static bool IsKnown(string value) => All.Contains(value.Trim().ToLowerInvariant());
+}
 
 /// <summary>The Ops transaction-search read model for one deposit invoice. <see cref="Status"/> is the
 /// effective, already-collapsed vocabulary ("pending" | "confirmed" | "expired" | "failed") — the same one
@@ -62,6 +79,23 @@ public sealed record PaymentIntentTotals(
     string TotalExpectedAmountBaseUnits,
     int DistinctAssetCount,
     IReadOnlyList<Guid> MatchedDepositIds);
+
+/// <summary>
+/// Answers one question for the deposit scanner: "is the invoice currently holding this address a customer
+/// payment or a merchant top-up?" — deliberately its own tiny port rather than a method on
+/// <see cref="IPaymentIntentDirectory"/>, because the scanner is on the money path and should depend on the
+/// single fact it needs, not on the whole admin/reporting read model (§4.5).
+///
+/// <para>The answer is unambiguous by construction: <c>UX_PaymentIntent_LiveWallet</c> allows at most one
+/// <c>Waiting</c> invoice per address, so there is never a choice to arbitrate. An address with no waiting
+/// invoice (a direct or late transfer) returns null and is treated as a customer deposit.</para>
+/// </summary>
+public interface IDepositKindResolver
+{
+    /// <summary>"Customer" or "MerchantTopUp" for the invoice holding <paramref name="walletId"/>; null if
+    /// no invoice is waiting on it. A string, so Deposit never references PaymentIntent's domain type.</summary>
+    Task<string?> FindWaitingKindAsync(Guid walletId, CancellationToken cancellationToken = default);
+}
 
 public interface IPaymentIntentDirectory
 {

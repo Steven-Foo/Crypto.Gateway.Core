@@ -56,6 +56,12 @@ public static class BlockchainInfrastructureExtensions
         // adapter — the Reconciliation monitor reads on-chain balances through this same §8 seam.
         services.TryAddSingleton<InMemoryBalanceReader>();
         services.TryAddSingleton<IBalanceReader>(sp => sp.GetRequiredService<InMemoryBalanceReader>());
+
+        // Dev counterpart of the TRON transaction verifier. Registered BOTH concretely and as the port, so a
+        // dev tool or test can declare what the fake chain shows — the resource reader's registration being
+        // port-only once caused a seeding step to silently no-op, which is worth not repeating.
+        services.TryAddSingleton<InMemoryTransactionVerifier>();
+        services.TryAddSingleton<ITransactionVerifier>(sp => sp.GetRequiredService<InMemoryTransactionVerifier>());
         return services;
     }
 
@@ -119,6 +125,12 @@ public static class BlockchainInfrastructureExtensions
         // On-chain balance reads (Reconciliation) go through the same read-only TRON RPC — eth_call
         // balanceOf for TRC-20, eth_getBalance for native TRX. Read-only, keyless (§10).
         services.TryAddScoped<IBalanceReader, TronBalanceReader>();
+
+        // Confirms a transaction an operator recorded (a hot-wallet top-up, or a merchant settlement paid from
+        // a company wallet) really happened as claimed. Read-only, keyless (§10), and registered with the
+        // read-only adapter rather than the money-out engine: verification must be available wherever the real
+        // chain is, including a deposits-only deployment that never signs anything.
+        services.TryAddScoped<ITransactionVerifier, TronTransactionVerifier>();
 
         // Native /wallet resource RPC (getaccountresource/getaccount + freeze/delegate builds), and the
         // read-only resource reader the Energy monitor + the sweep energy/bandwidth gate consume (§8). The

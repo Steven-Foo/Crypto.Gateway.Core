@@ -1,26 +1,19 @@
-using System.Security.Cryptography;
-using System.Text;
 using CryptoPaymentEngine.Gateway.Core.Platform.Identity.Application.Abstractions;
+using CryptoPaymentEngine.SharedKernel;
 
 namespace CryptoPaymentEngine.Gateway.Core.Platform.Identity.Infrastructure.Security;
 
 /// <summary>
-/// The token itself is 256 bits of CSPRNG output — high entropy, machine-generated, same reasoning as
-/// Merchant's bearer secret: a fast unkeyed hash (SHA-256) is sufficient here, unlike passwords.
+/// Staff session tokens, from the shared <see cref="OpaqueToken"/> primitive: 256 bits of CSPRNG output, of
+/// which only the SHA-256 hash is ever stored. The port and the issued-token record stay module-owned (§4.5).
 /// </summary>
 public sealed class BearerTokenGenerator : IBearerTokenGenerator
 {
-    private const int TokenBytes = 32;
-
     public GeneratedBearerToken Generate()
     {
-        var raw = Base64Url(RandomNumberGenerator.GetBytes(TokenBytes));
+        var raw = OpaqueToken.Generate();
         return new GeneratedBearerToken(raw, HashOf(raw));
     }
 
-    public string HashOf(string rawToken) =>
-        Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(rawToken))).ToLowerInvariant();
-
-    private static string Base64Url(byte[] bytes) =>
-        Convert.ToBase64String(bytes).Replace('+', '-').Replace('/', '_').TrimEnd('=');
+    public string HashOf(string rawToken) => OpaqueToken.Sha256Hex(rawToken);
 }

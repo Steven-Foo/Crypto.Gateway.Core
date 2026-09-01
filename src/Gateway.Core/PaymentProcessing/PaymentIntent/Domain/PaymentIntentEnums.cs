@@ -14,3 +14,23 @@ public enum PaymentIntentStatus
     Expired = 3,
     Failed = 4,
 }
+
+/// <summary>
+/// What the merchant is collecting: a customer's payment, or its own top-up. Declared by the merchant when
+/// the invoice is created — the two come from different portal pages, so the kind is known up front and is
+/// never inferred from the chain (on-chain the two are indistinguishable).
+///
+/// <para>Deliberately its own enum rather than a reference to Deposit's <c>DepositKind</c>: the two modules
+/// stay independently extractable (§4.5), and PaymentIntent.Domain depends on nothing but SharedKernel. The
+/// value is carried across the boundary as a string on the invoice, exactly as every other cross-module fact
+/// is.</para>
+/// </summary>
+public enum PaymentIntentKind
+{
+    /// <summary>A customer paying the merchant. The default for every invoice predating top-up.</summary>
+    Customer = 0,
+
+    /// <summary>The merchant funding its own balance. Priced from the merchant's separate top-up fee
+    /// (default zero) and exempt from the T+N settlement hold.</summary>
+    MerchantTopUp = 1,
+}

@@ -11,18 +11,24 @@ using PaymentIntentEntity = CryptoPaymentEngine.Gateway.Core.PaymentProcessing.P
 namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Application;
 
 /// <summary>
-/// Create a deposit invoice. <see cref="ReceiveAmount"/> is what the merchant wants to <em>net</em> (unsigned
-/// base units); with payer-on-top pricing the invoice asks the payer for that amount grossed up by the deposit
-/// fee, so the merchant is credited their target and the platform earns the fee. The host converts from
+/// Create a deposit invoice. <see cref="InvoiceAmount"/> is the amount the invoice <em>asks the payer to
+/// send</em> (unsigned base units) — exactly what they are shown, never inflated. The platform fee is then
+/// deducted from what arrives, so the merchant is credited <c>amount − fee</c>. The host converts from
 /// display at the edge (§14).
+///
+/// <para><see cref="Kind"/> distinguishes a customer payment from the merchant funding its own balance. It is
+/// declared here, at creation, because on-chain the two are indistinguishable. It selects which fee rate
+/// prices the arriving deposit and whether the credit is held for the merchant's T+N settlement period — it
+/// does <b>not</b> change the amount asked for: both kinds send precisely the figure quoted.</para>
 /// </summary>
 public sealed record CreatePaymentIntentCommand(
     Guid MerchantId,
     string MerchantTransactionId,
     Chain Chain,
     Guid AssetId,
-    BigInteger ReceiveAmount,
-    string? CallbackUrl);
+    BigInteger InvoiceAmount,
+    string? CallbackUrl,
+    PaymentIntentKind Kind = PaymentIntentKind.Customer);
 
 /// <summary>What the merchant gets back: the public reference for the pay URL, the address, and when it lapses.</summary>
 public sealed record PaymentIntentResult(Guid Reference, string Address, Chain Chain, DateTimeOffset ExpiresAt, DateTimeOffset CreatedAt);
@@ -51,7 +57,6 @@ public sealed class PaymentIntentService(
     IWalletDirectory walletDirectory,
     IWalletReservationLock walletLock,
     IDepositAddressProvisioner addressProvisioner,
-    IMerchantFeeSchedule feeSchedule,
     IOptions<PaymentIntentOptions> options,
     TimeProvider timeProvider,
     ILogger<PaymentIntentService> logger) : IPaymentIntentService
@@ -69,14 +74,16 @@ public sealed class PaymentIntentService(
         if (existing is not null)
             return Result.Failure<PaymentIntentResult>(PaymentIntentErrors.DuplicateReference);
 
-        // 2. Payer-on-top: ask the payer for the merchant's target net grossed up by the deposit fee, so the
-        //    Ledger's fee split leaves the merchant with (at least) what they asked to receive. No fee → gross
-        //    equals the requested amount (unpriced merchants are unaffected). Deterministic across retries.
-        var grossResult = await feeSchedule.GrossUpDepositAsync(command.MerchantId, command.AssetId, command.ReceiveAmount, cancellationToken);
-        if (grossResult.IsFailure)
-            return Result.Failure<PaymentIntentResult>(grossResult.Error!);
-
-        var expectedAmount = grossResult.Value;
+        // 2. The invoice asks for EXACTLY the amount requested — the payer is never quietly asked for more.
+        //    The platform fee is then deducted from what arrives, so the merchant is credited amount − fee and
+        //    the fee becomes revenue. This holds for BOTH kinds: a customer paying an invoice and a merchant
+        //    topping up its own balance send precisely the figure they were shown.
+        //
+        //    This replaced payer-on-top gross-up (where the invoice was inflated so the merchant netted its
+        //    target and the payer silently covered the fee). The deciding reason is that a payer must never be
+        //    asked to pay more than the invoice they agreed to; the merchant reconciles from the amount we
+        //    record against each deposit, which is exactly what arrived.
+        var expectedAmount = command.InvoiceAmount;
         var reservationTtl = TimeSpan.FromMinutes(_options.ExpiryMinutes + _options.GraceMinutes);
 
         // 3. Reserve an address and insert. First attempt reuses a free address; retries mint a fresh one —
@@ -94,7 +101,8 @@ public sealed class PaymentIntentService(
             var intentResult = PaymentIntentEntity.Create(
                 command.MerchantId, command.MerchantTransactionId, command.Chain, command.AssetId,
                 address.Value.WalletId, address.Value.Address, expectedAmount, command.CallbackUrl,
-                now.AddMinutes(_options.ExpiryMinutes), now.AddMinutes(_options.ExpiryMinutes + _options.GraceMinutes), now);
+                now.AddMinutes(_options.ExpiryMinutes), now.AddMinutes(_options.ExpiryMinutes + _options.GraceMinutes), now,
+                command.Kind);
 
             if (intentResult.IsFailure)
             {

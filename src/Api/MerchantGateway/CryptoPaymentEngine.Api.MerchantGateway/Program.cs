@@ -169,6 +169,13 @@ if (isTestnetTier)
     // and sends in dev (the in-memory reader reads zero, which the allocator treats as underfunded). No-op
     // under live TRON. Set Withdrawal:DevHotWalletFloatBaseUnits low to demo the no-wallet-available park path.
     builder.Services.AddDevelopmentHotWalletFloatSeed();
+
+    // A demo portfolio for UI development: several merchants with different pricing/settlement terms,
+    // invoices, credited deposits, and withdrawals sitting in every status a screen has to render. Opt-in
+    // (DevSampleData:Enabled) and idempotent. It seeds INPUTS only — the real scanner/confirmation/ledger/
+    // callback pipeline produces every deposit, journal and balance, so no ledger invariant is bypassed
+    // (§14). Registered LAST: it builds on every seeder above.
+    builder.Services.AddDevelopmentSampleData(config);
 }
 else // Production (the hard §10 boundary)
 {

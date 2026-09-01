@@ -28,7 +28,7 @@ public static class OpsMerchantFeeEndpoints
     {
         var result = await policies.ListAsync(id, http.RequestAborted);
         if (result.IsFailure)
-            return Fail(result.Error!);
+            return OpsResults.Fail(result.Error!);
 
         var rows = new List<object>(result.Value.Count);
         foreach (var p in result.Value)
@@ -46,10 +46,13 @@ public static class OpsMerchantFeeEndpoints
                 withdrawalFeeFixed = AmountConversion.ToDisplay(BigInteger.Parse(p.WithdrawalFee), decimals),
                 withdrawalFeeBps = p.WithdrawalFeeBps,
                 withdrawalFeePercent = p.WithdrawalFeeBps / 100m,
+                topUpFeeFixed = AmountConversion.ToDisplay(BigInteger.Parse(p.TopUpFeeFixed), decimals),
+                topUpFeeBps = p.TopUpFeeBps,
+                topUpFeePercent = p.TopUpFeeBps / 100m,
             });
         }
 
-        return Results.Ok(new { isSuccess = true, data = new { merchantId = id, fees = rows }, error = (string?)null });
+        return Results.Ok(new { isSuccess = true, data = new { merchantId = id, fees = rows }, error = (string?)null, errorCode = (string?)null });
     }
 
     private static async Task<IResult> SetAsync(
@@ -57,35 +60,38 @@ public static class OpsMerchantFeeEndpoints
         IAuditLogger audit, HttpContext http)
     {
         if (!Enum.TryParse<Chain>(request.Chain, ignoreCase: true, out var chain))
-            return Bad($"Unknown chain '{request.Chain}'.");
+            return Bad(OpsErrorCodes.InvalidChain, $"Unknown chain '{request.Chain}'.");
 
         var asset = await assets.FindAsync(chain, request.Coin.Trim().ToUpperInvariant(), http.RequestAborted);
         if (asset is null)
-            return Bad($"Unknown coin '{request.Coin}' on {chain}.");
+            return Bad(OpsErrorCodes.InvalidAsset, $"Unknown coin '{request.Coin}' on {chain}.");
 
         if (!TryFeeToBase(request.DepositFeeFixed, asset.Decimals, out var depositFixed))
-            return Bad("depositFeeFixed is negative or finer than the asset's precision.");
+            return Bad(OpsErrorCodes.InvalidAmount, "depositFeeFixed is negative or finer than the asset's precision.");
         if (!TryFeeToBase(request.WithdrawalFeeFixed, asset.Decimals, out var withdrawalFixed))
-            return Bad("withdrawalFeeFixed is negative or finer than the asset's precision.");
+            return Bad(OpsErrorCodes.InvalidAmount, "withdrawalFeeFixed is negative or finer than the asset's precision.");
+        if (!TryFeeToBase(request.TopUpFeeFixed, asset.Decimals, out var topUpFixed))
+            return Bad(OpsErrorCodes.InvalidAmount, "topUpFeeFixed is negative or finer than the asset's precision.");
 
         var result = await policies.SetFeesAsync(
             id, asset.AssetId, depositFixed, request.DepositFeeBps, withdrawalFixed, request.WithdrawalFeeBps,
+            topUpFixed, request.TopUpFeeBps,
             http.RequestAborted);
 
         if (result.IsFailure)
-            return Fail(result.Error!);
+            return OpsResults.Fail(result.Error!);
 
         var actor = AuditActor.From(http);
         await audit.LogAsync(new LogAuditEntryCommand(
             actor.StaffUserId, actor.Username, "merchant.fee_updated", "Merchant", id.ToString(),
-            $"{asset.Symbol}: deposit={request.DepositFeeFixed}+{request.DepositFeeBps}bps, withdrawal={request.WithdrawalFeeFixed}+{request.WithdrawalFeeBps}bps",
+            $"{asset.Symbol}: deposit={request.DepositFeeFixed}+{request.DepositFeeBps}bps, withdrawal={request.WithdrawalFeeFixed}+{request.WithdrawalFeeBps}bps, topup={request.TopUpFeeFixed}+{request.TopUpFeeBps}bps",
             actor.IpAddress), http.RequestAborted);
 
         return Results.Ok(new
         {
             isSuccess = true,
             data = new { merchantId = id, assetId = asset.AssetId, coin = asset.Symbol, network = chain.ToString() },
-            error = (string?)null,
+            error = (string?)null, errorCode = (string?)null,
         });
     }
 
@@ -102,14 +108,5 @@ public static class OpsMerchantFeeEndpoints
         return AmountConversion.TryToBaseUnits(display, decimals, out baseUnits);
     }
 
-    private static IResult Fail(Error error)
-    {
-        var status = error.Type == ErrorType.NotFound
-            ? StatusCodes.Status404NotFound
-            : StatusCodes.Status400BadRequest;
-        return Results.Json(new { isSuccess = false, error = error.Message }, statusCode: status);
-    }
-
-    private static IResult Bad(string message) =>
-        Results.Json(new { isSuccess = false, error = message }, statusCode: StatusCodes.Status400BadRequest);
+    private static IResult Bad(string errorCode, string message) => OpsResults.Bad(errorCode, message);
 }

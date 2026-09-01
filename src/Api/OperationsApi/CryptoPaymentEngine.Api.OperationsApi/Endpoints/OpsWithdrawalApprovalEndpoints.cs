@@ -27,13 +27,13 @@ public static class OpsWithdrawalApprovalEndpoints
         var actor = AuditActor.From(http);
         var result = await approvals.ApproveAsync(withdrawalId, actor.StaffUserId.ToString(), http.RequestAborted);
         if (result.IsFailure)
-            return Fail(result.Error!);
+            return OpsResults.Fail(result.Error!);
 
         await audit.LogAsync(new LogAuditEntryCommand(
             actor.StaffUserId, actor.Username, "withdrawal.approved", "Withdrawal", withdrawalId.ToString(), null, actor.IpAddress),
             http.RequestAborted);
 
-        return Results.Ok(new { isSuccess = true, data = new { withdrawalId, status = "Approved" }, error = (string?)null });
+        return Results.Ok(new { isSuccess = true, data = new { withdrawalId, status = "Approved" }, error = (string?)null, errorCode = (string?)null });
     }
 
     private static async Task<IResult> RejectAsync(
@@ -42,23 +42,12 @@ public static class OpsWithdrawalApprovalEndpoints
         var actor = AuditActor.From(http);
         var result = await approvals.RejectAsync(withdrawalId, actor.StaffUserId.ToString(), request.Reason, http.RequestAborted);
         if (result.IsFailure)
-            return Fail(result.Error!);
+            return OpsResults.Fail(result.Error!);
 
         await audit.LogAsync(new LogAuditEntryCommand(
             actor.StaffUserId, actor.Username, "withdrawal.rejected", "Withdrawal", withdrawalId.ToString(), request.Reason, actor.IpAddress),
             http.RequestAborted);
 
-        return Results.Ok(new { isSuccess = true, data = new { withdrawalId, status = "Rejected" }, error = (string?)null });
-    }
-
-    private static IResult Fail(Error error)
-    {
-        var status = error.Type switch
-        {
-            ErrorType.NotFound => StatusCodes.Status404NotFound,
-            ErrorType.Conflict => StatusCodes.Status409Conflict,
-            _ => StatusCodes.Status400BadRequest,
-        };
-        return Results.Json(new { isSuccess = false, error = error.Message }, statusCode: status);
+        return Results.Ok(new { isSuccess = true, data = new { withdrawalId, status = "Rejected" }, error = (string?)null, errorCode = (string?)null });
     }
 }

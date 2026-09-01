@@ -31,12 +31,12 @@ public static class OpsMerchantSettlementEndpoints
     {
         var result = await registrar.SetSettlementDelayAsync(id, request.Days, http.RequestAborted);
         return result.IsFailure
-            ? Fail(result.Error!)
+            ? OpsResults.Fail(result.Error!)
             : Results.Ok(new
             {
                 isSuccess = true,
                 data = new { merchantId = id, settlementDelayDays = request.Days },
-                error = (string?)null,
+                error = (string?)null, errorCode = (string?)null,
             });
     }
 
@@ -44,16 +44,16 @@ public static class OpsMerchantSettlementEndpoints
         Guid id, SetSettlementWalletRequest request, IMerchantRegistrar registrar, HttpContext http)
     {
         if (!Enum.TryParse<Chain>(request.Chain, ignoreCase: true, out var chain))
-            return Bad($"Unknown chain '{request.Chain}'.");
+            return Bad(OpsErrorCodes.InvalidChain, $"Unknown chain '{request.Chain}'.");
 
         var result = await registrar.SetSettlementWalletAsync(id, chain, request.Address, http.RequestAborted);
         return result.IsFailure
-            ? Fail(result.Error!)
+            ? OpsResults.Fail(result.Error!)
             : Results.Ok(new
             {
                 isSuccess = true,
                 data = new { merchantId = id, network = chain.ToString(), address = request.Address.Trim() },
-                error = (string?)null,
+                error = (string?)null, errorCode = (string?)null,
             });
     }
 
@@ -61,22 +61,22 @@ public static class OpsMerchantSettlementEndpoints
         Guid id, SetWithdrawalCapRequest request, IMerchantAssetPolicyService policies, IAssetCatalog assets, HttpContext http)
     {
         if (!Enum.TryParse<Chain>(request.Chain, ignoreCase: true, out var chain))
-            return Bad($"Unknown chain '{request.Chain}'.");
+            return Bad(OpsErrorCodes.InvalidChain, $"Unknown chain '{request.Chain}'.");
 
         var asset = await assets.FindAsync(chain, request.Coin.Trim().ToUpperInvariant(), http.RequestAborted);
         if (asset is null)
-            return Bad($"Unknown coin '{request.Coin}' on {chain}.");
+            return Bad(OpsErrorCodes.InvalidAsset, $"Unknown coin '{request.Coin}' on {chain}.");
 
         // null flat cap = no flat cap; a zero flat cap is valid (it caps cash-out at zero). Never truncates (§14).
         BigInteger? flatCap = null;
         if (request.FlatCap is { } flat)
         {
             if (flat < 0m)
-                return Bad("flatCap cannot be negative.");
+                return Bad(OpsErrorCodes.InvalidAmount, "flatCap cannot be negative.");
             if (flat == 0m)
                 flatCap = BigInteger.Zero;
             else if (!AmountConversion.TryToBaseUnits(flat, asset.Decimals, out var baseUnits))
-                return Bad("flatCap is finer than the asset's precision.");
+                return Bad(OpsErrorCodes.InvalidAmount, "flatCap is finer than the asset's precision.");
             else
                 flatCap = baseUnits;
         }
@@ -85,12 +85,12 @@ public static class OpsMerchantSettlementEndpoints
             id, asset.AssetId, flatCap, request.PercentBps, http.RequestAborted);
 
         return result.IsFailure
-            ? Fail(result.Error!)
+            ? OpsResults.Fail(result.Error!)
             : Results.Ok(new
             {
                 isSuccess = true,
                 data = new { merchantId = id, assetId = asset.AssetId, coin = asset.Symbol, network = chain.ToString() },
-                error = (string?)null,
+                error = (string?)null, errorCode = (string?)null,
             });
     }
 
@@ -98,26 +98,26 @@ public static class OpsMerchantSettlementEndpoints
         Guid id, SetWithdrawalLimitsRequest request, IMerchantAssetPolicyService policies, IAssetCatalog assets, HttpContext http)
     {
         if (!Enum.TryParse<Chain>(request.Chain, ignoreCase: true, out var chain))
-            return Bad($"Unknown chain '{request.Chain}'.");
+            return Bad(OpsErrorCodes.InvalidChain, $"Unknown chain '{request.Chain}'.");
 
         var asset = await assets.FindAsync(chain, request.Coin.Trim().ToUpperInvariant(), http.RequestAborted);
         if (asset is null)
-            return Bad($"Unknown coin '{request.Coin}' on {chain}.");
+            return Bad(OpsErrorCodes.InvalidAsset, $"Unknown coin '{request.Coin}' on {chain}.");
 
         // null = unset (fall back to the platform config limit); 0 = an explicit "no minimum". Never truncates (§14).
         if (!TryLimitToBase(request.Minimum, asset.Decimals, out var minimum))
-            return Bad("minimum is negative or finer than the asset's precision.");
+            return Bad(OpsErrorCodes.InvalidAmount, "minimum is negative or finer than the asset's precision.");
         if (!TryLimitToBase(request.Maximum, asset.Decimals, out var maximum))
-            return Bad("maximum is negative or finer than the asset's precision.");
+            return Bad(OpsErrorCodes.InvalidAmount, "maximum is negative or finer than the asset's precision.");
 
         var result = await policies.SetWithdrawalLimitsAsync(id, asset.AssetId, minimum, maximum, http.RequestAborted);
         return result.IsFailure
-            ? Fail(result.Error!)
+            ? OpsResults.Fail(result.Error!)
             : Results.Ok(new
             {
                 isSuccess = true,
                 data = new { merchantId = id, assetId = asset.AssetId, coin = asset.Symbol, network = chain.ToString() },
-                error = (string?)null,
+                error = (string?)null, errorCode = (string?)null,
             });
     }
 
@@ -125,25 +125,25 @@ public static class OpsMerchantSettlementEndpoints
         Guid id, SetApprovalThresholdRequest request, IMerchantAssetPolicyService policies, IAssetCatalog assets, HttpContext http)
     {
         if (!Enum.TryParse<Chain>(request.Chain, ignoreCase: true, out var chain))
-            return Bad($"Unknown chain '{request.Chain}'.");
+            return Bad(OpsErrorCodes.InvalidChain, $"Unknown chain '{request.Chain}'.");
 
         var asset = await assets.FindAsync(chain, request.Coin.Trim().ToUpperInvariant(), http.RequestAborted);
         if (asset is null)
-            return Bad($"Unknown coin '{request.Coin}' on {chain}.");
+            return Bad(OpsErrorCodes.InvalidAsset, $"Unknown coin '{request.Coin}' on {chain}.");
 
         // null = unset (fall back to the platform config threshold); 0 = an explicit "everything needs approval".
         // Never truncates (§14).
         if (!TryLimitToBase(request.Threshold, asset.Decimals, out var threshold))
-            return Bad("threshold is negative or finer than the asset's precision.");
+            return Bad(OpsErrorCodes.InvalidAmount, "threshold is negative or finer than the asset's precision.");
 
         var result = await policies.SetApprovalThresholdAsync(id, asset.AssetId, threshold, http.RequestAborted);
         return result.IsFailure
-            ? Fail(result.Error!)
+            ? OpsResults.Fail(result.Error!)
             : Results.Ok(new
             {
                 isSuccess = true,
                 data = new { merchantId = id, assetId = asset.AssetId, coin = asset.Symbol, network = chain.ToString() },
-                error = (string?)null,
+                error = (string?)null, errorCode = (string?)null,
             });
     }
 
@@ -167,11 +167,5 @@ public static class OpsMerchantSettlementEndpoints
         return true;
     }
 
-    private static IResult Fail(Error error) =>
-        Results.Json(
-            new { isSuccess = false, error = error.Message },
-            statusCode: error.Type == ErrorType.NotFound ? StatusCodes.Status404NotFound : StatusCodes.Status400BadRequest);
-
-    private static IResult Bad(string message) =>
-        Results.Json(new { isSuccess = false, error = message }, statusCode: StatusCodes.Status400BadRequest);
+    private static IResult Bad(string errorCode, string message) => OpsResults.Bad(errorCode, message);
 }

@@ -172,11 +172,12 @@ public sealed class WithdrawalRequestServiceTests
     {
         public Task<BigInteger> QuoteDepositFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
             Task.FromResult(BigInteger.Zero);
-        public Task<BigInteger> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
+        /// <summary>These fakes exercise paths unrelated to top-up pricing, so a top-up is quoted free.</summary>
+        public Task<BigInteger> QuoteTopUpFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
             Task.FromResult(BigInteger.Zero);
-        public Task<Result<BigInteger>> GrossUpDepositAsync(Guid merchantId, Guid assetId, BigInteger netTarget, CancellationToken cancellationToken = default) =>
-            Task.FromResult(Result.Success(netTarget));
-    }
+
+        public Task<BigInteger> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(BigInteger.Zero);    }
 
     private sealed class FakeLimits(MerchantWithdrawalLimits limits) : IMerchantWithdrawalLimits
     {
@@ -197,6 +198,10 @@ public sealed class WithdrawalRequestServiceTests
             Task.FromResult(Ample);
         public Task<BigInteger> GetMerchantSettledBalanceAsync(Guid merchantId, Guid assetId, DateTimeOffset unmaturedCutoffUtc, CancellationToken cancellationToken = default) =>
             Task.FromResult(Ample);
+        public Task<BigInteger> GetWithdrawalWalletTopUpTotalAsync(Guid assetId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(BigInteger.Zero);
+        public Task<BigInteger> GetExternalSettlementTotalAsync(Guid assetId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(BigInteger.Zero);
         public Task<BigInteger> GetTreasuryHoldingAsync(Guid assetId, CancellationToken cancellationToken = default) => throw new NotSupportedException();
         public Task<(IReadOnlyList<MerchantJournalView> Items, int TotalCount)> GetJournalsAsync(
             Guid? merchantId, Guid? referenceId, DateTimeOffset? fromDate, DateTimeOffset? toDate, int page, int pageSize, CancellationToken cancellationToken = default) =>

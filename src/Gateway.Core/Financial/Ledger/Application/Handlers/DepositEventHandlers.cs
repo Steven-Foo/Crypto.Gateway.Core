@@ -7,8 +7,9 @@ using CryptoPaymentEngine.SharedKernel;
 namespace CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application.Handlers;
 
 /// <summary>
-/// Credits the ledger when a deposit confirms, splitting the platform deposit fee off the top (payer-on-top
-/// pricing): the merchant is credited the net, the platform earns the fee. The fee is <b>not</b> derived
+/// Credits the ledger when a deposit confirms, splitting the platform fee out of what actually arrived: the
+/// merchant is credited the net, the platform earns the fee. The payer is never asked for more than the
+/// invoice states — the fee is deducted, not added on top. The fee is <b>not</b> derived
 /// here — the Deposit module snapshotted it at detection and carries it on the event, so the Ledger books
 /// exactly the fee the deposit was priced at and stays chain/pricing-agnostic (§4.6). Idempotency lives in
 /// the poster/DB, so a redelivered event is harmless.
@@ -22,7 +23,7 @@ public sealed class DepositConfirmedHandler(ILedgerPoster poster)
         var fee = DepositFee.Parse(@event.FeeBaseUnits);
 
         var result = await poster.CreditDepositAsync(
-            new CreditDepositCommand(@event.DepositId, @event.MerchantId, @event.AssetId, amount, fee), cancellationToken);
+            new CreditDepositCommand(@event.DepositId, @event.MerchantId, @event.AssetId, amount, fee, IsTopUp: DepositFee.IsTopUp(@event.Kind)), cancellationToken);
 
         // A business failure here (e.g. a malformed amount) is not a normal outcome for a confirmed
         // deposit — surface it so the outbox dispatcher retries / dead-letters rather than dropping money.
@@ -46,7 +47,7 @@ public sealed class DepositOrphanedHandler(ILedgerPoster poster)
         var fee = DepositFee.Parse(@event.FeeBaseUnits);
 
         var result = await poster.ReverseDepositAsync(
-            new ReverseDepositCommand(@event.DepositId, @event.MerchantId, @event.AssetId, amount, fee), cancellationToken);
+            new ReverseDepositCommand(@event.DepositId, @event.MerchantId, @event.AssetId, amount, fee, IsTopUp: DepositFee.IsTopUp(@event.Kind)), cancellationToken);
 
         if (result.IsFailure)
             throw new DomainException($"Ledger reversal failed for deposit {@event.DepositId}: {result.Error!.Code} — {result.Error!.Message}");
@@ -57,6 +58,16 @@ public sealed class DepositOrphanedHandler(ILedgerPoster poster)
 /// carries null/empty ⇒ zero, collapsing to the original no-fee journal.</summary>
 internal static class DepositFee
 {
+    /// <summary>
+    /// Whether the event describes a merchant funding its own balance. Compared against the published wire
+    /// value rather than parsing the publisher's enum, so the Ledger keeps depending on the event's shape and
+    /// not on Deposit's domain type (§4.5). Anything else — including null on an event in flight from before
+    /// the field existed — reads as a customer deposit, which is the correct and safest default: it withholds
+    /// the funds for the merchant's settlement period rather than releasing them early.
+    /// </summary>
+    public static bool IsTopUp(string? kind) =>
+        string.Equals(kind, "MerchantTopUp", StringComparison.Ordinal);
+
     public static BigInteger Parse(string? feeBaseUnits) =>
         string.IsNullOrEmpty(feeBaseUnits)
             ? BigInteger.Zero

@@ -3,6 +3,7 @@ using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Application;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Domain;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Infrastructure.Persistence;
@@ -35,10 +36,19 @@ public abstract class DepositTestHost : IAsyncLifetime
 
     protected static DepositDetectionService Detection(
         DepositDbContext context, InMemoryChainSource chain, IWalletDirectory wallets, DepositPolicy policy,
-        IMerchantFeeSchedule? feeSchedule = null) =>
+        IMerchantFeeSchedule? feeSchedule = null, IDepositKindResolver? depositKinds = null) =>
         new(chain, chain, wallets, new DepositRepository(context), new ScanCursorStore(context, TimeProvider.System),
-            new StubPolicyProvider(policy), feeSchedule ?? new NoFeeSchedule(), TimeProvider.System,
+            new StubPolicyProvider(policy), feeSchedule ?? new NoFeeSchedule(),
+            depositKinds ?? new StubDepositKindResolver(), TimeProvider.System,
             NullLogger<DepositDetectionService>.Instance);
+
+    /// <summary>No invoice is waiting on the address, so every detected transfer is a customer deposit —
+    /// the default for tests that are not about top-up. Pass a kind to make one a merchant top-up.</summary>
+    protected sealed class StubDepositKindResolver(string? kind = null) : IDepositKindResolver
+    {
+        public Task<string?> FindWaitingKindAsync(Guid walletId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(kind);
+    }
 
     protected static DepositConfirmationService Confirmation(
         DepositDbContext context, InMemoryChainSource chain, DepositPolicy policy) =>
@@ -95,11 +105,12 @@ public abstract class DepositTestHost : IAsyncLifetime
         public Task<BigInteger> QuoteDepositFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
             Task.FromResult(depositFee);
 
-        public Task<BigInteger> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
+        /// <summary>These fakes exercise paths unrelated to top-up pricing, so a top-up is quoted free.</summary>
+        public Task<BigInteger> QuoteTopUpFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
             Task.FromResult(BigInteger.Zero);
 
-        public Task<Result<BigInteger>> GrossUpDepositAsync(Guid merchantId, Guid assetId, BigInteger netTarget, CancellationToken cancellationToken = default) =>
-            Task.FromResult(Result.Success(netTarget));
+        public Task<BigInteger> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(BigInteger.Zero);
     }
 
     protected sealed class NoFeeSchedule : IMerchantFeeSchedule
@@ -107,10 +118,11 @@ public abstract class DepositTestHost : IAsyncLifetime
         public Task<BigInteger> QuoteDepositFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
             Task.FromResult(BigInteger.Zero);
 
-        public Task<BigInteger> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
+        /// <summary>These fakes exercise paths unrelated to top-up pricing, so a top-up is quoted free.</summary>
+        public Task<BigInteger> QuoteTopUpFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
             Task.FromResult(BigInteger.Zero);
 
-        public Task<Result<BigInteger>> GrossUpDepositAsync(Guid merchantId, Guid assetId, BigInteger netTarget, CancellationToken cancellationToken = default) =>
-            Task.FromResult(Result.Success(netTarget));
+        public Task<BigInteger> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(BigInteger.Zero);
     }
 }

@@ -21,7 +21,9 @@ public sealed record MerchantAssetPolicyView(
     int MerchantWithdrawalPercentBps,
     string? MinimumWithdrawal,
     string? MaximumWithdrawal,
-    string? ApprovalThreshold);
+    string? ApprovalThreshold,
+    string TopUpFeeFixed = "0",
+    int TopUpFeeBps = 0);
 
 /// <summary>
 /// Staff-facing pricing management — the write path that was missing, so a merchant's <c>fixed + %</c> fee
@@ -37,9 +39,17 @@ public sealed record MerchantAssetPolicyView(
 public interface IMerchantAssetPolicyService
 {
     /// <summary>
-    /// Declares (upserts) the merchant's deposit + withdrawal fee for one asset. Amounts are base units.
-    /// Existing operational limits on the policy are preserved. Fails with the domain validation error if the
-    /// schedule is invalid (negative, over-large, or a bps out of range), or if the merchant is absent/closed.
+    /// Declares (upserts) the merchant's deposit + withdrawal fee for one asset, and optionally its
+    /// merchant-top-up fee. Amounts are base units. Existing operational limits on the policy are preserved.
+    /// Fails with the domain validation error if the schedule is invalid (negative, over-large, or a bps out
+    /// of range), or if the merchant is absent/closed.
+    ///
+    /// <para>The top-up pair is nullable and preserved when passed as null, so an in-process caller pricing
+    /// only deposits and withdrawals cannot reset a declared top-up rate. <b>Note this safeguard is not
+    /// reachable over HTTP:</b> the Ops request model declares the top-up fields non-nullable, so a JSON body
+    /// omitting them binds 0 and the PUT behaves as a full replacement. Any partial-update endpoint added
+    /// later must pass null here rather than a bound default, or it will silently zero the top-up fee
+    /// (verified against the running host).</para>
     /// </summary>
     Task<Result> SetFeesAsync(
         Guid merchantId,
@@ -48,6 +58,8 @@ public interface IMerchantAssetPolicyService
         int depositFeeBps,
         BigInteger withdrawalFee,
         int withdrawalFeeBps,
+        BigInteger? topUpFeeFixed = null,
+        int? topUpFeeBps = null,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -92,13 +104,10 @@ public sealed class MerchantAssetPolicyService(IMerchantRepository repository, T
         int depositFeeBps,
         BigInteger withdrawalFee,
         int withdrawalFeeBps,
+        BigInteger? topUpFeeFixed = null,
+        int? topUpFeeBps = null,
         CancellationToken cancellationToken = default)
     {
-        // Validate pricing in the domain (bps bounds, non-negative, deposit bps < 100%) before touching state.
-        var fees = FeeSchedule.Create(depositFeeFixed, depositFeeBps, withdrawalFee, withdrawalFeeBps);
-        if (fees.IsFailure)
-            return Result.Failure(fees.Error!);
-
         var merchant = await repository.GetByIdAsync(merchantId, cancellationToken);
         if (merchant is null)
             return Result.Failure(MerchantErrors.NotFound);
@@ -106,6 +115,16 @@ public sealed class MerchantAssetPolicyService(IMerchantRepository repository, T
         // Preserve existing operational limits — this call sets the price, not the limits (set via
         // SetWithdrawalLimitsAsync). A first-time policy leaves min/max unset (null ⇒ config default).
         var existing = merchant.AssetPolicies.SingleOrDefault(p => p.AssetId == assetId);
+
+        // Validate pricing in the domain (bps bounds, non-negative, deposit bps < 100%) before touching state.
+        // An omitted top-up component keeps whatever was already declared, so pricing deposits/withdrawals
+        // never silently zeroes a top-up rate someone set deliberately.
+        var fees = FeeSchedule.Create(
+            depositFeeFixed, depositFeeBps, withdrawalFee, withdrawalFeeBps,
+            topUpFeeFixed ?? existing?.TopUpFeeFixed ?? BigInteger.Zero,
+            topUpFeeBps ?? existing?.TopUpFeeBps ?? 0);
+        if (fees.IsFailure)
+            return Result.Failure(fees.Error!);
         var sweepThreshold = existing?.SweepThreshold ?? BigInteger.Zero;
         var minimumWithdrawal = existing?.MinimumWithdrawal;
         var maximumWithdrawal = existing?.MaximumWithdrawal;
@@ -185,7 +204,9 @@ public sealed class MerchantAssetPolicyService(IMerchantRepository repository, T
                 p.MerchantWithdrawalPercentBps,
                 p.MinimumWithdrawal?.ToString(CultureInfo.InvariantCulture),
                 p.MaximumWithdrawal?.ToString(CultureInfo.InvariantCulture),
-                p.ApprovalThreshold?.ToString(CultureInfo.InvariantCulture)))
+                p.ApprovalThreshold?.ToString(CultureInfo.InvariantCulture),
+                p.TopUpFeeFixed.ToString(CultureInfo.InvariantCulture),
+                p.TopUpFeeBps))
             .ToList();
 
         return Result.Success(views);

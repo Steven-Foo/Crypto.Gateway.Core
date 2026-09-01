@@ -1,3 +1,4 @@
+using CryptoPaymentEngine.Api.OperationsApi.Endpoints;
 using System.Security.Cryptography;
 using System.Text;
 using CryptoPaymentEngine.Gateway.Core.Platform.Identity.Application;
@@ -83,12 +84,16 @@ public sealed class StaffBearerAuthMiddleware(RequestDelegate next)
     private static Task Fail(HttpContext context, string message)
     {
         context.Response.StatusCode = StatusCodes.Status401Unauthorized;
-        return context.Response.WriteAsJsonAsync(new { isSuccess = false, error = message });
+        return context.Response.WriteAsJsonAsync(
+            new { isSuccess = false, error = message, errorCode = OpsErrorCodes.Unauthenticated });
     }
 
     private static Task Forbid(HttpContext context, string message)
     {
         context.Response.StatusCode = StatusCodes.Status403Forbidden;
-        return context.Response.WriteAsJsonAsync(new { isSuccess = false, error = message });
+        // Forbid is only reached on a CSRF failure here (permission denials go through StaffAuthorization),
+        // so the code is specific enough for a client to retry with a refreshed token rather than re-login.
+        return context.Response.WriteAsJsonAsync(
+            new { isSuccess = false, error = message, errorCode = OpsErrorCodes.CsrfInvalid });
     }
 }

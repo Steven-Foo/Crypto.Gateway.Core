@@ -65,6 +65,12 @@ public sealed class Withdrawal : Entity<Guid>
     public string MerchantTransactionId { get; private set; } = null!;
     public WithdrawalStatus Status { get; private set; }
     public string? ApprovedBy { get; private set; }
+
+    /// <summary>The merchant's own approver who signed off a portal-initiated payout (their username), or who
+    /// rejected it. Null for an HMAC-API payout, which never passes through merchant approval.</summary>
+    public string? MerchantApprovedBy { get; private set; }
+
+    public DateTimeOffset? MerchantApprovedAt { get; private set; }
     public Guid? SigningRequestId { get; private set; }
 
     /// <summary>
@@ -121,6 +127,24 @@ public sealed class Withdrawal : Entity<Guid>
     /// </summary>
     public BigInteger? EnergyUsed { get; private set; }
 
+    /// <summary>Who audited this merchant settlement, and when (also stamped on an audit rejection). Null for
+    /// user payouts, which never enter the audit queue.</summary>
+    public string? AuditedBy { get; private set; }
+
+    public DateTimeOffset? AuditedAt { get; private set; }
+
+    /// <summary>Who recorded the external payment, and when. Null until the settlement is completed.</summary>
+    public string? CompletedBy { get; private set; }
+
+    public DateTimeOffset? CompletedAt { get; private set; }
+
+    /// <summary>
+    /// The company wallet the admin paid the merchant from — OUTSIDE platform custody, so it is recorded for
+    /// audit but never constrained: the admin may pay from whichever wallet suits them. The transaction hash
+    /// is what is actually verified on-chain.
+    /// </summary>
+    public string? SettlementSourceAddress { get; private set; }
+
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
 
@@ -162,13 +186,66 @@ public sealed class Withdrawal : Entity<Guid>
     }
 
     /// <summary>Funds are locked. Moves to PendingApproval above the threshold, otherwise Approved.</summary>
-    public Result ConfirmReserved(bool requiresApproval, DateTimeOffset now)
+    /// <summary>
+    /// The ledger reserve succeeded — decide where the payout waits. <paramref name="requiresMerchantApproval"/>
+    /// is set only for portal-initiated payouts (a human submitted it in the merchant's own back office), which
+    /// must first clear the MERCHANT's approval before the platform ever evaluates them. An HMAC-API payout
+    /// passes false and behaves exactly as before: the merchant's server already authorised it by signing the
+    /// request, so it goes straight to the platform threshold decision.
+    /// </summary>
+    public Result ConfirmReserved(bool requiresApproval, DateTimeOffset now, bool requiresMerchantApproval = false)
     {
         if (Status != WithdrawalStatus.Reserving)
             return Result.Failure(WithdrawalErrors.InvalidStateTransition);
 
-        Status = requiresApproval ? WithdrawalStatus.PendingApproval : WithdrawalStatus.Approved;
+        Status = requiresMerchantApproval
+            ? WithdrawalStatus.PendingMerchantApproval
+            // A MERCHANT settlement is never paid by this system — an admin pays it from a company wallet
+            // outside platform custody and records the result — so it diverts here to the audit queue instead
+            // of the automated pipeline. It therefore cannot be blocked by a low hot wallet, and it never
+            // consumes a hot-pool wallet. The platform approval threshold still applies first.
+            : Kind == WithdrawalKind.Merchant && !requiresApproval
+                ? WithdrawalStatus.PendingAdminAudit
+                : requiresApproval ? WithdrawalStatus.PendingApproval : WithdrawalStatus.Approved;
         UpdatedAt = now;
+        return Result.Success();
+    }
+
+    /// <summary>
+    /// The merchant's own approver signs off a portal-initiated payout. Where it goes next is the platform's
+    /// call, not theirs: at or below the approval threshold it is cleared to send automatically; above it, it
+    /// still needs platform staff (§10). A merchant can never approve its way past the platform gate.
+    /// </summary>
+    public Result MerchantApprove(string approvedBy, bool requiresPlatformApproval, DateTimeOffset now)
+    {
+        if (Status != WithdrawalStatus.PendingMerchantApproval)
+            return Result.Failure(WithdrawalErrors.InvalidStateTransition);
+
+        if (string.IsNullOrWhiteSpace(approvedBy))
+            return Result.Failure(WithdrawalErrors.OwnerRequired);
+
+        MerchantApprovedBy = approvedBy.Trim();
+        MerchantApprovedAt = now;
+        Status = requiresPlatformApproval ? WithdrawalStatus.PendingApproval : WithdrawalStatus.Approved;
+        UpdatedAt = now;
+        return Result.Success();
+    }
+
+    /// <summary>The merchant declines its own payout before the platform sees it — releases the reserve, exactly
+    /// as a platform rejection does. Terminal.</summary>
+    public Result MerchantReject(string rejectedBy, string reason, DateTimeOffset now)
+    {
+        if (Status != WithdrawalStatus.PendingMerchantApproval)
+            return Result.Failure(WithdrawalErrors.InvalidStateTransition);
+
+        if (string.IsNullOrWhiteSpace(rejectedBy))
+            return Result.Failure(WithdrawalErrors.OwnerRequired);
+
+        MerchantApprovedBy = rejectedBy.Trim();
+        FailureReason = reason;
+        Status = WithdrawalStatus.Rejected;
+        UpdatedAt = now;
+        RaiseReleased(reason, now); // return the reserved funds
         return Result.Success();
     }
 
@@ -187,13 +264,25 @@ public sealed class Withdrawal : Entity<Guid>
         return Result.Success();
     }
 
+    /// <summary>
+    /// Platform staff clear an above-threshold payout to send. This also stamps <see cref="ReleasedAt"/>: an
+    /// explicit human approval IS the release, so the processing pass does not park the same payout again on
+    /// the identical threshold and demand a second staff action on another screen. The release path stays for
+    /// what it is actually for — resuming a payout parked for insufficient hot-wallet float — and the
+    /// <c>ReleasedAt is null</c> check still backstops anything that reaches Approved without human review
+    /// (e.g. a threshold lowered mid-flight).
+    /// </summary>
     public Result Approve(string approvedBy, DateTimeOffset now)
     {
         if (Status != WithdrawalStatus.PendingApproval)
             return Result.Failure(WithdrawalErrors.InvalidStateTransition);
 
         ApprovedBy = approvedBy;
-        Status = WithdrawalStatus.Approved;
+        ReleasedBy = approvedBy;
+        ReleasedAt = now;
+        // A merchant settlement is paid off-system, so platform approval hands it to the audit queue rather
+        // than to the signer. Only a user payout continues into the automated build/sign/broadcast pipeline.
+        Status = Kind == WithdrawalKind.Merchant ? WithdrawalStatus.PendingAdminAudit : WithdrawalStatus.Approved;
         UpdatedAt = now;
         return Result.Success();
     }
@@ -401,6 +490,85 @@ public sealed class Withdrawal : Entity<Guid>
         Status = WithdrawalStatus.Failed;
         UpdatedAt = now;
         RaiseReleased(detail, now);
+        return Result.Success();
+    }
+
+    // ── Merchant settlement: audit → external payment → recorded completion ──────────────────────────────
+    // This system does not pay a merchant settlement. An operations admin pays it from a company wallet
+    // OUTSIDE platform custody and records the verified transaction here. The reserve is held the whole way,
+    // so the merchant's money is never at risk of being spent twice or stranded.
+
+    /// <summary>
+    /// A platform admin audited the settlement request and cleared it for payment. The finance admin then pays
+    /// the merchant externally and records the result via <see cref="RecordFinanceSettlement"/>. Separate from
+    /// payment on purpose: reviewing and paying are usually different people, and the ops queue must not
+    /// confuse "checked" with "paid".
+    /// </summary>
+    public Result AdminAuditApprove(string auditedBy, DateTimeOffset now)
+    {
+        if (Status != WithdrawalStatus.PendingAdminAudit)
+            return Result.Failure(WithdrawalErrors.InvalidStateTransition);
+
+        if (string.IsNullOrWhiteSpace(auditedBy))
+            return Result.Failure(WithdrawalErrors.OwnerRequired);
+
+        AuditedBy = auditedBy.Trim();
+        AuditedAt = now;
+        Status = WithdrawalStatus.PendingFinanceTransfer;
+        UpdatedAt = now;
+        return Result.Success();
+    }
+
+    /// <summary>Audit rejected — releases the reserve so the merchant's balance returns to available. Terminal.</summary>
+    public Result AdminAuditReject(string auditedBy, string reason, DateTimeOffset now)
+    {
+        if (Status is not (WithdrawalStatus.PendingAdminAudit or WithdrawalStatus.PendingFinanceTransfer))
+            return Result.Failure(WithdrawalErrors.InvalidStateTransition);
+
+        if (string.IsNullOrWhiteSpace(auditedBy))
+            return Result.Failure(WithdrawalErrors.OwnerRequired);
+
+        AuditedBy = auditedBy.Trim();
+        AuditedAt = now;
+        FailureReason = reason;
+        Status = WithdrawalStatus.Rejected;
+        UpdatedAt = now;
+        RaiseReleased(reason, now); // the merchant gets their balance back — a decline never strands funds
+        return Result.Success();
+    }
+
+    /// <summary>
+    /// The finance admin paid the merchant from an external company wallet and recorded the verified on-chain
+    /// transaction. Raises <see cref="WithdrawalConfirmed"/> with <c>ExternallySettled: true</c>, so the Ledger
+    /// discharges the reserve against <c>ExternalSettlement</c> and leaves <c>TreasuryAsset</c> untouched —
+    /// custody genuinely did not move, because the funds never left an address this system watches.
+    ///
+    /// <para>The caller MUST have verified the hash on-chain first (exists, confirmed, correct destination,
+    /// asset and amount). This method records a settled fact; it cannot check the chain itself.</para>
+    /// </summary>
+    public Result RecordFinanceSettlement(
+        string completedBy, string transactionHash, string sourceAddress, DateTimeOffset now)
+    {
+        if (Status != WithdrawalStatus.PendingFinanceTransfer)
+            return Result.Failure(WithdrawalErrors.InvalidStateTransition);
+
+        if (string.IsNullOrWhiteSpace(completedBy))
+            return Result.Failure(WithdrawalErrors.OwnerRequired);
+
+        if (string.IsNullOrWhiteSpace(transactionHash))
+            return Result.Failure(WithdrawalErrors.TransactionHashRequired);
+
+        CompletedBy = completedBy.Trim();
+        CompletedAt = now;
+        TransactionHash = transactionHash.Trim();
+        SettlementSourceAddress = string.IsNullOrWhiteSpace(sourceAddress) ? null : sourceAddress.Trim();
+        Status = WithdrawalStatus.FinanceSettled;
+        UpdatedAt = now;
+
+        Raise(new WithdrawalConfirmed(
+            Guid.CreateVersion7(), now, Id, MerchantId, AssetId, ToBaseUnits(Amount), ToBaseUnits(Fee),
+            TransactionHash, now, MerchantTransactionId, DestinationAddress, CallbackUrl,
+            GasAssetId: null, GasFeeBaseUnits: "0", ExternallySettled: true));
         return Result.Success();
     }
 

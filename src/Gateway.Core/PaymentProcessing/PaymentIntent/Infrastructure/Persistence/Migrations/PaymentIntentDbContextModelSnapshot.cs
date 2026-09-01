@@ -62,6 +62,13 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infra
                     b.Property<DateTimeOffset>("GraceExpiresAt")
                         .HasColumnType("datetimeoffset");
 
+                    b.Property<string>("Kind")
+                        .IsRequired()
+                        .ValueGeneratedOnAdd()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)")
+                        .HasDefaultValueSql("'Customer'");
+
                     b.Property<Guid?>("MatchedDepositId")
                         .HasColumnType("uniqueidentifier");
 

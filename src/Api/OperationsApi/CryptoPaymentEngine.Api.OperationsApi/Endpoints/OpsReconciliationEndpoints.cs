@@ -25,7 +25,7 @@ public static class OpsReconciliationEndpoints
         if (!string.IsNullOrWhiteSpace(chain))
         {
             if (!Enum.TryParse<Chain>(chain, ignoreCase: true, out var parsed))
-                return Results.Json(new { isSuccess = false, error = $"Unknown chain '{chain}'." }, statusCode: StatusCodes.Status400BadRequest);
+                return OpsResults.Bad(OpsErrorCodes.InvalidChain, $"Unknown chain '{chain}'.");
             filter = parsed;
         }
 
@@ -67,6 +67,6 @@ public static class OpsReconciliationEndpoints
             });
         }
 
-        return Results.Ok(new { isSuccess = true, data = new { items = rows }, error = (string?)null });
+        return Results.Ok(new { isSuccess = true, data = new { items = rows }, error = (string?)null, errorCode = (string?)null });
     }
 }

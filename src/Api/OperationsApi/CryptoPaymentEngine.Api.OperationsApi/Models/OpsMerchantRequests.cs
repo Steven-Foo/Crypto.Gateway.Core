@@ -38,6 +38,12 @@ public sealed class SetMerchantFeeRequest
     public int DepositFeeBps { get; init; }
     public decimal WithdrawalFeeFixed { get; init; }
     public int WithdrawalFeeBps { get; init; }
+
+    /// <summary>Fee on a merchant top-up (the merchant funding its own balance). Defaults to zero, and
+    /// deliberately never inherits the platform default fee — a merchant is not charged to fund its own
+    /// float unless staff price it. Bounded [0, 100%] (it is deducted, not grossed up).</summary>
+    public decimal TopUpFeeFixed { get; init; }
+    public int TopUpFeeBps { get; init; }
 }
 
 /// <summary>Sets a merchant's settlement period (T+N) in whole days (0 = T+0). Gates the withdrawable balance

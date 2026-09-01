@@ -51,7 +51,7 @@ public static class OpsMerchantEndpoints
         {
             isSuccess = true,
             data = new { page, pageSize, totalCount = total, items },
-            error = (string?)null,
+            error = (string?)null, errorCode = (string?)null,
         });
     }
 
@@ -65,7 +65,7 @@ public static class OpsMerchantEndpoints
     {
         var result = await registrar.GetAsync(id, http.RequestAborted);
         if (result.IsFailure)
-            return Results.Json(new { isSuccess = false, error = result.Error!.Message }, statusCode: StatusCodes.Status404NotFound);
+            return OpsResults.Fail(result.Error!);
 
         var activeAssets = await assets.GetActiveAsync(http.RequestAborted);
         var balances = new List<object>(activeAssets.Count);
@@ -82,7 +82,7 @@ public static class OpsMerchantEndpoints
             });
         }
 
-        return Results.Ok(new { isSuccess = true, data = result.Value, balances, error = (string?)null });
+        return Results.Ok(new { isSuccess = true, data = result.Value, balances, error = (string?)null, errorCode = (string?)null });
     }
 
     private static async Task<IResult> SetStatusAsync(
@@ -93,7 +93,7 @@ public static class OpsMerchantEndpoints
             : await registrar.FreezeAsync(id, http.RequestAborted);
 
         if (result.IsFailure)
-            return Results.Json(new { isSuccess = false, error = result.Error!.Message }, statusCode: StatusCodes.Status400BadRequest);
+            return OpsResults.Fail(result.Error!);
 
         var view = await registrar.GetAsync(id, http.RequestAborted);
 
@@ -102,7 +102,7 @@ public static class OpsMerchantEndpoints
             actor.StaffUserId, actor.Username, "merchant.status_changed", "Merchant", id.ToString(),
             $"status={view.Value.Status}", actor.IpAddress), http.RequestAborted);
 
-        return Results.Ok(new { isSuccess = true, data = new { merchantId = id, status = view.Value.Status }, error = (string?)null });
+        return Results.Ok(new { isSuccess = true, data = new { merchantId = id, status = view.Value.Status }, error = (string?)null, errorCode = (string?)null });
     }
 
     /// <summary>
@@ -118,21 +118,21 @@ public static class OpsMerchantEndpoints
     {
         var result = await registrar.CloseAsync(id, http.RequestAborted);
         if (result.IsFailure)
-            return Results.Json(new { isSuccess = false, error = result.Error!.Message }, statusCode: StatusCodes.Status400BadRequest);
+            return OpsResults.Fail(result.Error!);
 
         var actor = AuditActor.From(http);
         await audit.LogAsync(new LogAuditEntryCommand(
             actor.StaffUserId, actor.Username, "merchant.status_changed", "Merchant", id.ToString(),
             "status=Closed", actor.IpAddress), http.RequestAborted);
 
-        return Results.Ok(new { isSuccess = true, data = new { merchantId = id, status = "Closed" }, error = (string?)null });
+        return Results.Ok(new { isSuccess = true, data = new { merchantId = id, status = "Closed" }, error = (string?)null, errorCode = (string?)null });
     }
 
     private static async Task<IResult> RegenerateKeyAsync(Guid id, IMerchantRegistrar registrar, IAuditLogger audit, HttpContext http)
     {
         var result = await registrar.RotateCredentialAsync(id, http.RequestAborted);
         if (result.IsFailure)
-            return Results.Json(new { isSuccess = false, error = result.Error!.Message }, statusCode: StatusCodes.Status400BadRequest);
+            return OpsResults.Fail(result.Error!);
 
         var actor = AuditActor.From(http);
         await audit.LogAsync(new LogAuditEntryCommand(
@@ -150,7 +150,7 @@ public static class OpsMerchantEndpoints
                 signingSecret = credential.SigningSecret,
                 warning = "Store both values securely — they will never be shown again. The previous credential is now revoked.",
             },
-            error = (string?)null,
+            error = (string?)null, errorCode = (string?)null,
         });
     }
 
@@ -158,8 +158,8 @@ public static class OpsMerchantEndpoints
     {
         var result = await registrar.GetAsync(id, http.RequestAborted);
         return result.IsFailure
-            ? Results.Json(new { isSuccess = false, error = result.Error!.Message }, statusCode: StatusCodes.Status404NotFound)
-            : Results.Ok(new { isSuccess = true, data = new { merchantId = id, allowedIps = result.Value.AllowedIps }, error = (string?)null });
+            ? OpsResults.Fail(result.Error!)
+            : Results.Ok(new { isSuccess = true, data = new { merchantId = id, allowedIps = result.Value.AllowedIps }, error = (string?)null, errorCode = (string?)null });
     }
 
     private static async Task<IResult> UpdateAllowedIpsAsync(
@@ -179,13 +179,11 @@ public static class OpsMerchantEndpoints
 
         // If every submitted IP was invalid and the request wasn't intentionally empty, keep existing IPs.
         if (validIps.Count == 0 && invalidIps.Count > 0)
-            return Results.Json(
-                new { isSuccess = false, error = $"No valid IPs provided. Invalid: {string.Join(", ", invalidIps)}. Existing allowed IPs are unchanged." },
-                statusCode: StatusCodes.Status400BadRequest);
+            return OpsResults.Bad(OpsErrorCodes.InvalidIpAddress, $"No valid IPs provided. Invalid: {string.Join(", ", invalidIps)}. Existing allowed IPs are unchanged.");
 
         var result = await registrar.UpdateAllowedIpsAsync(id, validIps, http.RequestAborted);
         if (result.IsFailure)
-            return Results.Json(new { isSuccess = false, error = result.Error!.Message }, statusCode: StatusCodes.Status400BadRequest);
+            return OpsResults.Fail(result.Error!);
 
         var change = result.Value;
 
@@ -215,7 +213,7 @@ public static class OpsMerchantEndpoints
                 invalidIps,
                 cloudflare = new { added = change.Added.Count, removed = change.Removed.Count },
             },
-            error = (string?)null,
+            error = (string?)null, errorCode = (string?)null,
         });
     }
 
@@ -227,9 +225,7 @@ public static class OpsMerchantEndpoints
             request.MerchantCode, request.Name, request.CallbackUrl, http.RequestAborted);
 
         if (result.IsFailure)
-            return Results.Json(
-                new { isSuccess = false, error = result.Error!.Message },
-                statusCode: StatusCodes.Status400BadRequest);
+            return OpsResults.Fail(result.Error!);
 
         var merchant = result.Value;
 
@@ -261,7 +257,7 @@ public static class OpsMerchantEndpoints
                 signingSecret = merchant.SigningSecret,
                 wallet,
             },
-            error = (string?)null,
+            error = (string?)null, errorCode = (string?)null,
         });
     }
 }

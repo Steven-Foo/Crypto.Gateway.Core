@@ -25,3 +25,19 @@ public sealed class SubmitReloadRequest
 {
     [Required] public string SignedHex { get; init; } = null!;
 }
+
+/// <summary>
+/// Record company funds already moved into a hot withdrawal wallet, so the automated payout pipeline stays
+/// funded. <see cref="Amount"/> is a display decimal converted at the edge (§14); the verified on-chain amount
+/// is what is actually booked. <see cref="SourceAddress"/> is the company wallet the funds came from — outside
+/// platform custody, recorded for audit, deliberately unconstrained.
+/// </summary>
+public sealed class RecordHotWalletTopUpRequest
+{
+    [Required] public string Chain { get; init; } = null!;
+    [Required] public Guid TargetWalletId { get; init; }
+    [Required, Range(0.000001, double.MaxValue, ErrorMessage = "Amount must be greater than 0.")]
+    public decimal Amount { get; init; }
+    [Required, MaxLength(128)] public string TransactionHash { get; init; } = null!;
+    [MaxLength(128)] public string? SourceAddress { get; init; }
+}

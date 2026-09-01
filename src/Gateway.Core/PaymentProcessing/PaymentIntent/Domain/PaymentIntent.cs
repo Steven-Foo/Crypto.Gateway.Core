@@ -35,6 +35,7 @@ public sealed class PaymentIntent : Entity<Guid>
         string address,
         BigInteger expectedAmount,
         string? callbackUrl,
+        PaymentIntentKind kind,
         DateTimeOffset expiresAt,
         DateTimeOffset graceExpiresAt,
         DateTimeOffset now) : base(id)
@@ -48,6 +49,7 @@ public sealed class PaymentIntent : Entity<Guid>
         Address = address;
         ExpectedAmount = expectedAmount;
         CallbackUrl = callbackUrl;
+        Kind = kind;
         Status = PaymentIntentStatus.Waiting;
         ExpiresAt = expiresAt;
         GraceExpiresAt = graceExpiresAt;
@@ -61,6 +63,13 @@ public sealed class PaymentIntent : Entity<Guid>
 
     /// <summary>The unguessable public id shown to the payer and used in the <c>/pay/{ref}</c> URL (never the PK).</summary>
     public Guid PublicReference { get; private set; }
+
+    /// <summary>
+    /// Customer payment vs merchant top-up — declared by the merchant at creation (the two come from
+    /// different portal pages), never inferred on-chain. Carried onto the deposit at detection, where it
+    /// selects the fee quote; and it is what exempts a top-up from the T+N settlement hold.
+    /// </summary>
+    public PaymentIntentKind Kind { get; private set; }
 
     public Guid MerchantId { get; private set; }
 
@@ -107,7 +116,8 @@ public sealed class PaymentIntent : Entity<Guid>
         string? callbackUrl,
         DateTimeOffset expiresAt,
         DateTimeOffset graceExpiresAt,
-        DateTimeOffset now)
+        DateTimeOffset now,
+        PaymentIntentKind kind = PaymentIntentKind.Customer)
     {
         if (merchantId == Guid.Empty)
             return Result.Failure<PaymentIntent>(PaymentIntentErrors.MerchantRequired);
@@ -132,7 +142,7 @@ public sealed class PaymentIntent : Entity<Guid>
 
         return Result.Success(new PaymentIntent(
             Guid.CreateVersion7(), Guid.NewGuid(), merchantId, merchantTransactionId.Trim(), chain, assetId,
-            walletId, address.Trim(), expectedAmount, callbackUrl, expiresAt, graceExpiresAt, now));
+            walletId, address.Trim(), expectedAmount, callbackUrl, kind, expiresAt, graceExpiresAt, now));
     }
 
     /// <summary>

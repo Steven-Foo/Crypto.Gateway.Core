@@ -34,6 +34,8 @@ public sealed class MerchantAssetPolicy : Entity<Guid>
         DepositFeeBps = fees.DepositFeeBps;
         WithdrawalFee = fees.WithdrawalFee;
         WithdrawalFeeBps = fees.WithdrawalFeeBps;
+        TopUpFeeFixed = fees.TopUpFeeFixed;
+        TopUpFeeBps = fees.TopUpFeeBps;
         MerchantWithdrawalFlatCap = null;       // no merchant-withdrawal (cash-out) cap until one is set
         MerchantWithdrawalPercentBps = 0;
         ApprovalThreshold = null;               // unset ⇒ the withdrawal flow uses the platform config threshold
@@ -63,6 +65,11 @@ public sealed class MerchantAssetPolicy : Entity<Guid>
     public BigInteger WithdrawalFee { get; private set; }
     public int WithdrawalFeeBps { get; private set; }
 
+    /// <summary>Fee on a merchant top-up (funding its own balance). Zero unless staff declared a rate —
+    /// deliberately never inherits the platform default, so a merchant is not charged to fund its own float.</summary>
+    public BigInteger TopUpFeeFixed { get; private set; }
+    public int TopUpFeeBps { get; private set; }
+
     // ── Merchant-withdrawal (earnings cash-out) liquidity cap — DISTINCT from the user Min/MaxWithdrawal
     // above, which gate a standard user payout. Null flat + 0 bps = no cap (cash out up to the full balance). ──
     /// <summary>Flat per-cash-out cap in base units; null = no flat cap.</summary>
@@ -81,7 +88,7 @@ public sealed class MerchantAssetPolicy : Entity<Guid>
     public DateTimeOffset UpdatedAt { get; private set; }
 
     /// <summary>The merchant's pricing for this asset. The single home of the fee arithmetic.</summary>
-    public FeeSchedule Fees => FeeSchedule.FromTrusted(DepositFeeFixed, DepositFeeBps, WithdrawalFee, WithdrawalFeeBps);
+    public FeeSchedule Fees => FeeSchedule.FromTrusted(DepositFeeFixed, DepositFeeBps, WithdrawalFee, WithdrawalFeeBps, TopUpFeeFixed, TopUpFeeBps);
 
     internal static Result<MerchantAssetPolicy> Create(
         Guid merchantId,
@@ -119,6 +126,8 @@ public sealed class MerchantAssetPolicy : Entity<Guid>
         DepositFeeBps = fees.DepositFeeBps;
         WithdrawalFee = fees.WithdrawalFee;
         WithdrawalFeeBps = fees.WithdrawalFeeBps;
+        TopUpFeeFixed = fees.TopUpFeeFixed;
+        TopUpFeeBps = fees.TopUpFeeBps;
         UpdatedAt = updatedAt;
         return Result.Success();
     }

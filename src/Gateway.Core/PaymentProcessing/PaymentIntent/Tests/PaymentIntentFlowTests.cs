@@ -103,20 +103,9 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
         return provisioner;
     }
 
-    /// <summary>An unpriced merchant: the invoice is not grossed up and no fee is taken (identity).</summary>
-    private static IMerchantFeeSchedule NoFees()
-    {
-        var fees = Substitute.For<IMerchantFeeSchedule>();
-        fees.GrossUpDepositAsync(Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<BigInteger>(), Arg.Any<CancellationToken>())
-            .Returns(ci => Result.Success((BigInteger)ci[2]));
-        fees.QuoteDepositFeeAsync(Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<BigInteger>(), Arg.Any<CancellationToken>())
-            .Returns(BigInteger.Zero);
-        return fees;
-    }
-
     private static PaymentIntentService Service(
         PaymentIntentDbContext context, IDepositAddressProvisioner provisioner, IWalletDirectory directory, IWalletReservationLock? walletLock = null) =>
-        new(new PaymentIntentRepository(context), directory, walletLock ?? new FakeWalletReservationLock(), provisioner, NoFees(),
+        new(new PaymentIntentRepository(context), directory, walletLock ?? new FakeWalletReservationLock(), provisioner,
             Options.Create(new PaymentIntentOptions { ExpiryMinutes = 30 }),
             TimeProvider.System, NullLogger<PaymentIntentService>.Instance);
 
@@ -368,5 +357,45 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
 
         result.IsFailure.ShouldBeTrue();
         result.Error!.Code.ShouldBe(PaymentIntentErrors.InvalidStateTransition.Code);
+    }
+
+    /// <summary>
+    /// The invoice asks for exactly the amount requested — never inflated — for BOTH kinds. A payer must not
+    /// be quietly asked to pay more than the invoice they agreed to; the platform fee is instead deducted from
+    /// what arrives, and the merchant reconciles from the amount recorded against each deposit.
+    ///
+    /// <para>This replaced payer-on-top gross-up, where a customer invoice was inflated so the merchant netted
+    /// a round target. Both kinds are asserted here because a change that reintroduced gross-up for one of
+    /// them would be a silent overcharge on a live payer.</para>
+    /// </summary>
+    [Fact]
+    public async Task Both_kinds_invoice_exactly_the_amount_requested()
+    {
+        var directory = new FakeWalletDirectory();
+        var provisioner = Provisioner(new MintCounter(), directory);
+
+        await using (var context = Context())
+        {
+            var service = Service(context, provisioner, directory);
+
+            (await service.CreateAsync(new CreatePaymentIntentCommand(
+                Merchant, "tx-topup", Chain.Tron, Asset, OneUsdt, null,
+                PaymentIntentKind.MerchantTopUp), Ct)).IsSuccess.ShouldBeTrue();
+
+            (await service.CreateAsync(new CreatePaymentIntentCommand(
+                Merchant, "tx-customer", Chain.Tron, Asset, OneUsdt, null), Ct)).IsSuccess.ShouldBeTrue();
+        }
+
+        await using var verify = Context();
+
+        var topUp = await verify.PaymentIntents.AsNoTracking()
+            .SingleAsync(i => i.MerchantTransactionId == "tx-topup", Ct);
+        topUp.Kind.ShouldBe(PaymentIntentKind.MerchantTopUp);
+        topUp.ExpectedAmount.ShouldBe(OneUsdt, "the merchant sends exactly what it asked to top up");
+
+        var customer = await verify.PaymentIntents.AsNoTracking()
+            .SingleAsync(i => i.MerchantTransactionId == "tx-customer", Ct);
+        customer.Kind.ShouldBe(PaymentIntentKind.Customer);
+        customer.ExpectedAmount.ShouldBe(OneUsdt, "the customer pays exactly the invoiced amount, never more");
     }
 }

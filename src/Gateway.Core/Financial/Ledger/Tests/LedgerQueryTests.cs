@@ -2,6 +2,8 @@ using System.Numerics;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Infrastructure.Persistence;
+using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Domain;
+using Microsoft.EntityFrameworkCore;
 using Shouldly;
 using Xunit;
 
@@ -278,5 +280,129 @@ public sealed class LedgerQueryTests : LedgerTestHost
         total.ShouldBe(1);
         items.Single().ReferenceId.ShouldBe(depositId);
         items.Single().Amount.ShouldBe(Deposited);
+    }
+
+    // ── merchant top-up: instantly withdrawable, unlike a customer deposit ──
+
+    /// <summary>
+    /// The whole point of giving a top-up its own <c>JournalReferenceType</c>. The settled-balance query
+    /// withholds recent inflow for the merchant's T+N period by filtering on Deposit/DepositReversal, so a
+    /// top-up posted under <c>MerchantTopUp</c> falls outside that filter and is spendable immediately.
+    ///
+    /// <para>Asserted against the SAME cutoff that provably withholds a customer deposit, so this cannot pass
+    /// by accident — if the two were posted under one reference type, one of these two assertions must fail.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_merchant_top_up_is_settled_immediately_while_a_customer_deposit_is_not()
+    {
+        var cutoff = DateTimeOffset.UtcNow.AddDays(-1); // in the past ⇒ anything just-posted is still maturing
+
+        await using (var ctx = Context())
+            await Poster(ctx).CreditDepositAsync(
+                new CreditDepositCommand(Guid.CreateVersion7(), Merchant, Asset, Deposited, IsTopUp: true), Ct);
+
+        await using (var verify = Context())
+            (await new LedgerQuery(verify).GetMerchantSettledBalanceAsync(Merchant, Asset, cutoff, Ct))
+                .ShouldBe(Deposited, "a merchant funding its own float must not be held for the settlement period");
+
+        // The control: an identical customer deposit, same cutoff, IS withheld — so the exemption above is
+        // genuinely the kind's doing and not a cutoff that withholds nothing.
+        await using (var ctx = Context())
+            await Poster(ctx).CreditDepositAsync(
+                new CreditDepositCommand(Guid.CreateVersion7(), Merchant, Asset, Deposited), Ct);
+
+        await using (var verify = Context())
+            (await new LedgerQuery(verify).GetMerchantSettledBalanceAsync(Merchant, Asset, cutoff, Ct))
+                .ShouldBe(Deposited, "the customer deposit is still maturing, so only the top-up is settled");
+    }
+
+    /// <summary>
+    /// A top-up moves custody and merchant liability exactly as a deposit does — it is real money arriving at
+    /// a watched address, so TreasuryAsset MUST rise or reconciliation would report drift equal to every
+    /// top-up ever made. (Contrast the staff manual adjustment, which moves no coins and must never touch it.)
+    /// </summary>
+    [Fact]
+    public async Task A_merchant_top_up_raises_custody_and_the_merchant_balance_like_any_deposit()
+    {
+        var fee = BigInteger.Parse("1000000");
+
+        await using (var ctx = Context())
+            await Poster(ctx).CreditDepositAsync(
+                new CreditDepositCommand(Guid.CreateVersion7(), Merchant, Asset, Deposited, fee, IsTopUp: true), Ct);
+
+        await using var verify = Context();
+        var query = new LedgerQuery(verify);
+
+        // Custody rises by the GROSS that arrived on-chain, not the net credited.
+        (await query.GetTreasuryHoldingAsync(Asset, Ct)).ShouldBe(Deposited);
+        (await query.GetMerchantBalanceAsync(Merchant, Asset, Ct)).ShouldBe(Deposited - fee);
+    }
+
+    /// <summary>
+    /// The worked example, pinned: a 100 USDT top-up at a 2% top-up fee. The merchant is quoted 100 (NOT
+    /// 102 — no gross-up), sends 100, and is credited 98 with 2 becoming platform fee revenue.
+    /// </summary>
+    [Fact]
+    public async Task A_100_top_up_at_2_percent_credits_98_and_earns_2()
+    {
+        var hundred = BigInteger.Parse("100000000"); // 100 USDT @ 6dp
+        var twoPercent = hundred * 200 / 10_000;     // 2 USDT, quoted by FeeSchedule at 200bps
+
+        twoPercent.ShouldBe(BigInteger.Parse("2000000"));
+
+        await using (var ctx = Context())
+            await Poster(ctx).CreditDepositAsync(
+                new CreditDepositCommand(Guid.CreateVersion7(), Merchant, Asset, hundred, twoPercent, IsTopUp: true), Ct);
+
+        await using var verify = Context();
+        var query = new LedgerQuery(verify);
+
+        // Custody rises by the GROSS that arrived — 100, not 102: the merchant sent exactly what it was quoted.
+        (await query.GetTreasuryHoldingAsync(Asset, Ct)).ShouldBe(hundred);
+
+        // The merchant can spend 98 — the fee came out of the 100 that arrived.
+        (await query.GetMerchantBalanceAsync(Merchant, Asset, Ct)).ShouldBe(BigInteger.Parse("98000000"));
+
+        // ...and the 2 became platform revenue, not a merchant balance.
+        var feeRevenue = await verify.AccountBalances
+            .Join(verify.Accounts, b => b.Id, a => a.Id, (b, a) => new { b, a })
+            .Where(x => x.a.AccountType == AccountType.FeeRevenue && x.a.AssetId == Asset)
+            .Select(x => x.b.Balance)
+            .SingleAsync(Ct);
+        feeRevenue.ShouldBe(BigInteger.Parse("2000000"));
+    }
+
+    /// <summary>
+    /// The customer deposit worked example, pinned: a 100 USDT invoice at a 2% deposit fee. The customer is
+    /// asked for 100 and pays 100 — never more — and the fee comes out of what arrived, so the merchant is
+    /// credited 98 and the platform earns 2.
+    ///
+    /// <para>This is the payer-on-top reversal: the invoice used to be inflated to 102.04 so the merchant
+    /// netted a round 100. A payer must never be quietly asked for more than the invoice they agreed to, and
+    /// the merchant reconciles from the amount recorded against each deposit.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_100_customer_deposit_at_2_percent_credits_98_and_earns_2()
+    {
+        var hundred = BigInteger.Parse("100000000"); // 100 USDT @ 6dp
+        var twoPercent = hundred * 200 / 10_000;     // 2 USDT
+
+        await using (var ctx = Context())
+            await Poster(ctx).CreditDepositAsync(
+                new CreditDepositCommand(Guid.CreateVersion7(), Merchant, Asset, hundred, twoPercent), Ct);
+
+        await using var verify = Context();
+        var query = new LedgerQuery(verify);
+
+        // Custody rises by exactly what the customer sent — 100, not 102.04.
+        (await query.GetTreasuryHoldingAsync(Asset, Ct)).ShouldBe(hundred);
+        (await query.GetMerchantBalanceAsync(Merchant, Asset, Ct)).ShouldBe(BigInteger.Parse("98000000"));
+
+        var feeRevenue = await verify.AccountBalances
+            .Join(verify.Accounts, b => b.Id, a => a.Id, (b, a) => new { b, a })
+            .Where(x => x.a.AccountType == AccountType.FeeRevenue && x.a.AssetId == Asset)
+            .Select(x => x.b.Balance)
+            .SingleAsync(Ct);
+        feeRevenue.ShouldBe(BigInteger.Parse("2000000"));
     }
 }

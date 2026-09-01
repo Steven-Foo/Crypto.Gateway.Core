@@ -47,14 +47,14 @@ public static class OpsEnergyEndpoints
         if (pageSize > 200) pageSize = 200;
 
         if (!TryParseChain(chain, out var chainFilter, out var chainError))
-            return Bad(chainError!);
+            return Bad(OpsErrorCodes.InvalidChain, chainError!);
 
         string? normalisedKind = null;
         if (!string.IsNullOrWhiteSpace(kind))
         {
             normalisedKind = Kinds.FirstOrDefault(k => string.Equals(k, kind, StringComparison.OrdinalIgnoreCase));
             if (normalisedKind is null)
-                return Bad($"Unknown kind '{kind}'. Expected one of: {string.Join(", ", Kinds)}.");
+                return Bad(OpsErrorCodes.InvalidKind, $"Unknown kind '{kind}'. Expected one of: {string.Join(", ", Kinds)}.");
         }
 
         string? normalisedStatus = null;
@@ -62,7 +62,7 @@ public static class OpsEnergyEndpoints
         {
             normalisedStatus = Statuses.FirstOrDefault(s => string.Equals(s, status, StringComparison.OrdinalIgnoreCase));
             if (normalisedStatus is null)
-                return Bad($"Unknown status '{status}'. Expected one of: {string.Join(", ", Statuses)}.");
+                return Bad(OpsErrorCodes.InvalidStatus, $"Unknown status '{status}'. Expected one of: {string.Join(", ", Statuses)}.");
         }
 
         var filter = new EnergyOperationAdminFilter(
@@ -92,7 +92,7 @@ public static class OpsEnergyEndpoints
         {
             isSuccess = true,
             data = new { page, pageSize, totalCount = total, summary, items = rows },
-            error = (string?)null,
+            error = (string?)null, errorCode = (string?)null,
         });
     }
 
@@ -100,7 +100,7 @@ public static class OpsEnergyEndpoints
         IWalletResourceStore store, HttpContext http, string? chain = null)
     {
         if (!TryParseChain(chain, out var chainFilter, out var chainError))
-            return Bad(chainError!);
+            return Bad(OpsErrorCodes.InvalidChain, chainError!);
 
         var snapshots = await store.ListAsync(http.RequestAborted);
 
@@ -135,7 +135,7 @@ public static class OpsEnergyEndpoints
             })
             .ToList();
 
-        return Results.Ok(new { isSuccess = true, data = new { items = ordered }, error = (string?)null });
+        return Results.Ok(new { isSuccess = true, data = new { items = ordered }, error = (string?)null, errorCode = (string?)null });
     }
 
     private static bool TryParseChain(string? chain, out Chain? parsed, out string? error)
@@ -153,6 +153,5 @@ public static class OpsEnergyEndpoints
         return true;
     }
 
-    private static IResult Bad(string message) =>
-        Results.Json(new { isSuccess = false, error = message }, statusCode: StatusCodes.Status400BadRequest);
+    private static IResult Bad(string errorCode, string message) => OpsResults.Bad(errorCode, message);
 }

@@ -41,7 +41,7 @@ public static class OpsMerchantBalanceEndpoints
             http.RequestAborted);
 
         if (result.IsFailure)
-            return Fail(result.Error!);
+            return OpsResults.Fail(result.Error!);
 
         var actor = AuditActor.From(http);
         await audit.LogAsync(new LogAuditEntryCommand(
@@ -53,6 +53,7 @@ public static class OpsMerchantBalanceEndpoints
             isSuccess = true,
             data = new { merchantId = id, assetId = asset.AssetId, coin = asset.Symbol, network = asset.Chain.ToString(), outcome = result.Value.ToString() },
             error = (string?)null,
+            errorCode = (string?)null,
         });
     }
 
@@ -69,7 +70,7 @@ public static class OpsMerchantBalanceEndpoints
             http.RequestAborted);
 
         if (result.IsFailure)
-            return Fail(result.Error!);
+            return OpsResults.Fail(result.Error!);
 
         var actor = AuditActor.From(http);
         await audit.LogAsync(new LogAuditEntryCommand(
@@ -81,6 +82,7 @@ public static class OpsMerchantBalanceEndpoints
             isSuccess = true,
             data = new { merchantId = id, assetId = asset.AssetId, coin = asset.Symbol, network = asset.Chain.ToString(), outcome = result.Value.ToString() },
             error = (string?)null,
+            errorCode = (string?)null,
         });
     }
 
@@ -104,11 +106,11 @@ public static class OpsMerchantBalanceEndpoints
         if (!string.IsNullOrWhiteSpace(coin))
         {
             if (string.IsNullOrWhiteSpace(chain) || !Enum.TryParse<Chain>(chain, ignoreCase: true, out var parsedChain))
-                return Bad("chain is required (and must be a known chain) when coin is set.");
+                return OpsResults.Bad(OpsErrorCodes.NetworkRequired, "chain is required (and must be a known chain) when coin is set.");
 
             var asset = await assets.FindAsync(parsedChain, coin.Trim().ToUpperInvariant(), http.RequestAborted);
             if (asset is null)
-                return Bad($"Unknown coin '{coin}' on {parsedChain}.");
+                return OpsResults.Bad(OpsErrorCodes.InvalidAsset, $"Unknown coin '{coin}' on {parsedChain}.");
 
             assetId = asset.AssetId;
         }
@@ -120,11 +122,8 @@ public static class OpsMerchantBalanceEndpoints
         foreach (var distinctAssetId in items.Select(i => i.AssetId).Distinct())
             assetsById[distinctAssetId] = await assets.FindByIdAsync(distinctAssetId, http.RequestAborted);
 
-        return Results.Ok(new
+        return OpsResults.Ok(new
         {
-            isSuccess = true,
-            data = new
-            {
                 merchantId = id,
                 page,
                 pageSize,
@@ -149,8 +148,6 @@ public static class OpsMerchantBalanceEndpoints
                         createdAt = i.CreatedAt,
                     };
                 }),
-            },
-            error = (string?)null,
         });
     }
 
@@ -168,6 +165,9 @@ public static class OpsMerchantBalanceEndpoints
         ("WithdrawalRelease", _) => "withdrawal_release",
         ("Adjustment", "Credit") => "manual_credit",
         ("Adjustment", "Debit") => "manual_debit",
+        // Everything else is platform-side accounting that never posts a line against a merchant's liability
+        // (WithdrawalSettle, Sweep, GasCost, WithdrawalWalletTopUp), so it cannot reach this projection —
+        // the query INNER JOINs that account. Guarded by a test rather than by redundant switch arms.
         _ => "other",
     };
 
@@ -178,32 +178,19 @@ public static class OpsMerchantBalanceEndpoints
     {
         var merchant = await registrar.GetAsync(merchantId, http.RequestAborted);
         if (merchant.IsFailure)
-            return (null, default, Results.Json(new { isSuccess = false, error = "Merchant not found." }, statusCode: StatusCodes.Status404NotFound));
+            return (null, default, OpsResults.NotFound(OpsErrorCodes.NotFound, "Merchant not found."));
 
         if (!Enum.TryParse<Chain>(request.Chain, ignoreCase: true, out var chain))
-            return (null, default, Bad($"Unknown chain '{request.Chain}'."));
+            return (null, default, OpsResults.Bad(OpsErrorCodes.InvalidChain, $"Unknown chain '{request.Chain}'."));
 
         var asset = await assets.FindAsync(chain, request.Coin.Trim().ToUpperInvariant(), http.RequestAborted);
         if (asset is null)
-            return (null, default, Bad($"Unknown coin '{request.Coin}' on {chain}."));
+            return (null, default, OpsResults.Bad(OpsErrorCodes.InvalidAsset, $"Unknown coin '{request.Coin}' on {chain}."));
 
         if (!AmountConversion.TryToBaseUnits(request.Amount, asset.Decimals, out var amount))
-            return (null, default, Bad("amount must be positive and no finer than the asset's precision."));
+            return (null, default, OpsResults.Bad(OpsErrorCodes.InvalidAmount, "amount must be positive and no finer than the asset's precision."));
 
         return (asset, amount, null);
     }
 
-    private static IResult Fail(Error error)
-    {
-        var status = error.Type switch
-        {
-            ErrorType.NotFound => StatusCodes.Status404NotFound,
-            ErrorType.Conflict => StatusCodes.Status409Conflict,
-            _ => StatusCodes.Status400BadRequest,
-        };
-        return Results.Json(new { isSuccess = false, error = error.Message }, statusCode: status);
-    }
-
-    private static IResult Bad(string message) =>
-        Results.Json(new { isSuccess = false, error = message }, statusCode: StatusCodes.Status400BadRequest);
 }

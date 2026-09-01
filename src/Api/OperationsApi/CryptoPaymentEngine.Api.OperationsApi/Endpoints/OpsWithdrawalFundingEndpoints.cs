@@ -28,13 +28,13 @@ public static class OpsWithdrawalFundingEndpoints
         var actor = AuditActor.From(http);
         var result = await funding.ReleaseAsync(withdrawalId, actor.StaffUserId.ToString(), http.RequestAborted);
         if (result.IsFailure)
-            return Fail(result.Error!);
+            return OpsResults.Fail(result.Error!);
 
         await audit.LogAsync(new LogAuditEntryCommand(
             actor.StaffUserId, actor.Username, "withdrawal.released", "Withdrawal", withdrawalId.ToString(), null, actor.IpAddress),
             http.RequestAborted);
 
-        return Results.Ok(new { isSuccess = true, data = new { withdrawalId, status = "Released" }, error = (string?)null });
+        return Results.Ok(new { isSuccess = true, data = new { withdrawalId, status = "Released" }, error = (string?)null, errorCode = (string?)null });
     }
 
     private static async Task<IResult> CancelAsync(
@@ -43,23 +43,12 @@ public static class OpsWithdrawalFundingEndpoints
         var actor = AuditActor.From(http);
         var result = await funding.CancelAsync(withdrawalId, actor.StaffUserId.ToString(), request.Reason, http.RequestAborted);
         if (result.IsFailure)
-            return Fail(result.Error!);
+            return OpsResults.Fail(result.Error!);
 
         await audit.LogAsync(new LogAuditEntryCommand(
             actor.StaffUserId, actor.Username, "withdrawal.cancelled", "Withdrawal", withdrawalId.ToString(), request.Reason, actor.IpAddress),
             http.RequestAborted);
 
-        return Results.Ok(new { isSuccess = true, data = new { withdrawalId, status = "Cancelled" }, error = (string?)null });
-    }
-
-    private static IResult Fail(Error error)
-    {
-        var status = error.Type switch
-        {
-            ErrorType.NotFound => StatusCodes.Status404NotFound,
-            ErrorType.Conflict => StatusCodes.Status409Conflict,
-            _ => StatusCodes.Status400BadRequest,
-        };
-        return Results.Json(new { isSuccess = false, error = error.Message }, statusCode: status);
+        return Results.Ok(new { isSuccess = true, data = new { withdrawalId, status = "Cancelled" }, error = (string?)null, errorCode = (string?)null });
     }
 }

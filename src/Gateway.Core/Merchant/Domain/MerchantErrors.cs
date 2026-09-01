@@ -42,7 +42,7 @@ public static class MerchantErrors
         Error.Validation("merchant.amount_too_large", "Amount exceeds the 38-digit storage limit.");
 
     public static readonly Error FeeBpsInvalid =
-        Error.Validation("merchant.fee_bps_invalid", "Fee basis points are out of range (deposit 0-9999, withdrawal 0-10000).");
+        Error.Validation("merchant.fee_bps_invalid", "Fee basis points are out of range (must be 0-10000, where 10000 = 100%).");
 
     public static readonly Error SettlementAddressRequired =
         Error.Validation("merchant.settlement_address_required", "A settlement wallet address is required.");

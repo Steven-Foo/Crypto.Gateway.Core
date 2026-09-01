@@ -45,6 +45,7 @@ public static class LedgerModuleExtensions
         services.AddScoped<IIntegrationEventHandler<DepositOrphaned>, DepositOrphanedHandler>();
         services.AddScoped<IIntegrationEventHandler<WithdrawalConfirmed>, WithdrawalConfirmedHandler>();
         services.AddScoped<IIntegrationEventHandler<WithdrawalFailed>, WithdrawalFailedHandler>();
+        services.AddScoped<IIntegrationEventHandler<HotWalletToppedUp>, HotWalletToppedUpHandler>();
 
         return services;
     }

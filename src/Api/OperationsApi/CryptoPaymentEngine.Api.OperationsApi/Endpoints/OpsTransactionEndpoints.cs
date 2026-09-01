@@ -1,4 +1,5 @@
 using CryptoPaymentEngine.Api.OperationsApi.Security;
+using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Contracts;
 
@@ -20,6 +21,7 @@ public static class OpsTransactionEndpoints
     private static async Task<IResult> ListAsync(
         ILedgerQuery ledger,
         IPaymentIntentDirectory paymentIntents,
+        IAssetCatalog assets,
         HttpContext http,
         Guid? merchantId = null,
         string? transactionId = null,
@@ -38,16 +40,22 @@ public static class OpsTransactionEndpoints
         if (!string.IsNullOrWhiteSpace(transactionId))
         {
             if (merchantId is null)
-                return Results.Json(
-                    new { isSuccess = false, error = "merchantId is required when filtering by transactionId." },
-                    statusCode: StatusCodes.Status400BadRequest);
+                return OpsResults.Bad(OpsErrorCodes.MerchantIdRequired, "merchantId is required when filtering by transactionId.");
 
             referenceId = await paymentIntents.FindMatchedDepositIdAsync(merchantId.Value, transactionId, http.RequestAborted);
             if (referenceId is null)
-                return Results.Ok(new { isSuccess = true, data = new { page, pageSize, totalCount = 0, items = Array.Empty<object>() }, error = (string?)null });
+                return Results.Ok(new { isSuccess = true, data = new { page, pageSize, totalCount = 0, items = Array.Empty<object>() }, error = (string?)null, errorCode = (string?)null });
         }
 
         var (items, total) = await ledger.GetJournalsAsync(merchantId, referenceId, fromDate, toDate, page, pageSize, http.RequestAborted);
+
+        // Ledger amounts stay exact base-unit integers on the wire (§14) — this screen deliberately does NOT
+        // convert them. But a consumer cannot format a base-unit integer without knowing the asset's
+        // precision, so each row carries its own symbol + decimals rather than forcing a second lookup.
+        // Resolved once per distinct asset, not per row.
+        var assetCache = new Dictionary<Guid, AssetDto?>();
+        foreach (var assetId in items.Select(i => i.AssetId).Distinct())
+            assetCache[assetId] = await assets.FindByIdAsync(assetId, http.RequestAborted);
 
         return Results.Ok(new
         {
@@ -63,13 +71,18 @@ public static class OpsTransactionEndpoints
                     referenceType = i.ReferenceType,
                     referenceId = i.ReferenceId,
                     assetId = i.AssetId,
+                    // Null for a gas-denominated journal (§5c GasCost): the gas AssetId is deliberately kept
+                    // OUT of the deposit catalog, so it has no symbol here. A consumer must render those rows
+                    // as raw base units rather than assume a precision.
+                    coin = assetCache.GetValueOrDefault(i.AssetId)?.Symbol,
+                    decimals = assetCache.GetValueOrDefault(i.AssetId)?.Decimals,
                     description = i.Description,
                     direction = i.Direction,
                     amount = i.Amount.ToString(),
                     createdAt = i.CreatedAt,
                 }),
             },
-            error = (string?)null,
+            error = (string?)null, errorCode = (string?)null,
         });
     }
 }

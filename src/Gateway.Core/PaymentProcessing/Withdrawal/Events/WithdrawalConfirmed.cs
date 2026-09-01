@@ -30,4 +30,13 @@ public sealed record WithdrawalConfirmed(
     string DestinationAddress,
     string? CallbackUrl,
     string? GasAssetId = null,
-    string GasFeeBaseUnits = "0") : IDomainEvent, IIntegrationEvent;
+    string GasFeeBaseUnits = "0",
+    /// <summary>
+    /// True when an operations admin paid this withdrawal from a company wallet OUTSIDE platform custody and
+    /// recorded the verified transaction (a merchant settlement). The Ledger then discharges the reserve
+    /// against <c>ExternalSettlement</c> instead of <c>TreasuryAsset</c>: no watched address was debited, so
+    /// custody must NOT be reduced — doing so would drift reconciliation downward by every settlement ever
+    /// made. Defaults to false, so every existing in-flight event and the entire automated user-payout path
+    /// are unchanged.
+    /// </summary>
+    bool ExternallySettled = false) : IDomainEvent, IIntegrationEvent;

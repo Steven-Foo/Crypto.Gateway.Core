@@ -1,3 +1,4 @@
+using CryptoPaymentEngine.Api.OperationsApi.Endpoints;
 using CryptoPaymentEngine.Gateway.Core.Platform.Identity.Application;
 using CryptoPaymentEngine.Gateway.Core.Platform.Identity.Domain;
 
@@ -17,9 +18,8 @@ public static class StaffAuthorization
         {
             var principal = context.HttpContext.Items[StaffBearerAuthMiddleware.PrincipalItem] as StaffPrincipal;
             if (principal is null || !Grants(principal, permissionCode))
-                return Results.Json(
-                    new { isSuccess = false, error = $"Missing permission '{permissionCode}'." },
-                    statusCode: StatusCodes.Status403Forbidden);
+                return OpsResults.Forbidden(
+                    OpsErrorCodes.PermissionDenied, $"Missing permission '{permissionCode}'.");
 
             return await next(context);
         });

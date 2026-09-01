@@ -174,6 +174,11 @@ app.MapOpsCallbackApi();
 app.MapOpsWithdrawalApprovalApi();
 app.MapOpsWithdrawalFundingApi();
 app.MapOpsTreasuryApi();
+// Merchant settlements this system records rather than pays: audit → finance transfer → verified record,
+// plus the one screen showing every movement of company funds across the custody boundary.
+app.MapOpsMerchantSettlementActionApi();
+app.MapOpsSettlementActivityApi();
+app.MapOpsDashboardApi();
 app.MapOpsReconciliationApi();
 app.MapOpsSweepApi();
 app.MapOpsEnergyApi();

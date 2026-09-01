@@ -589,4 +589,60 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         await using var context = NewContext();
         (await new MerchantDirectory(context).FindByIdAsync(Guid.CreateVersion7(), Ct)).ShouldBeNull();
     }
+
+    /// <summary>
+    /// The rule that makes "top-up defaults to zero" true in practice. Every other quote falls back to the
+    /// platform default when a merchant is unpriced, so an unpriced merchant is never silently free — but
+    /// applying that here would mean a merchant is silently CHARGED to fund its own float, which is the
+    /// opposite of the intent. Asserted against a configured default that provably applies to a deposit on the
+    /// very same merchant and asset, so this cannot pass just because no default was configured.
+    /// </summary>
+    [Fact]
+    public async Task A_top_up_never_inherits_the_platform_default_fee()
+    {
+        var asset = Guid.CreateVersion7();
+        Guid merchantId;
+        await using (var context = NewContext())
+            merchantId = (await NewRegistrar(context).RegisterAsync("DEFFEE-3", "Acme", null, Ct)).Value.MerchantId;
+
+        await using (var verify = NewContext())
+        {
+            var fees = NewFeeSchedule(verify, depositBps: 100); // 1% platform default
+
+            // The control: the default genuinely applies to a customer deposit on this merchant/asset.
+            (await fees.QuoteDepositFeeAsync(merchantId, asset, new BigInteger(1_000_000), Ct))
+                .ShouldBe(new BigInteger(10_000));
+
+            // ...but a top-up on the same unpriced merchant is free.
+            (await fees.QuoteTopUpFeeAsync(merchantId, asset, new BigInteger(1_000_000), Ct))
+                .ShouldBe(BigInteger.Zero, "a merchant must not be charged to fund its own float unless staff priced it");
+        }
+    }
+
+    /// <summary>An explicitly declared top-up rate IS charged — so the zero above is the absence of a rate,
+    /// not the feature being inert.</summary>
+    [Fact]
+    public async Task An_explicitly_declared_top_up_fee_is_charged()
+    {
+        var asset = Guid.CreateVersion7();
+        Guid merchantId;
+        await using (var context = NewContext())
+            merchantId = (await NewRegistrar(context).RegisterAsync("DEFFEE-4", "Acme", null, Ct)).Value.MerchantId;
+
+        await using (var context = NewContext())
+        {
+            var merchant = await context.Merchants.Include(m => m.AssetPolicies).SingleAsync(m => m.Id == merchantId, Ct);
+            // Deposit/withdrawal free, top-up 2% — proving the top-up pair round-trips through persistence
+            // independently of the other two.
+            merchant.SetAssetPolicy(asset, BigInteger.Zero, null, null, FeeSchedule.Create(0, 0, 0, 0, 0, 200).Value, DateTimeOffset.UtcNow);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using (var verify = NewContext())
+        {
+            var fees = NewFeeSchedule(verify);
+            (await fees.QuoteTopUpFeeAsync(merchantId, asset, new BigInteger(1_000_000), Ct))
+                .ShouldBe(new BigInteger(20_000));
+        }
+    }
 }

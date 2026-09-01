@@ -15,8 +15,13 @@ public sealed class WithdrawalConfirmedHandler(ILedgerPoster poster) : IIntegrat
         var amount = BigInteger.Parse(@event.AmountBaseUnits, CultureInfo.InvariantCulture);
         var fee = BigInteger.Parse(@event.FeeBaseUnits, CultureInfo.InvariantCulture);
 
+        // The event says whether OUR custody paid this. A finance settlement was paid from a company wallet
+        // outside platform custody, so it must not decrement TreasuryAsset — the Ledger stays ignorant of who
+        // paid and simply honours the flag, keeping it free of any chain/custody knowledge (§4.6).
         var result = await poster.SettleWithdrawalAsync(
-            new SettleWithdrawalCommand(@event.WithdrawalId, @event.MerchantId, @event.AssetId, amount, fee), cancellationToken);
+            new SettleWithdrawalCommand(
+                @event.WithdrawalId, @event.MerchantId, @event.AssetId, amount, fee, @event.ExternallySettled),
+            cancellationToken);
 
         if (result.IsFailure)
             throw new DomainException($"Ledger settle failed for withdrawal {@event.WithdrawalId}: {result.Error!.Code} — {result.Error!.Message}");
@@ -47,5 +52,28 @@ public sealed class WithdrawalFailedHandler(ILedgerPoster poster) : IIntegration
 
         if (result.IsFailure)
             throw new DomainException($"Ledger release failed for withdrawal {@event.WithdrawalId}: {result.Error!.Code} — {result.Error!.Message}");
+    }
+}
+
+/// <summary>
+/// Books company funds moved into a hot withdrawal wallet: DEBIT TreasuryAsset / CREDIT WithdrawalWalletTopUp.
+///
+/// <para>Custody genuinely rose — we hold more crypto in an address reconciliation watches — so TreasuryAsset
+/// must move, or reconciliation would report drift equal to every top-up ever made. The credit is a
+/// System-owned contribution account, so operating float can never be mistaken for merchant money and the
+/// merchant-withdrawable formula is untouched (§14).</para>
+/// </summary>
+public sealed class HotWalletToppedUpHandler(ILedgerPoster poster) : IIntegrationEventHandler<HotWalletToppedUp>
+{
+    public async Task HandleAsync(HotWalletToppedUp @event, CancellationToken cancellationToken = default)
+    {
+        var amount = BigInteger.Parse(@event.AmountBaseUnits, CultureInfo.InvariantCulture);
+
+        var result = await poster.RecordTopUpAsync(
+            new RecordTopUpCommand(@event.TopUpId, @event.AssetId, amount, $"Hot wallet top-up {@event.TargetAddress}"),
+            cancellationToken);
+
+        if (result.IsFailure)
+            throw new DomainException($"Ledger top-up posting failed for {@event.TopUpId}: {result.Error!.Code} — {result.Error!.Message}");
     }
 }

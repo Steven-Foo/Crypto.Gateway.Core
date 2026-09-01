@@ -80,6 +80,25 @@ public interface ILedgerQuery
     Task<BigInteger> GetTreasuryHoldingAsync(Guid assetId, CancellationToken cancellationToken = default);
 
     /// <summary>
+    /// Total company funds contributed into the hot withdrawal pool for an asset — the running balance of the
+    /// <c>WithdrawalWalletTopUp</c> account. Part of the custody in <see cref="GetTreasuryHoldingAsync"/>, but
+    /// operating float rather than merchant money, so the custody screen can show the two apart.
+    ///
+    /// <para>Exposed as its own named figure rather than a generic "read account X" so the ledger's internal
+    /// chart of accounts stays inside the module (§4.5) — a caller asks a business question, not for a row.
+    /// Returns zero when nothing has been contributed for this asset.</para>
+    /// </summary>
+    Task<BigInteger> GetWithdrawalWalletTopUpTotalAsync(Guid assetId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Total merchant settlements paid from company wallets OUTSIDE platform custody — the running balance of
+    /// the <c>ExternalSettlement</c> account. Deliberately NOT part of custody or of earnings: it is company
+    /// money spent discharging merchant obligations, so counting it as either would misstate the position.
+    /// Returns zero when nothing has been settled externally for this asset.
+    /// </summary>
+    Task<BigInteger> GetExternalSettlementTotalAsync(Guid assetId, CancellationToken cancellationToken = default);
+
+    /// <summary>
     /// Journal history, newest first — every event that touched a merchant's liability account (deposit
     /// credits, withdrawal reserve/settle/release, reversals). Read straight from the immutable ledger, not
     /// from Deposit/Withdrawal/PaymentIntent's own tables. All filters are optional and combine with AND:

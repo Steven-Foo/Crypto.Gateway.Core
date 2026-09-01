@@ -21,25 +21,18 @@ public static class OpsCallbackEndpoints
         string type, Guid referenceId, ICallbackDeliveryResendService resend, IAuditLogger audit, HttpContext http)
     {
         if (!TryParseReferenceType(type, out var referenceType))
-            return Results.Json(
-                new { isSuccess = false, error = "type must be 'deposit' or 'withdrawal'." },
-                statusCode: StatusCodes.Status400BadRequest);
+            return OpsResults.Bad(OpsErrorCodes.InvalidCallbackType, "type must be 'deposit' or 'withdrawal'.");
 
         var result = await resend.ResendAsync(referenceType, referenceId, http.RequestAborted);
         if (result.IsFailure)
-        {
-            var status = result.Error!.Type == ErrorType.NotFound
-                ? StatusCodes.Status404NotFound
-                : StatusCodes.Status409Conflict;
-            return Results.Json(new { isSuccess = false, error = result.Error!.Message }, statusCode: status);
-        }
+            return OpsResults.Fail(result.Error!);
 
         var actor = AuditActor.From(http);
         await audit.LogAsync(new LogAuditEntryCommand(
             actor.StaffUserId, actor.Username, "callback.resent", "Callback", referenceId.ToString(), type, actor.IpAddress),
             http.RequestAborted);
 
-        return Results.Ok(new { isSuccess = true, data = new { type, referenceId }, error = (string?)null });
+        return Results.Ok(new { isSuccess = true, data = new { type, referenceId }, error = (string?)null, errorCode = (string?)null });
     }
 
     private static bool TryParseReferenceType(string type, out CallbackReferenceType referenceType)

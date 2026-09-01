@@ -163,7 +163,7 @@ public sealed class DepositToLedgerTests : IAsyncLifetime
         {
             var priming = new DepositDetectionService(
                 _chain, _chain, wallets, new DepositRepository(ctx), new ScanCursorStore(ctx, TimeProvider.System),
-                new StubPolicy(), feeSchedule, TimeProvider.System, NullLogger<DepositDetectionService>.Instance);
+                new StubPolicy(), feeSchedule, new StubKindResolver(), TimeProvider.System, NullLogger<DepositDetectionService>.Instance);
             await priming.ScanOnceAsync(Chain.Tron, Ct);
         }
 
@@ -174,7 +174,7 @@ public sealed class DepositToLedgerTests : IAsyncLifetime
         {
             var detection = new DepositDetectionService(
                 _chain, _chain, wallets, new DepositRepository(ctx), new ScanCursorStore(ctx, TimeProvider.System),
-                new StubPolicy(), feeSchedule, TimeProvider.System, NullLogger<DepositDetectionService>.Instance);
+                new StubPolicy(), feeSchedule, new StubKindResolver(), TimeProvider.System, NullLogger<DepositDetectionService>.Instance);
             await detection.ScanOnceAsync(Chain.Tron, Ct);
         }
 
@@ -232,11 +232,12 @@ public sealed class DepositToLedgerTests : IAsyncLifetime
         public Task<BigInteger> QuoteDepositFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
             Task.FromResult(depositFee);
 
-        public Task<BigInteger> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
+        /// <summary>These fakes exercise paths unrelated to top-up pricing, so a top-up is quoted free.</summary>
+        public Task<BigInteger> QuoteTopUpFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
             Task.FromResult(BigInteger.Zero);
 
-        public Task<Result<BigInteger>> GrossUpDepositAsync(Guid merchantId, Guid assetId, BigInteger netTarget, CancellationToken cancellationToken = default) =>
-            Task.FromResult(Result.Success(netTarget));
+        public Task<BigInteger> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(BigInteger.Zero);
     }
 
     private sealed class StubWalletDirectory : IWalletDirectory
@@ -257,6 +258,13 @@ public sealed class DepositToLedgerTests : IAsyncLifetime
             Chain chain, CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<ReceivingDepositAddress>>([]);
     }
+    /// <summary>No waiting invoice ⇒ every transfer here is a customer deposit (these tests predate top-up).</summary>
+    private sealed class StubKindResolver : PaymentIntent.Contracts.IDepositKindResolver
+    {
+        public Task<string?> FindWaitingKindAsync(Guid walletId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<string?>(null);
+    }
+
 
     private sealed class StubPolicy : Application.Abstractions.IDepositPolicyProvider
     {
@@ -269,11 +277,12 @@ public sealed class DepositToLedgerTests : IAsyncLifetime
         public Task<BigInteger> QuoteDepositFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
             Task.FromResult(BigInteger.Zero);
 
-        public Task<BigInteger> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
+        /// <summary>These fakes exercise paths unrelated to top-up pricing, so a top-up is quoted free.</summary>
+        public Task<BigInteger> QuoteTopUpFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
             Task.FromResult(BigInteger.Zero);
 
-        public Task<Result<BigInteger>> GrossUpDepositAsync(Guid merchantId, Guid assetId, BigInteger netTarget, CancellationToken cancellationToken = default) =>
-            Task.FromResult(Result.Success(netTarget));
+        public Task<BigInteger> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(BigInteger.Zero);
     }
 
     private sealed class NoOpLock : IDistributedLockFactory

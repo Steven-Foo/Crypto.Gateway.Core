@@ -2,6 +2,8 @@ using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Application.Abstractions;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Domain;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Contracts;
 using CryptoPaymentEngine.SharedKernel;
 using Microsoft.Extensions.Logging;
 using DepositEntity = CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Domain.Deposit;
@@ -22,6 +24,7 @@ public sealed class DepositDetectionService(
     IScanCursorStore cursors,
     IDepositPolicyProvider policies,
     IMerchantFeeSchedule feeSchedule,
+    IDepositKindResolver depositKinds,
     TimeProvider timeProvider,
     ILogger<DepositDetectionService> logger)
 {
@@ -61,16 +64,29 @@ public sealed class DepositDetectionService(
             if (owner is null || !owner.IsActive || owner.MerchantId is null || owner.WalletType != "Deposit")
                 continue; // not a merchant deposit address — ignore (platform inflows are handled elsewhere)
 
+            // Is this the merchant paying itself in, or a customer paying the merchant? On-chain the two are
+            // identical, so the answer comes from the invoice the merchant created (it declares the kind up
+            // front — the two come from different portal pages). At most one invoice may be Waiting on an
+            // address, so this can never be ambiguous; no invoice ⇒ a direct/late transfer ⇒ Customer.
+            var kind = await depositKinds.FindWaitingKindAsync(owner.WalletId, cancellationToken) == nameof(DepositKind.MerchantTopUp)
+                ? DepositKind.MerchantTopUp
+                : DepositKind.Customer;
+
             // Price the deposit once, here, from the amount that actually arrived — the fee is then frozen on
             // the record and carried on the confirmation/orphan events, so the Ledger books exactly this value
             // and never re-derives from a schedule that could change during the confirmation wait (§14).
-            var fee = await feeSchedule.QuoteDepositFeeAsync(
-                owner.MerchantId.Value, transfer.AssetId, transfer.Amount, cancellationToken);
+            // A top-up is priced from the merchant's own top-up rate (zero unless explicitly declared), never
+            // the customer deposit rate: a merchant funding its own float is not a customer payment.
+            var fee = kind == DepositKind.MerchantTopUp
+                ? await feeSchedule.QuoteTopUpFeeAsync(
+                    owner.MerchantId.Value, transfer.AssetId, transfer.Amount, cancellationToken)
+                : await feeSchedule.QuoteDepositFeeAsync(
+                    owner.MerchantId.Value, transfer.AssetId, transfer.Amount, cancellationToken);
 
             var deposit = DepositEntity.Record(
                 transfer.Chain, transfer.Address, owner.WalletId, owner.MerchantId.Value, transfer.AssetId,
                 transfer.Amount, fee, transfer.TransactionHash, transfer.OutputIndex, transfer.BlockNumber, transfer.BlockHash,
-                policy, timeProvider.GetUtcNow());
+                policy, timeProvider.GetUtcNow(), kind);
 
             if (deposit.IsFailure)
             {

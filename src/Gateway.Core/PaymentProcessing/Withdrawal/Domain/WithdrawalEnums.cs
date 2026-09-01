@@ -64,4 +64,40 @@ public enum WithdrawalStatus
     /// to send (the "large = manual" resume rule). Reserve held; cleared by an ops release action.
     /// </summary>
     AwaitingRelease = 9,
+
+    /// <summary>
+    /// A portal-initiated payout awaiting the MERCHANT's own approval, before the platform ever looks at it.
+    /// The merchant-side half of a two-party rule: one of their users submits it, one of their approvers signs
+    /// it off. Reserve is already held (the merchant is committed to the amount); a merchant rejection releases
+    /// it. Payouts created through the HMAC API skip this entirely — the merchant's own server already
+    /// authorised those by signing the request.
+    /// </summary>
+    PendingMerchantApproval = 10,
+
+    /// <summary>
+    /// A MERCHANT settlement (cash-out) awaiting a platform admin's audit. Merchant settlements are not paid
+    /// by this system: an operations/finance admin pays the merchant from a company wallet OUTSIDE platform
+    /// custody, then records the transaction here. Reserve is held throughout — an audit rejection releases it.
+    /// </summary>
+    PendingAdminAudit = 11,
+
+    /// <summary>
+    /// Audit passed; the settlement is cleared for the finance admin to pay out externally. Distinct from
+    /// <see cref="PendingAudit"/> so "reviewed" and "not yet paid" are never confused on the ops queue — they
+    /// are usually different people. Reserve still held; the merchant's money moves only at
+    /// <see cref="Completed"/>.
+    /// </summary>
+    PendingFinanceTransfer = 12,
+
+    /// <summary>
+    /// The finance admin paid the merchant from an external company wallet and recorded a transaction hash
+    /// that was then verified on-chain. The ledger discharges the reserve against <c>ExternalSettlement</c> —
+    /// platform custody is NOT reduced, because the funds never left an address this system watches.
+    ///
+    /// <para>Deliberately distinct from <see cref="Confirmed"/>, which means "this system built, signed,
+    /// broadcast and confirmed the payment itself". The two have different origins of trust — one the platform
+    /// performed, the other a human asserted and we verified — so an operator must be able to tell them apart
+    /// at a glance.</para>
+    /// </summary>
+    FinanceSettled = 13,
 }

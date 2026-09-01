@@ -1,0 +1,54 @@
+using System.Globalization;
+using System.Numerics;
+using CryptoPaymentEngine.Api.MerchantPortalApi.Security;
+using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
+using CryptoPaymentEngine.Gateway.Core.Merchant.Application;
+using CryptoPaymentEngine.SharedKernel;
+
+namespace CryptoPaymentEngine.Api.MerchantPortalApi.Endpoints;
+
+/// <summary>The signed-in merchant's declared per-asset pricing (read-only in the portal — staff set it via the
+/// Ops API). Fixed fees show a display value + exact base units; percentages are basis points (1bp = 0.01%).</summary>
+public static class PortalFeeEndpoints
+{
+    public static void MapPortalFeeApi(this IEndpointRouteBuilder app) =>
+        app.MapGet("/api/v1/portal/fees", GetAsync).RequirePortalPermission(PortalPermissions.Overview.View);
+
+    private static async Task<IResult> GetAsync(
+        IMerchantAssetPolicyService policies, IAssetCatalog assets, HttpContext http)
+    {
+        var result = await policies.ListAsync(PortalTenant.MerchantId(http), http.RequestAborted);
+        if (result.IsFailure)
+            return Results.Json(new { isSuccess = false, error = result.Error!.Message }, statusCode: StatusCodes.Status404NotFound);
+
+        var rows = new List<object>(result.Value.Count);
+        foreach (var p in result.Value)
+        {
+            var asset = await assets.FindByIdAsync(p.AssetId, http.RequestAborted);
+            var decimals = asset?.Decimals ?? 6;
+
+            rows.Add(new
+            {
+                assetId = p.AssetId,
+                coin = asset?.Symbol ?? "",
+                network = asset?.Chain.ToString(),
+                depositFeeFixed = Display(p.DepositFeeFixed, decimals),
+                depositFeeBps = p.DepositFeeBps,
+                withdrawalFeeFixed = Display(p.WithdrawalFee, decimals),
+                withdrawalFeeBps = p.WithdrawalFeeBps,
+                merchantWithdrawalFlatCap = Display(p.MerchantWithdrawalFlatCap, decimals),
+                merchantWithdrawalPercentBps = p.MerchantWithdrawalPercentBps,
+                minimumWithdrawal = Display(p.MinimumWithdrawal, decimals),
+                maximumWithdrawal = Display(p.MaximumWithdrawal, decimals),
+                approvalThreshold = Display(p.ApprovalThreshold, decimals),
+            });
+        }
+
+        return Results.Ok(new { isSuccess = true, data = new { items = rows }, error = (string?)null });
+    }
+
+    private static decimal? Display(string? baseUnits, int decimals) =>
+        string.IsNullOrEmpty(baseUnits) || !BigInteger.TryParse(baseUnits, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value)
+            ? null
+            : AmountConversion.ToDisplay(value, decimals);
+}

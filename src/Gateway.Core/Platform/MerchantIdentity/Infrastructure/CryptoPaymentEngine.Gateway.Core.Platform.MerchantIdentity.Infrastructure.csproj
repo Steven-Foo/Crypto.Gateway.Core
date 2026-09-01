@@ -1,0 +1,21 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="../Application/CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Application.csproj" />
+    <ProjectReference Include="../Domain/CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Domain.csproj" />
+    <ProjectReference Include="../../../../SharedKernel/CryptoPaymentEngine.SharedKernel/CryptoPaymentEngine.SharedKernel.csproj" />
+    <ProjectReference Include="../../../../Infrastructure/CryptoPaymentEngine.Infrastructure/CryptoPaymentEngine.Infrastructure.csproj" />
+    <!-- Contracts-only (§4.5): the dev seeder resolves the dev merchant's id by code to bind the seeded user. -->
+    <ProjectReference Include="../../../Merchant/Contracts/CryptoPaymentEngine.Gateway.Core.Merchant.Contracts.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.EntityFrameworkCore" />
+    <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+    <PackageReference Include="Microsoft.Extensions.Options.ConfigurationExtensions" />
+  </ItemGroup>
+
+</Project>

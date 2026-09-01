@@ -33,6 +33,11 @@ public sealed class DepositMap : IEntityTypeConfiguration<DepositEntity>
         builder.Property(d => d.BlockNumber).IsRequired();
         builder.Property(d => d.BlockHash).IsUnicode(false).HasMaxLength(128).IsRequired();
         builder.Property(d => d.Status).HasConversion<string>().HasMaxLength(16).IsRequired();
+
+        // Customer payment vs merchant top-up. Default 'Customer' — every deposit predating top-up genuinely
+        // was a customer payment, so the backfilled value is correct, not just convenient.
+        builder.Property(d => d.Kind).HasConversion<string>().HasMaxLength(16).IsRequired()
+            .HasDefaultValueSql("'Customer'");
         builder.Property(d => d.Confirmations).IsRequired();
 
         // Null while the deposit is still watched for reorgs; set once its block is irreversible.

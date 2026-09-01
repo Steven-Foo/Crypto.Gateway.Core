@@ -182,3 +182,24 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [paymentintent].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260901072840_AddPaymentIntentKind'
+)
+BEGIN
+    ALTER TABLE [paymentintent].[PaymentIntent] ADD [Kind] nvarchar(16) NOT NULL DEFAULT ('Customer');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [paymentintent].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260901072840_AddPaymentIntentKind'
+)
+BEGIN
+    INSERT INTO [paymentintent].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260901072840_AddPaymentIntentKind', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

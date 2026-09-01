@@ -6,6 +6,13 @@
 # This is DEV ONLY. The SA password is a fixed, documented dev secret — never a production credential.
 # Bring up:   docker compose up -d
 # Then:       ./tools/dev/Setup-LocalEnv.ps1   (creates the DB + applies every module's migrations)
+#
+# NOTE — MongoDB: dev and local staging run Mongo NATIVELY (the local Windows service on
+# localhost:27017), not from here. The `mongodb` service below is a fallback for a machine with no native
+# install. Never run both: they contend for port 27017, and the loser dies with "Error setting up
+# transport layer" — which for the Windows service looks like a silent 30s start timeout. Start it
+# explicitly (`docker compose up -d mongodb`) rather than as part of a bare `docker compose up`, and note
+# the service is named `mongodb`, not `mongo`. See db/README.md §2.
 services:
   sqlserver:
     image: mcr.microsoft.com/mssql/server:2022-latest

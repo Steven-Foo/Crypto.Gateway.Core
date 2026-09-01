@@ -23,19 +23,32 @@ public sealed class MerchantFeeSchedule(MerchantDbContext context, MerchantDefau
         Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
         (await LoadFeesAsync(merchantId, assetId, cancellationToken)).QuoteWithdrawalFee(amount);
 
-    public async Task<Result<BigInteger>> GrossUpDepositAsync(
-        Guid merchantId, Guid assetId, BigInteger netTarget, CancellationToken cancellationToken = default) =>
-        (await LoadFeesAsync(merchantId, assetId, cancellationToken)).GrossUpForDeposit(netTarget);
+    /// <summary>
+    /// Prices a merchant top-up from the merchant's OWN schedule — deliberately bypassing the platform
+    /// default that <see cref="LoadFeesAsync"/> applies. The default exists so an unpriced merchant is never
+    /// silently free on customer deposits and withdrawals; applying it here would instead mean a merchant is
+    /// silently charged to fund its own float, which is the opposite of the intended "top-up defaults to
+    /// zero". So: no explicit top-up rate ⇒ no top-up fee, full stop.
+    /// </summary>
+    public async Task<BigInteger> QuoteTopUpFeeAsync(
+        Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
+        (await LoadOwnFeesAsync(merchantId, assetId, cancellationToken)).QuoteTopUpFee(receivedAmount);
 
     private async Task<FeeSchedule> LoadFeesAsync(Guid merchantId, Guid assetId, CancellationToken cancellationToken)
     {
-        var policy = await context.AssetPolicies.AsNoTracking()
-            .SingleOrDefaultAsync(p => p.MerchantId == merchantId && p.AssetId == assetId, cancellationToken);
-
-        var resolved = policy?.Fees ?? FeeSchedule.None;
+        var resolved = await LoadOwnFeesAsync(merchantId, assetId, cancellationToken);
 
         // No explicit fee (no policy, or a cap/limits-only policy with a zero schedule) ⇒ the platform default,
         // so an unpriced merchant is never silently free. The default is itself None unless configured.
         return resolved.Equals(FeeSchedule.None) ? defaultFee.Schedule : resolved;
+    }
+
+    /// <summary>The merchant's own declared schedule, with no platform-default substitution.</summary>
+    private async Task<FeeSchedule> LoadOwnFeesAsync(Guid merchantId, Guid assetId, CancellationToken cancellationToken)
+    {
+        var policy = await context.AssetPolicies.AsNoTracking()
+            .SingleOrDefaultAsync(p => p.MerchantId == merchantId && p.AssetId == assetId, cancellationToken);
+
+        return policy?.Fees ?? FeeSchedule.None;
     }
 }

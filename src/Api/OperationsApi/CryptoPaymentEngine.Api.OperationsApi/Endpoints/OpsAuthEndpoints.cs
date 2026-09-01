@@ -23,7 +23,7 @@ public static class OpsAuthEndpoints
     {
         var result = await auth.LoginAsync(new LoginCommand(request.Username, request.Password), http.RequestAborted);
         if (result.IsFailure)
-            return Results.Json(new { isSuccess = false, error = result.Error!.Message }, statusCode: StatusCodes.Status401Unauthorized);
+            return OpsResults.Unauthorized(OpsErrorCodes.InvalidCredentials, result.Error!.Message);
 
         // Set the httpOnly session cookie (the UI's cookie mode reads nothing from the body but this). We ALSO
         // return `token` so the UI's interim bearer mode keeps working from one login endpoint (§12) — a client
@@ -42,7 +42,7 @@ public static class OpsAuthEndpoints
                 role = result.Value.RoleName,
                 permissions = result.Value.Permissions,
             },
-            error = (string?)null,
+            error = (string?)null, errorCode = (string?)null,
         });
     }
 
@@ -54,7 +54,7 @@ public static class OpsAuthEndpoints
 
         await auth.LogoutAsync(token, http.RequestAborted);
         OpsSessionCookie.Delete(http, cookieOptions.Value, env.IsDevelopment());
-        return Results.Ok(new { isSuccess = true, data = new { loggedOut = true }, error = (string?)null });
+        return Results.Ok(new { isSuccess = true, data = new { loggedOut = true }, error = (string?)null, errorCode = (string?)null });
     }
 
     /// <summary>
@@ -79,7 +79,7 @@ public static class OpsAuthEndpoints
                 permissions = principal.Permissions,
                 csrfToken = principal.CsrfToken,
             },
-            error = (string?)null,
+            error = (string?)null, errorCode = (string?)null,
         });
     }
 }

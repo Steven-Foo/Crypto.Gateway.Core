@@ -22,7 +22,6 @@
     <PackageReference Include="Shouldly" />
     <PackageReference Include="Microsoft.EntityFrameworkCore.SqlServer" />
     <PackageReference Include="MongoDB.Driver" />
-    <PackageReference Include="Testcontainers.MongoDb" />
   </ItemGroup>
 
 </Project>

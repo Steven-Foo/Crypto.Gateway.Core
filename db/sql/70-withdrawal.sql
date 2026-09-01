@@ -338,6 +338,35 @@ GO
 BEGIN TRANSACTION;
 IF NOT EXISTS (
     SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260826032039_AddMerchantPayoutApproval'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [MerchantApprovedAt] datetimeoffset NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260826032039_AddMerchantPayoutApproval'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [MerchantApprovedBy] nvarchar(128) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260826032039_AddMerchantPayoutApproval'
+)
+BEGIN
+    INSERT INTO [withdrawal].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260826032039_AddMerchantPayoutApproval', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
     WHERE [MigrationId] = N'20260828033940_AddWithdrawalEnergyUsed'
 )
 BEGIN
@@ -351,6 +380,112 @@ IF NOT EXISTS (
 BEGIN
     INSERT INTO [withdrawal].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
     VALUES (N'20260828033940_AddWithdrawalEnergyUsed', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260828104824_AddManualSettlementAndTopUp'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [AuditedAt] datetimeoffset NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260828104824_AddManualSettlementAndTopUp'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [AuditedBy] nvarchar(128) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260828104824_AddManualSettlementAndTopUp'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [CompletedAt] datetimeoffset NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260828104824_AddManualSettlementAndTopUp'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [CompletedBy] nvarchar(128) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260828104824_AddManualSettlementAndTopUp'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [SettlementSourceAddress] varchar(128) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260828104824_AddManualSettlementAndTopUp'
+)
+BEGIN
+    CREATE TABLE [withdrawal].[HotWalletTopUp] (
+        [Id] uniqueidentifier NOT NULL,
+        [Chain] nvarchar(16) NOT NULL,
+        [AssetId] uniqueidentifier NOT NULL,
+        [TargetWalletId] uniqueidentifier NOT NULL,
+        [TargetAddress] varchar(128) NOT NULL,
+        [Amount] decimal(38,0) NOT NULL,
+        [TransactionHash] varchar(128) NOT NULL,
+        [SourceAddress] varchar(128) NULL,
+        [RecordedBy] nvarchar(128) NOT NULL,
+        [RecordedAt] datetimeoffset NOT NULL,
+        [Seq] bigint NOT NULL IDENTITY,
+        CONSTRAINT [PK_HotWalletTopUp] PRIMARY KEY NONCLUSTERED ([Id])
+    );
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260828104824_AddManualSettlementAndTopUp'
+)
+BEGIN
+    EXEC(N'CREATE UNIQUE INDEX [UX_Withdrawal_SettlementTxHash] ON [withdrawal].[Withdrawal] ([TransactionHash]) WHERE [SettlementSourceAddress] IS NOT NULL AND [TransactionHash] IS NOT NULL');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260828104824_AddManualSettlementAndTopUp'
+)
+BEGIN
+    CREATE INDEX [IX_HotWalletTopUp_Chain_RecordedAt] ON [withdrawal].[HotWalletTopUp] ([Chain], [RecordedAt]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260828104824_AddManualSettlementAndTopUp'
+)
+BEGIN
+    CREATE UNIQUE CLUSTERED INDEX [IX_HotWalletTopUp_Seq] ON [withdrawal].[HotWalletTopUp] ([Seq]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260828104824_AddManualSettlementAndTopUp'
+)
+BEGIN
+    CREATE UNIQUE INDEX [UX_HotWalletTopUp_TxHash] ON [withdrawal].[HotWalletTopUp] ([TransactionHash]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260828104824_AddManualSettlementAndTopUp'
+)
+BEGIN
+    INSERT INTO [withdrawal].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260828104824_AddManualSettlementAndTopUp', N'10.0.9');
 END;
 
 COMMIT;

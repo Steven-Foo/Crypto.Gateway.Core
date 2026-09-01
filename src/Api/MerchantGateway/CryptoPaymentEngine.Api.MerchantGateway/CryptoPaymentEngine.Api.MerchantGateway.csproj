@@ -1,6 +1,12 @@
 <Project Sdk="Microsoft.NET.Sdk.Web">
 
   <ItemGroup>
+    <!-- The frozen merchant API status mapping is unit-tested: a new lifecycle status silently collapsing
+         to "pending" would tell a merchant their money is still in flight after it has arrived. -->
+    <InternalsVisibleTo Include="CryptoPaymentEngine.Api.IntegrationTests" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="../../../SharedKernel/CryptoPaymentEngine.SharedKernel/CryptoPaymentEngine.SharedKernel.csproj" />
     <ProjectReference Include="../../../Infrastructure/CryptoPaymentEngine.Infrastructure/CryptoPaymentEngine.Infrastructure.csproj" />
     <ProjectReference Include="../../../Gateway.Core/Blockchain/Contracts/CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.csproj" />

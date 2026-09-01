@@ -72,9 +72,11 @@ The `address` is now **per-merchant**: each merchant has its own HD wallet (sepa
 first deposit, so the dev merchant gets *its own* deterministic TRON address (derived from a fixed dev salt +
 the merchant id — reproducible across restarts, but no longer the shared `TUEZSdK…` test vector, which
 belonged to the old single-pool design). Capture the address from the response rather than asserting a fixed
-value. The `payUrl`'s expected amount is the requested amount **grossed up by the deposit fee** (payer pays on
-top) when the merchant has a fee schedule; with no schedule it equals the requested amount. Then check the pay
-page: `GET /pay/{referenceNo}/info`.
+value. The `payUrl`'s expected amount is **exactly the amount requested**, whether or not the merchant has a
+fee schedule — the payer is never quietly asked for more. Any deposit fee is deducted from what arrives, so a
+100 USDT invoice at a 2% fee still asks the payer for 100 and credits the merchant 98, with 2 booked as fee
+revenue. (This replaced an earlier payer-on-top gross-up, where the same invoice would have displayed 102.04.)
+Then check the pay page: `GET /pay/{referenceNo}/info`.
 
 Other endpoints:
 

@@ -19,19 +19,23 @@ public sealed class FeeSchedule : ValueObject
     public const int MaxBps = 10_000;
 
     /// <summary>The no-fee schedule — an unpriced merchant is charged nothing (a documented ops gap, never an overcharge).</summary>
-    public static FeeSchedule None { get; } = new(BigInteger.Zero, 0, BigInteger.Zero, 0);
+    public static FeeSchedule None { get; } = new(BigInteger.Zero, 0, BigInteger.Zero, 0, BigInteger.Zero, 0);
 
-    private FeeSchedule(BigInteger depositFeeFixed, int depositFeeBps, BigInteger withdrawalFee, int withdrawalFeeBps)
+    private FeeSchedule(
+        BigInteger depositFeeFixed, int depositFeeBps, BigInteger withdrawalFee, int withdrawalFeeBps,
+        BigInteger topUpFeeFixed, int topUpFeeBps)
     {
         DepositFeeFixed = depositFeeFixed;
         DepositFeeBps = depositFeeBps;
         WithdrawalFee = withdrawalFee;
         WithdrawalFeeBps = withdrawalFeeBps;
+        TopUpFeeFixed = topUpFeeFixed;
+        TopUpFeeBps = topUpFeeBps;
     }
 
     public BigInteger DepositFeeFixed { get; }
 
-    /// <summary>Deposit percentage in basis points. Bounded to <c>[0, MaxBps)</c> — a 100% deposit fee cannot be grossed up.</summary>
+    /// <summary>Deposit percentage in basis points, <c>[0, MaxBps]</c>.</summary>
     public int DepositFeeBps { get; }
 
     public BigInteger WithdrawalFee { get; }
@@ -39,30 +43,59 @@ public sealed class FeeSchedule : ValueObject
     /// <summary>Withdrawal percentage in basis points, <c>[0, MaxBps]</c>.</summary>
     public int WithdrawalFeeBps { get; }
 
+    /// <summary>
+    /// Fixed component of the fee on a <b>merchant top-up</b> — the merchant funding its own balance by
+    /// sending crypto to its deposit address. Kept separate from the deposit fee on purpose: that one prices
+    /// a customer's payment, and a merchant funding its own float should not be charged the same rate.
+    /// </summary>
+    public BigInteger TopUpFeeFixed { get; }
+
+    /// <summary>
+    /// Top-up percentage in basis points, <c>[0, MaxBps]</c>. Deducted from what arrives, exactly like the
+    /// deposit fee — the merchant sends the invoiced amount and is credited that minus this.
+    /// </summary>
+    public int TopUpFeeBps { get; }
+
+    /// <summary>
+    /// Prices deposits and withdrawals, leaving the merchant top-up free. This is the overload every caller
+    /// that predates top-up pricing uses, and "no top-up fee" is the correct default for them: a top-up is
+    /// only ever charged when an admin explicitly declares a rate for it.
+    /// </summary>
     public static Result<FeeSchedule> Create(
-        BigInteger depositFeeFixed, int depositFeeBps, BigInteger withdrawalFee, int withdrawalFeeBps)
+        BigInteger depositFeeFixed, int depositFeeBps, BigInteger withdrawalFee, int withdrawalFeeBps) =>
+        Create(depositFeeFixed, depositFeeBps, withdrawalFee, withdrawalFeeBps, BigInteger.Zero, 0);
+
+    public static Result<FeeSchedule> Create(
+        BigInteger depositFeeFixed, int depositFeeBps, BigInteger withdrawalFee, int withdrawalFeeBps,
+        BigInteger topUpFeeFixed, int topUpFeeBps)
     {
-        if (depositFeeFixed < BigInteger.Zero || withdrawalFee < BigInteger.Zero)
+        if (depositFeeFixed < BigInteger.Zero || withdrawalFee < BigInteger.Zero || topUpFeeFixed < BigInteger.Zero)
             return Result.Failure<FeeSchedule>(MerchantErrors.AmountNegative);
 
-        if (!MoneyLimits.IsStorable(depositFeeFixed) || !MoneyLimits.IsStorable(withdrawalFee))
+        if (!MoneyLimits.IsStorable(depositFeeFixed) || !MoneyLimits.IsStorable(withdrawalFee)
+            || !MoneyLimits.IsStorable(topUpFeeFixed))
             return Result.Failure<FeeSchedule>(MerchantErrors.AmountTooLarge);
 
-        // A deposit fee of 100% (or more) makes the payer-on-top gross-up unsolvable, so deposit bps is
-        // strictly below MaxBps; a withdrawal fee is deducted, so 100% is merely absurd, not impossible.
-        if (depositFeeBps < 0 || depositFeeBps >= MaxBps)
+        // Every fee is DEDUCTED from what arrives (there is no payer-on-top gross-up any more), so all three
+        // share the same bound: 0–100% inclusive. A 100% fee is merely absurd, not arithmetically impossible —
+        // previously the deposit rate had to stay strictly under 100% to keep the gross-up solvable.
+        if (topUpFeeBps < 0 || topUpFeeBps > MaxBps)
+            return Result.Failure<FeeSchedule>(MerchantErrors.FeeBpsInvalid);
+
+        if (depositFeeBps < 0 || depositFeeBps > MaxBps)
             return Result.Failure<FeeSchedule>(MerchantErrors.FeeBpsInvalid);
 
         if (withdrawalFeeBps < 0 || withdrawalFeeBps > MaxBps)
             return Result.Failure<FeeSchedule>(MerchantErrors.FeeBpsInvalid);
 
-        return Result.Success(new FeeSchedule(depositFeeFixed, depositFeeBps, withdrawalFee, withdrawalFeeBps));
+        return Result.Success(new FeeSchedule(depositFeeFixed, depositFeeBps, withdrawalFee, withdrawalFeeBps, topUpFeeFixed, topUpFeeBps));
     }
 
     /// <summary>Rehydrates from already-validated persisted columns. Persistence only — skips validation.</summary>
     internal static FeeSchedule FromTrusted(
-        BigInteger depositFeeFixed, int depositFeeBps, BigInteger withdrawalFee, int withdrawalFeeBps) =>
-        new(depositFeeFixed, depositFeeBps, withdrawalFee, withdrawalFeeBps);
+        BigInteger depositFeeFixed, int depositFeeBps, BigInteger withdrawalFee, int withdrawalFeeBps,
+        BigInteger topUpFeeFixed = default, int topUpFeeBps = 0) =>
+        new(depositFeeFixed, depositFeeBps, withdrawalFee, withdrawalFeeBps, topUpFeeFixed, topUpFeeBps);
 
     /// <summary>
     /// The platform fee taken from a deposit of <paramref name="receivedAmount"/> base units. Computed on
@@ -81,32 +114,15 @@ public sealed class FeeSchedule : ValueObject
             : WithdrawalFee + amount * WithdrawalFeeBps / MaxBps;
 
     /// <summary>
-    /// Payer-pays-on-top: the smallest gross the payer must send so the merchant nets at least
-    /// <paramref name="netTarget"/> after the deposit fee. Solves <c>G − QuoteDepositFee(G) ≥ netTarget</c>
-    /// exactly under integer floor arithmetic — the closed form seeds it, then two bounded nudges absorb
-    /// the flooring residual so the payer is never over-asked by even one base unit.
+    /// The platform fee taken from a <b>merchant top-up</b> of <paramref name="receivedAmount"/> base units.
+    ///
+    /// <para>Computed on what actually arrived, exactly like the deposit fee. Kept a separate rate because a
+    /// merchant funding its own float should not be priced like a customer payment.</para>
     /// </summary>
-    public Result<BigInteger> GrossUpForDeposit(BigInteger netTarget)
-    {
-        if (netTarget <= BigInteger.Zero)
-            return Result.Failure<BigInteger>(MerchantErrors.AmountNegative);
-
-        // G·(1 − bps/10000) − fixed = net  ⇒  G = (net + fixed)·10000 / (10000 − bps), rounded up.
-        var denominator = MaxBps - DepositFeeBps; // > 0: Create bounds DepositFeeBps < MaxBps
-        var numerator = (netTarget + DepositFeeFixed) * MaxBps;
-        var gross = (numerator + denominator - 1) / denominator; // ceil
-
-        // Nudge up until the merchant truly nets the target, then down to the minimal such gross.
-        while (gross - QuoteDepositFee(gross) < netTarget)
-            gross += 1;
-        while (gross > BigInteger.One && gross - 1 - QuoteDepositFee(gross - 1) >= netTarget)
-            gross -= 1;
-
-        if (!MoneyLimits.IsStorable(gross))
-            return Result.Failure<BigInteger>(MerchantErrors.AmountTooLarge);
-
-        return Result.Success(gross);
-    }
+    public BigInteger QuoteTopUpFee(BigInteger receivedAmount) =>
+        receivedAmount <= BigInteger.Zero
+            ? BigInteger.Zero
+            : TopUpFeeFixed + receivedAmount * TopUpFeeBps / MaxBps;
 
     protected override IEnumerable<object?> GetEqualityComponents()
     {
@@ -114,5 +130,7 @@ public sealed class FeeSchedule : ValueObject
         yield return DepositFeeBps;
         yield return WithdrawalFee;
         yield return WithdrawalFeeBps;
+        yield return TopUpFeeFixed;
+        yield return TopUpFeeBps;
     }
 }

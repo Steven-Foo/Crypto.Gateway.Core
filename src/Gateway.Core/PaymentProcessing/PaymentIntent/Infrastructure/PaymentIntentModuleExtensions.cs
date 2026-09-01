@@ -37,6 +37,8 @@ public static class PaymentIntentModuleExtensions
         services.AddScoped<IPaymentIntentService, PaymentIntentService>();
         services.AddScoped<IPaymentIntentAdminService, PaymentIntentAdminService>();
         services.AddScoped<IPaymentIntentDirectory, PaymentIntentDirectory>();
+        // The deposit scanner's kind lookup (customer payment vs merchant top-up) — see IDepositKindResolver.
+        services.AddScoped<IDepositKindResolver, DepositKindResolver>();
 
         // Consumes Deposit's confirmation event to match invoices (§7.5). Coexists with the Ledger's own
         // handler for the same event — both fire; each owns a separate transaction.

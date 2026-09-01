@@ -36,7 +36,7 @@ public static class OpsAuditEndpoints
         {
             isSuccess = true,
             data = new { page, pageSize, totalCount = total, items },
-            error = (string?)null,
+            error = (string?)null, errorCode = (string?)null,
         });
     }
 }

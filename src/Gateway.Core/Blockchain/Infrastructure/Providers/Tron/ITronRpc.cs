@@ -37,4 +37,14 @@ public interface ITronRpc
 
     /// <summary><c>eth_getBalance</c> at the latest block — an address's native TRX balance in sun (base units).</summary>
     Task<System.Numerics.BigInteger> GetNativeBalanceAsync(string evmHexAddress, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// <c>/wallet/gettransactioninfobyid</c> — a mined transaction's block and execution result, or
+    /// <c>null</c> when the node returns an empty object (not yet mined, or unknown/dropped).
+    ///
+    /// <para>Declared here as well as on <c>ITronTxRpc</c> so a purely read-only consumer — the transaction
+    /// verifier, which confirms a payment an operator recorded — can check a transaction's status without
+    /// taking a dependency on the build/broadcast interface. Same implementation, read-only either way.</para>
+    /// </summary>
+    Task<TronTransactionInfoDto?> GetTransactionInfoAsync(string transactionId, CancellationToken cancellationToken = default);
 }

@@ -74,6 +74,23 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
             distinctAssetCount);
     }
 
+    public async Task<IReadOnlyDictionary<string, int>> GetStatusCountsAsync(CancellationToken cancellationToken = default)
+    {
+        // One grouped COUNT over the domain statuses, then folded into the effective vocabulary — so
+        // "pending" correctly sums Reserving+Approved+Signing+Broadcast and "failed" sums Rejected+Failed,
+        // using the SAME mapping the rows and the filter use.
+        var counts = await context.Withdrawals.AsNoTracking()
+            .GroupBy(w => w.Status)
+            .Select(g => new { Status = g.Key, Count = g.Count() })
+            .ToListAsync(cancellationToken);
+
+        var folded = WithdrawalEffectiveStatuses.All.ToDictionary(s => s, _ => 0);
+        foreach (var row in counts)
+            folded[EffectiveStatus(row.Status)] += row.Count;
+
+        return folded;
+    }
+
     private IQueryable<WithdrawalEntity> Filtered(WithdrawalAdminFilter filter)
     {
         var query = context.Withdrawals.AsNoTracking()
@@ -93,8 +110,42 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
             && Enum.TryParse<WithdrawalKind>(filter.Kind, ignoreCase: true, out var kind))
             query = query.Where(w => w.Kind == kind);
 
+        // Effective-status filter. Unlike Kind above, an unrecognised value matches NOTHING rather than being
+        // ignored: silently returning every withdrawal to an operator who asked for one queue would hide work
+        // behind a filter they believe is applied. The host validates first, so this is the second line.
+        if (!string.IsNullOrWhiteSpace(filter.Status))
+        {
+            var statuses = DomainStatusesFor(filter.Status);
+            query = query.Where(w => statuses.Contains(w.Status));
+        }
+
         return query;
     }
+
+    /// <summary>
+    /// The inverse of <see cref="EffectiveStatus"/> — deliberately kept adjacent to it, because the two
+    /// drifting apart would mean a filter that silently excludes rows the same screen displays under that
+    /// exact label. Every domain status appears in exactly one bucket here.
+    /// </summary>
+    private static WithdrawalStatus[] DomainStatusesFor(string effectiveStatus) =>
+        effectiveStatus.Trim().ToLowerInvariant() switch
+        {
+            "confirmed" => [WithdrawalStatus.Confirmed],
+            "failed" => [WithdrawalStatus.Rejected, WithdrawalStatus.Failed],
+            "pending_approval" => [WithdrawalStatus.PendingApproval],
+            "pending_merchant_approval" => [WithdrawalStatus.PendingMerchantApproval],
+            "insufficient_balance" => [WithdrawalStatus.AwaitingFunds],
+            "awaiting_release" => [WithdrawalStatus.AwaitingRelease],
+            "pending_admin_audit" => [WithdrawalStatus.PendingAdminAudit],
+            "pending_finance_transfer" => [WithdrawalStatus.PendingFinanceTransfer],
+            "finance_settled" => [WithdrawalStatus.FinanceSettled],
+            "pending" =>
+            [
+                WithdrawalStatus.Reserving, WithdrawalStatus.Approved,
+                WithdrawalStatus.Signing, WithdrawalStatus.Broadcast,
+            ],
+            _ => [],
+        };
 
     private static WithdrawalAdminRow ToAdminRow(WithdrawalEntity withdrawal) => new(
         withdrawal.MerchantId,
@@ -111,12 +162,18 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
         withdrawal.TransactionHash,
         withdrawal.SourceWalletId,
         withdrawal.CreatedAt,
-        withdrawal.Kind.ToString());
+        withdrawal.Kind.ToString(),
+        withdrawal.AuditedBy,
+        withdrawal.AuditedAt,
+        withdrawal.CompletedBy,
+        withdrawal.CompletedAt,
+        withdrawal.SettlementSourceAddress);
 
-    /// <summary>"pending" | "pending_approval" | "insufficient_balance" | "awaiting_release" | "confirmed" |
+    /// <summary>"pending" | "pending_merchant_approval" | "pending_approval" | "insufficient_balance" | "awaiting_release" | "confirmed" |
     /// "failed" — withdrawals have no "expired" state. The states that need a human, not the worker, to move
-    /// forward are each surfaced distinctly: <c>PendingApproval</c> (approve/reject), <c>AwaitingFunds</c>
-    /// (reload the hot wallet, then it self-resumes), <c>AwaitingRelease</c> (operator release) — see
+    /// forward are each surfaced distinctly: <c>PendingMerchantApproval</c> (the merchant's own sign-off, done in
+    /// their portal — platform staff see it but do not action it), <c>PendingApproval</c> (platform approve/reject),
+    /// <c>AwaitingFunds</c> (reload the hot wallet, then it self-resumes), <c>AwaitingRelease</c> (operator release) — see
     /// <c>OpsWithdrawalApprovalEndpoints</c>/<c>OpsWithdrawalFundingEndpoints</c>. The rest of the pre-confirm
     /// pipeline (Reserving/Approved/Signing/Broadcast) collapses to "pending".</summary>
     private static string EffectiveStatus(WithdrawalStatus status) => status switch
@@ -124,8 +181,12 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
         WithdrawalStatus.Confirmed => "confirmed",
         WithdrawalStatus.Rejected or WithdrawalStatus.Failed => "failed",
         WithdrawalStatus.PendingApproval => "pending_approval",
+        WithdrawalStatus.PendingMerchantApproval => "pending_merchant_approval",
         WithdrawalStatus.AwaitingFunds => "insufficient_balance",
         WithdrawalStatus.AwaitingRelease => "awaiting_release",
+        WithdrawalStatus.PendingAdminAudit => "pending_admin_audit",
+        WithdrawalStatus.PendingFinanceTransfer => "pending_finance_transfer",
+        WithdrawalStatus.FinanceSettled => "finance_settled",
         _ => "pending",
     };
 }

@@ -24,6 +24,75 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastr
 
             SqlServerModelBuilderExtensions.UseIdentityColumns(modelBuilder);
 
+            modelBuilder.Entity("CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Domain.HotWalletTopUp", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<BigInteger>("Amount")
+                        .HasColumnType("decimal(38,0)");
+
+                    b.Property<Guid>("AssetId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Chain")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
+                    b.Property<DateTimeOffset>("RecordedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("RecordedBy")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.Property<long>("Seq")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Seq"));
+
+                    b.Property<string>("SourceAddress")
+                        .HasMaxLength(128)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(128)");
+
+                    b.Property<string>("TargetAddress")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(128)");
+
+                    b.Property<Guid>("TargetWalletId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("TransactionHash")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(128)");
+
+                    b.HasKey("Id");
+
+                    SqlServerKeyBuilderExtensions.IsClustered(b.HasKey("Id"), false);
+
+                    b.HasIndex("Seq")
+                        .IsUnique();
+
+                    SqlServerIndexBuilderExtensions.IsClustered(b.HasIndex("Seq"));
+
+                    b.HasIndex("TransactionHash")
+                        .IsUnique()
+                        .HasDatabaseName("UX_HotWalletTopUp_TxHash");
+
+                    b.HasIndex("Chain", "RecordedAt")
+                        .HasDatabaseName("IX_HotWalletTopUp_Chain_RecordedAt");
+
+                    b.ToTable("HotWalletTopUp", "withdrawal");
+                });
+
             modelBuilder.Entity("CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Domain.Withdrawal", b =>
                 {
                     b.Property<Guid>("Id")
@@ -39,6 +108,13 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastr
                     b.Property<Guid>("AssetId")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<DateTimeOffset?>("AuditedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("AuditedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
                     b.Property<string>("CallbackUrl")
                         .HasMaxLength(512)
                         .HasColumnType("nvarchar(512)");
@@ -47,6 +123,13 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastr
                         .IsRequired()
                         .HasMaxLength(16)
                         .HasColumnType("nvarchar(16)");
+
+                    b.Property<DateTimeOffset?>("CompletedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("CompletedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
 
                     b.Property<int?>("Confirmations")
                         .HasColumnType("int");
@@ -77,6 +160,13 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastr
                         .HasColumnType("nvarchar(16)")
                         .HasDefaultValueSql("'User'");
 
+                    b.Property<DateTimeOffset?>("MerchantApprovedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("MerchantApprovedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
                     b.Property<Guid>("MerchantId")
                         .HasColumnType("uniqueidentifier");
 
@@ -103,6 +193,11 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastr
                         .HasColumnType("bigint");
 
                     SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Seq"));
+
+                    b.Property<string>("SettlementSourceAddress")
+                        .HasMaxLength(128)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(128)");
 
                     b.Property<byte[]>("SignedTransaction")
                         .HasColumnType("varbinary(max)");
@@ -149,6 +244,11 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastr
 
                     b.HasIndex("Status")
                         .HasDatabaseName("IX_Withdrawal_Status");
+
+                    b.HasIndex("TransactionHash")
+                        .IsUnique()
+                        .HasDatabaseName("UX_Withdrawal_SettlementTxHash")
+                        .HasFilter("[SettlementSourceAddress] IS NOT NULL AND [TransactionHash] IS NOT NULL");
 
                     b.HasIndex("MerchantId", "Kind", "MerchantTransactionId")
                         .IsUnique()

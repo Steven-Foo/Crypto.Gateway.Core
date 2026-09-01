@@ -20,4 +20,5 @@ public sealed record DepositOrphaned(
     Chain Chain,
     string TransactionHash,
     int OutputIndex,
-    DateTimeOffset OrphanedAt) : IDomainEvent, IIntegrationEvent;
+    DateTimeOffset OrphanedAt,
+    string? Kind = null) : IDomainEvent, IIntegrationEvent;

@@ -224,9 +224,20 @@ public static class MerchantApiEndpoints
     private static string SymbolFor(string paymentMethod) => paymentMethod.Trim().ToUpperInvariant();
 
     /// <summary>Maps our richer withdrawal lifecycle onto the partner's frozen 3-value vocabulary.</summary>
-    private static string MapWithdrawalStatus(string status) => status switch
+    /// <summary>
+    /// Collapses the internal lifecycle to the three values the FROZEN merchant contract publishes:
+    /// pending / confirmed / failed. The merchant integration was written against these and must not see a
+    /// new value appear.
+    ///
+    /// <para><c>FinanceSettled</c> maps to <b>confirmed</b>: it is the terminal success state of a merchant
+    /// cash-out, which an admin paid from a company wallet and we verified on-chain. The catch-all would
+    /// otherwise report a completed cash-out as "pending" forever — the merchant has their money and the API
+    /// would still be telling them to wait. The audit/finance stages before it are genuinely still pending,
+    /// so they correctly fall through.</para>
+    /// </summary>
+    internal static string MapWithdrawalStatus(string status) => status switch
     {
-        "Confirmed" => "confirmed",
+        "Confirmed" or "FinanceSettled" => "confirmed",
         "Rejected" or "Failed" => "failed",
         _ => "pending",
     };

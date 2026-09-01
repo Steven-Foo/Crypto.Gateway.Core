@@ -11,7 +11,11 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Applicat
 
 public sealed record RequestWithdrawalCommand(
     Guid MerchantId, Guid AssetId, Chain Chain, string DestinationAddress, BigInteger Amount, string MerchantTransactionId,
-    string? CallbackUrl = null);
+    string? CallbackUrl = null,
+    /// <summary>True only for a payout submitted by a human in the merchant portal, which must clear the
+    /// MERCHANT's own approval first. The HMAC API passes false (its request was already signed by the
+    /// merchant's server), so that contract is unchanged.</summary>
+    bool RequiresMerchantApproval = false);
 
 public sealed record WithdrawalResult(Guid WithdrawalId, string Status);
 
@@ -131,7 +135,7 @@ public sealed class WithdrawalRequestService(
             // threshold enters PendingApproval, else Approved. Unset ⇒ the platform config threshold.
             var merchantThreshold = await merchantApprovalThreshold.GetAsync(withdrawal.MerchantId, withdrawal.AssetId, cancellationToken);
             var requiresApproval = withdrawal.Amount > (merchantThreshold ?? policy.ApprovalThreshold);
-            withdrawal.ConfirmReserved(requiresApproval, timeProvider.GetUtcNow());
+            withdrawal.ConfirmReserved(requiresApproval, timeProvider.GetUtcNow(), command.RequiresMerchantApproval);
             await repository.SaveChangesAsync(cancellationToken);
         }
 

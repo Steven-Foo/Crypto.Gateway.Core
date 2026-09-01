@@ -48,6 +48,12 @@ public sealed class LedgerQuery(LedgerDbContext context) : ILedgerQuery
                && account.AssetId == assetId
             join entry in context.JournalEntries.AsNoTracking() on account.Id equals entry.AccountId
             join journal in context.Journals.AsNoTracking() on entry.JournalId equals journal.Id
+            // DELIBERATELY only the two customer-deposit types. A merchant top-up posts under
+            // MerchantTopUp / MerchantTopUpReversal and so falls outside this filter, which is exactly what
+            // makes it withdrawable immediately (T+N-exempt) — the merchant is funding its own balance, not
+            // receiving a customer payment. Do NOT add the top-up types here "for completeness": that would
+            // silently re-impose the settlement delay on top-ups. Guarded by
+            // LedgerQueryTests.A_merchant_top_up_is_settled_immediately_while_a_customer_deposit_is_not.
             where (journal.ReferenceType == JournalReferenceType.Deposit
                 || journal.ReferenceType == JournalReferenceType.DepositReversal)
                && journal.CreatedAt >= unmaturedCutoffUtc
@@ -70,6 +76,26 @@ public sealed class LedgerQuery(LedgerDbContext context) : ILedgerQuery
             from account in context.Accounts.AsNoTracking()
             where account.AccountType == AccountType.TreasuryAsset
                && account.OwnerType == OwnerType.Treasury
+               && account.OwnerId == null
+               && account.AssetId == assetId
+            join balance in context.AccountBalances.AsNoTracking() on account.Id equals balance.Id
+            select balance.Balance)
+            .FirstOrDefaultAsync(cancellationToken);
+    }
+
+    public Task<BigInteger> GetWithdrawalWalletTopUpTotalAsync(Guid assetId, CancellationToken cancellationToken = default) =>
+        SystemAccountBalanceAsync(AccountType.WithdrawalWalletTopUp, assetId, cancellationToken);
+
+    public Task<BigInteger> GetExternalSettlementTotalAsync(Guid assetId, CancellationToken cancellationToken = default) =>
+        SystemAccountBalanceAsync(AccountType.ExternalSettlement, assetId, cancellationToken);
+
+    /// <summary>A System-owned account balance for one asset. No row yet ⇒ nothing posted ⇒ zero.</summary>
+    private async Task<BigInteger> SystemAccountBalanceAsync(AccountType type, Guid assetId, CancellationToken cancellationToken)
+    {
+        return await (
+            from account in context.Accounts.AsNoTracking()
+            where account.AccountType == type
+               && account.OwnerType == OwnerType.System
                && account.OwnerId == null
                && account.AssetId == assetId
             join balance in context.AccountBalances.AsNoTracking() on account.Id equals balance.Id

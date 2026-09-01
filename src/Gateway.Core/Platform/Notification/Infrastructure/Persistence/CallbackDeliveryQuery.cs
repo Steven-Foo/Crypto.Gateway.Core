@@ -26,6 +26,16 @@ public sealed class CallbackDeliveryQuery(NotificationDbContext context) : ICall
         return referenceIds.ToDictionary(id => id, id => byId.GetValueOrDefault(id, NeverScheduled));
     }
 
+    public async Task<IReadOnlyDictionary<string, int>> GetStatusCountsAsync(CancellationToken cancellationToken = default)
+    {
+        var counts = await context.CallbackDeliveries.AsNoTracking()
+            .GroupBy(c => c.Status)
+            .Select(g => new { Status = g.Key, Count = g.Count() })
+            .ToListAsync(cancellationToken);
+
+        return counts.ToDictionary(c => ToApiStatus(c.Status), c => c.Count);
+    }
+
     private static string ToApiStatus(CallbackDeliveryStatus status) => status switch
     {
         CallbackDeliveryStatus.Pending => "PendingNotification",

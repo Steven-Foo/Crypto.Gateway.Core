@@ -121,12 +121,90 @@ The ledger is append-only. Enforce it in the database, not just the app — see 
 
 ## 2. MongoDB
 
+**Run MongoDB natively (a local Windows service), not in Docker.** Local dev and the local staging setup
+both target `mongodb://localhost:27017` directly. The `mongodb` service in `docker-compose.yml` remains only
+as a fallback for a machine with no native install — do not run both, they contend for port 27017 (see the
+troubleshooting note below, which is exactly how that failure presents).
+
 ```bash
 mongosh "mongodb://localhost:27017" --file db/mongo/00-bootstrap.js
 ```
 
 Idempotent: creates collections, JSON-Schema validators, and indexes (including TTL indexes for
-`RpcLog`, `WebhookLog`, `WalletResourceHistory`).
+`RpcLog`, `WebhookLog`, `ResourceHistory`).
+
+> **`mongosh` is a separate download.** The MongoDB *Server* MSI does not install it, and neither does
+> Compass — so on a fresh machine this command will not exist even though the server is running. Install the
+> MongoDB Shell separately. It lands in `%LOCALAPPDATA%\Programs\mongosh\` and is **not added to `PATH`**, so
+> either add it or call it by full path. Nothing depends on it at runtime: the collections auto-create on
+> first write; the bootstrap only adds the validators and indexes.
+
+Re-running the bootstrap over populated collections is safe — it `collMod`s the validator onto the existing
+collection rather than recreating it.
+
+### Running the tests against it
+
+Integration tests follow one convention for every backing store: **local by default, overridable by
+environment.** Nothing spins up its own container.
+
+| Store | Default | Override |
+|---|---|---|
+| SQL Server | `(localdb)\MSSQLLocalDB` | `CPE_TEST_SQL` (`{db}` is substituted per test database) |
+| MongoDB | `mongodb://localhost:27017` | `CPE_TEST_MONGO` |
+
+Mongo tests use their own database (`cpe_test_energy`), dropped before and after each run, so they never
+touch `CryptoPaymentEngine`. If nothing is listening they **skip** rather than fail, and they give up in
+~3s rather than the driver's default 30s.
+
+### Version + startup troubleshooting (Windows)
+
+Verified working: **MongoDB 8.2** (`8.2.12`). **MongoDB 8.3 does not run on Windows 10 (19045)** — `mongod.exe`
+fails to load with exit code `0xC0000139` (`STATUS_ENTRYPOINT_NOT_FOUND`), so the service times out after 30s
+*without ever writing a log file* (System event 7000/7009, and MSI Error 1920 during install). If mongod
+produces no log at all, that is this, not a config problem — it is not AVX (that is `0xC000001D`), not folder
+ACLs, and not a missing VC++ redistributable. Install 8.2 or another LTS.
+
+If the service starts but immediately stops, and the log's last error is **`Error setting up transport
+layer`**, something else already holds port 27017 — most often a leftover `cpe-mongodb` Docker container.
+Stop it (`docker compose down`) and start the service again.
+
+Start the service from an **elevated** shell (`net start MongoDB`, or `Start-Service MongoDB`); a
+non-elevated attempt fails with `Cannot open MongoDB service on computer '.'`. Its data and log live under
+`C:\Program Files\MongoDB\Server\<version>\{data,log}`, which only the service account can write — so a
+foreground `mongod --dbpath ...` run as your own user needs a directory you own.
+
+### Drift check — this script must match the code that writes these collections
+
+Same trap as the `db/sql` drift documented in §1, and it fails just as silently. **A JSON-Schema
+validator that disagrees with the document a store actually writes rejects every write** with a bare
+`Document failed validation`, and the only visible symptom is a feature that quietly stops recording.
+
+Three rules, all learned the hard way (2026-08-26):
+
+- **The database name must match `Mongo:Database` in every host's `appsettings`** (all three hosts and
+  `docker-compose.yml` say `CryptoPaymentEngine`). MongoDB forbids two databases whose names differ only
+  by case, so a casing mismatch is not cosmetic: this script runs first (it is mounted into
+  `docker-entrypoint-initdb.d`), wins the name, and the app's first write then dies with
+  `db already exists with different case`.
+- **A collection declared here must be one a store actually writes, under the same name and shape.**
+  A collection declared under a name nothing uses is worse than useless — the app auto-creates the real
+  one *without* the indexes declared here, so a TTL you believe is in place is not (this is exactly how
+  `WalletResourceHistory` was declared while the code wrote `ResourceHistory`, leaving history to grow
+  forever).
+- **A `DateTimeOffset` must be mapped explicitly, or it is not a BSON date.** The driver serialises a bare
+  `DateTimeOffset` as a nested `{ DateTime, Ticks, Offset }` **document**. That fails any
+  `bsonType: "date"` declaration here — and, worse, a **TTL index on such a field expires nothing at all**,
+  so a collection you believe is self-trimming grows forever with no error anywhere. Every `DateTimeOffset`
+  written to Mongo therefore carries `[BsonRepresentation(BsonType.DateTime)]` (see `ResourceDocuments.cs`
+  and `ReconciliationDocuments.cs`). This was live and rejecting **every** Energy resource and
+  Reconciliation snapshot write until it was found. Values are UTC observations, so no offset is lost.
+
+The writers, as of this file: `WalletResource` + `ResourceHistory` (Energy 5a `MongoWalletResourceStore` /
+`MongoResourceHistoryStore`), `Reconciliation` + `ReconciliationHistory` (`MongoReconciliationStore` /
+`MongoReconciliationHistoryStore`). `EnergyDelegation` is **superseded** — 5b moved staking/delegation into
+the SQL `energy.EnergyOperation` aggregate. The remaining collections (`Block`, `BlockchainTransaction`,
+`TransactionReceipt`, `ContractEvent`, `AddressMetadata`, `WalletSnapshot`, `RpcLog`, `WebhookLog`) are
+declared ahead of use — **nothing writes them yet**; treat their shapes as proposals, not contracts.
 
 Two invariants the validators enforce structurally:
 

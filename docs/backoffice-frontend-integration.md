@@ -6,6 +6,13 @@ not use that file as a reference; it describes a binary Admin/Viewer model that 
 
 Everything below was verified directly against the current endpoint source code, not written from memory.
 
+**Related documents**
+- `docs/merchant-portal-frontend-integration.md` — the **merchant-facing portal** API (`Api/MerchantPortalApi`,
+  the backend for `apps/merchant`). A different host, different cookie, different permission vocabulary. Do not
+  mix the two.
+- `docs/dev-sample-data.md` — how to populate a local database with realistic merchants, deposits and
+  withdrawals so these screens have something to render.
+
 ---
 
 ## 1. Base URL
@@ -21,13 +28,42 @@ All routes are prefixed `/api/v1/ops/...`. There is no versioning beyond `v1` to
 ## 2. Response envelope — every single endpoint, success or failure
 
 ```json
-{ "isSuccess": true,  "data": { /* endpoint-specific */ }, "error": null }
-{ "isSuccess": false, "data": null, "error": "human-readable message" }
+{ "isSuccess": true,  "data": { /* endpoint-specific */ }, "error": null, "errorCode": null }
+{ "isSuccess": false, "data": null, "error": "human-readable message", "errorCode": "stable.code" }
 ```
 
 Always check `isSuccess`, not just the HTTP status — but the HTTP status is also meaningful (see below).
-There is no machine-readable error *code* field, only `error` (a string message) — do not try to
-pattern-match on it beyond display.
+
+**`errorCode` is the field to branch on.** It is a stable dotted string; `error` is display prose that
+gets reworded and localised, so never pattern-match on it. Both fields are present on every response
+(null on success), so the envelope shape never changes between the two paths.
+
+Codes come from two places:
+
+- **Module/domain failures** carry the module's own code — `wallet.not_found`, `wallet.not_suspended`,
+  `withdrawal.duplicate_reference`, `payment_intent.invalid_state_transition`, and so on. The prefix is
+  the owning module.
+- **Host-level input validation and auth** use the `ops.*` catalog:
+
+| Code | Status | Raised when |
+|---|---|---|
+| `ops.unauthenticated` | 401 | No/invalid/expired session (bearer header or cookie) |
+| `ops.invalid_credentials` | 401 | Login failed |
+| `ops.csrf_invalid` | 403 | Cookie-authenticated unsafe method without a matching `X-CSRF-Token` |
+| `ops.permission_denied` | 403 | Valid session, missing the route's permission code |
+| `ops.not_found` | 404 | A single-record detail lookup matched nothing |
+| `ops.invalid_chain` | 400 | Unparseable `chain` / `network` |
+| `ops.invalid_status` | 400 | Unknown `status` filter value |
+| `ops.invalid_wallet_type` | 400 | Unknown `walletType` filter value |
+| `ops.invalid_withdrawal_kind` | 400 | `kind` was not `user`/`merchant` |
+| `ops.invalid_kind` | 400 | Unknown kind on the energy-operations filter |
+| `ops.invalid_callback_type` | 400 | Callback `type` was not `deposit`/`withdrawal` |
+| `ops.invalid_asset` | 400 | Unknown coin, or no asset configured for the chain |
+| `ops.invalid_amount` | 400 | Negative, or finer than the asset's precision |
+| `ops.invalid_hex` | 400 | A signed-transaction blob was not valid hex |
+| `ops.invalid_ip_address` | 400 | Every submitted IP/CIDR was malformed |
+| `ops.network_required` | 400 | `coin` filter supplied without `network` |
+| `ops.merchant_id_required` | 400 | `transactionId` filter supplied without `merchantId` |
 
 ### HTTP status codes used
 
@@ -520,7 +556,8 @@ param (client-side filter on the returned page for now).
       {
         "assetId": "guid", "network": "Tron", "coin": "USDT",
         "depositFeeFixed": 0.5, "depositFeeBps": 100, "depositFeePercent": 1.0,
-        "withdrawalFeeFixed": 1.0, "withdrawalFeeBps": 50, "withdrawalFeePercent": 0.5
+        "withdrawalFeeFixed": 1.0, "withdrawalFeeBps": 50, "withdrawalFeePercent": 0.5,
+        "topUpFeeFixed": 0, "topUpFeeBps": 0, "topUpFeePercent": 0
       }
     ]
   },
@@ -535,12 +572,41 @@ Request:
 {
   "chain": "Tron", "coin": "USDT",
   "depositFeeFixed": 0.5, "depositFeeBps": 100,
-  "withdrawalFeeFixed": 1.0, "withdrawalFeeBps": 50
+  "withdrawalFeeFixed": 1.0, "withdrawalFeeBps": 50,
+  "topUpFeeFixed": 0, "topUpFeeBps": 0
 }
 ```
-`depositFeeFixed`/`withdrawalFeeFixed` are **display-unit decimals** (not base units), a `0` is valid (pure
+All three `*FeeFixed` values are **display-unit decimals** (not base units), and a `0` is valid (pure
 percentage pricing). 400 if the chain/coin is unrecognized, or a fixed amount is negative or has more
 decimal precision than the asset supports.
+
+**This is a full replacement, not a patch.** Every fee field is written on each call, and an omitted field
+deserialises to `0` rather than being left alone — so posting only `depositFee*` silently sets the
+withdrawal and top-up fees to zero. **A UI that edits one fee must GET the record first and post all of
+them back.** There is no partial-update endpoint.
+
+#### Fees are deducted from what arrives — not added on top
+
+A 100 USDT deposit at 100 bps means the payer sends **100**, the merchant is credited **99**, and the
+platform earns **1**. The invoice always shows exactly the amount requested. (An earlier version grossed
+deposits up so the merchant netted its target — that behaviour was removed; do not describe fees to staff
+as "charged to the payer on top".)
+
+Because the fee is deducted, `depositFeeBps` accepts the full `0…10000` range — 10000 (100%) is legal,
+and simply means the merchant is credited nothing. It is absurd, not impossible, so the platform is
+allowed to set it.
+
+#### `topUpFee*` — merchant top-ups are priced separately
+
+A **merchant top-up** is the merchant funding its own balance on-chain (portal §8.4), not a customer
+payment. It has its own schedule which **defaults to zero and never inherits `Merchant:DefaultFee`** — so
+an unpriced merchant tops up free even while its customer deposits are charged the platform default.
+Setting `topUpFeeBps` non-zero charges the merchant for adding its own funds; that is a deliberate
+commercial choice, not the norm.
+
+Top-up balance is also **exempt from the merchant's settlement period (T+N)** — it is spendable as soon as
+it confirms, because a settlement delay exists to cover *customer* chargeback and reorg risk. Staff should
+know that raising a merchant's settlement period does **not** slow its top-ups.
 
 ---
 
@@ -552,7 +618,12 @@ first seen); anything already in flight before the suspend is unaffected and com
 
 ### `GET /api/v1/ops/wallets` — `ops.wallets.view`
 Query filters (all optional, AND-combined): `merchantId` (guid), `address` (exact match string), `chain`
-(e.g. `Tron`), `status` (`Active`|`Disabled`|`Suspended`), plus `page`/`pageSize`.
+(e.g. `Tron`), `status` (`Active`|`Disabled`|`Suspended`), `walletType`
+(`Deposit`|`HotWithdrawal`|`Treasury`|`Cold`|`Energy`, case-insensitive), plus `page`/`pageSize`.
+
+`walletType` is applied in SQL across the **whole** result set, and `totalCount` reflects it — so filtering
+to `HotWithdrawal` really does mean "every hot-pool wallet", not "the hot-pool wallets on the page you
+happened to load". An unrecognised value is a **400**, never a silently unfiltered list.
 Row:
 ```json
 {
@@ -566,6 +637,11 @@ everywhere else in this API where chain is a string like `"Tron"`. Map it client
 this is the only chain live). `statusReason` is only non-null while `status == "Suspended"`. `merchantName`
 is `null` whenever `merchantId` is — platform wallets (hot pool, staking, treasury, etc.) aren't assigned to
 a merchant; only deposit wallets are.
+
+### `GET /api/v1/ops/wallets/{id}` — `ops.wallets.view`
+The single-record detail view. Returns **one row object** in `data`, in the **exact same shape** as an item
+in the list above (it is built by the same projection, so the table and the record it opens can never
+disagree about a field). Unknown id → **404** `ops.not_found`.
 
 ### `POST /api/v1/ops/wallets/{id}/suspend` — `ops.wallets.manage`
 Request: `{ "reason": "string, required, max 512" }`
@@ -606,7 +682,11 @@ always shows nulls the other populates.
 Query filters (all optional): `merchantId`, `merchantName` (free-text, case-insensitive "contains" match
 against the merchant's Name or MerchantCode — no matches returns an empty page, not an error), `systemOrderNumber`
 (guid), `merchantOrderNumber` (string), `receivingAddress`, `network` (chain), `coin` (requires `network`
-to also be set), `fromDate`, `toDate`, `page`, `pageSize`.
+to also be set), `status` (`pending`|`confirmed`|`expired`|`failed`), `fromDate`, `toDate`, `page`, `pageSize`.
+
+`status` filters on the **effective** status — the same value the rows report, including the time-derived
+part: a lapsed-but-not-yet-swept invoice is still `Waiting` in the database but already reads (and filters
+as) `expired`. An unrecognised value is a **400**, never an unfiltered page.
 
 Response `data` — same level as `page`/`pageSize`/`items`:
 ```json
@@ -665,6 +745,15 @@ matched the invoice.
 Same query filters as deposits (minus `coin` needing `network` — same rule applies here too), plus `kind`
 (`"user"` | `"merchant"` — filters to end-user payouts or merchant cash-outs; omit for both).
 
+`status` here takes the withdrawal vocabulary: `pending` | `pending_merchant_approval` | `pending_approval` |
+`insufficient_balance` | `awaiting_release` | `confirmed` | `failed`. It filters on the same collapsed value
+the rows report, applied in SQL across the whole set with `totalCount` reflecting it — this is what makes a
+settlement queue trustworthy, since previously an operator could only see the outstanding work that happened
+to land on the page they loaded. Note `pending` deliberately collapses the entire pre-confirm pipeline
+(Reserving/Approved/Signing/Broadcast) and `failed` covers both rejected and failed payouts. An unrecognised
+value is a **400** — an operator must never be handed an empty queue because they typed a status that does
+not exist. `kind` and `status` AND together.
+
 Response `data` — same level as `page`/`pageSize`/`items`:
 ```json
 {
@@ -705,7 +794,7 @@ Row:
   "callbackNextAttemptAt": "..."
 }
 ```
-`status` ∈ `pending | pending_approval | insufficient_balance | awaiting_release | confirmed | failed`
+`status` ∈ `pending | pending_merchant_approval | pending_approval | insufficient_balance | awaiting_release | confirmed | failed`
 (lowercase). The states that need a human action, not just waiting:
 - **`pending_approval`** → build an Approve/Reject action (§14 below). Plain `pending` needs no action —
   it's already approved and self-processing.
@@ -715,9 +804,28 @@ Row:
   on-chain balance if investigating.
 - **`awaiting_release`** → funded but above the auto-send threshold, needs an operator Release action
   (§15 below).
+- **`pending_merchant_approval`** → a portal-initiated payout awaiting the MERCHANT's own approver, in their
+  own portal. Platform staff can see it but must not action it — there is no Ops endpoint for this state. It
+  leaves only when the merchant approves (then it either sends, or becomes `pending_approval` if it is above
+  the threshold) or the merchant rejects it.
 
 `sourceWalletId` is the direct cross-reference into §11 (Wallets) — if a payout is stuck, this tells you
 exactly which pool wallet to go inspect/reload.
+
+### `GET /api/v1/ops/transactions/withdrawals/{systemOrderNumber}` — `ops.withdrawals.view`
+### `GET /api/v1/ops/transactions/deposits/{systemOrderNumber}` — `ops.deposits.view`
+
+The single-record detail views. Each returns **one row object** in `data`, in the **exact same shape** as an
+item in the corresponding list — same field names, same precision, same conversions, because both are built
+by the same projection. Unknown id → **404** `ops.not_found`.
+
+These exist so a detail page can be deep-linked and refreshed without reconstructing the row from query
+params. There is no extra data on them: if the list has it, the detail has it, and vice versa.
+
+**Note:** `userId` and `payerAddress` have been **removed** from the deposit and withdrawal rows. They were
+always hardcoded `null` (never populated by any flow), so they were noise on every row. If real user
+attribution or payer-address capture is wanted later, it will be added deliberately — as a populated field,
+not a null placeholder.
 
 ---
 
@@ -733,12 +841,20 @@ fires the merchant's withdrawal-failed callback, same as an automatic failure.
 
 Both 409 if the withdrawal isn't currently in `pending_approval`, 404 if not found.
 
+**Approving also releases the payout for sending.** An explicit staff approval IS the release, so an approved
+payout goes straight to signing — you will NOT be asked to release it again on the §15 screen. (That was a real
+double-gate: both gates read the same threshold, so a large payout used to need two staff actions on two screens.)
+`awaiting_release` therefore now appears almost exclusively as the resume step after an `insufficient_balance`
+hold, not after a normal approval.
+
 ---
 
 ## 15. Withdrawal funding holds (the `insufficient_balance` / `awaiting_release` states)
 
 ### `POST /api/v1/ops/withdrawals/{withdrawalId}/release` — `ops.withdrawals.manage`
-No body. Releases an `awaiting_release` payout for sending.
+No body. Releases an `awaiting_release` payout for sending — in practice a payout that was parked for
+insufficient hot-wallet float and now needs an explicit go-ahead. A payout staff already approved (§14) is
+released by that approval and never reaches this state.
 Response: `{ "withdrawalId": "guid", "status": "Released" }`.
 
 ### `POST /api/v1/ops/withdrawals/{withdrawalId}/cancel` — `ops.withdrawals.manage`
@@ -769,6 +885,71 @@ same envelope if the reference doesn't exist or has nothing to resend.
 
 ---
 
+## 16b. Dashboard aggregates — the landing page
+
+### `GET /api/v1/ops/dashboard` — any valid staff session, **no extra permission**
+
+Deliberately ungated: it exposes nothing a staff member cannot already read, and putting the landing page
+behind a permission would give a freshly-created account a blank screen with no explanation.
+
+```json
+{
+  "generatedAt": "2026-08-26T08:03:10Z",
+  "operational": {
+    "withdrawalsPendingMerchantApproval": 0,
+    "withdrawalsPendingApproval": 3,
+    "withdrawalsAwaitingFunds": 1,
+    "withdrawalsAwaitingRelease": 2,
+    "settlementsPendingAudit": 2,
+    "settlementsPendingFinanceTransfer": 1,
+    "callbacksAbandoned": 13,
+    "callbacksPending": 4,
+    "walletsSuspended": 0,
+    "reconciliationDriftCount": 2,
+    "reconciliationIncompleteCount": 0,
+    "energyWalletsCritical": 1,
+    "energyWalletsLow": 3
+  },
+  "custody": [ /* per (chain, asset) — see below */ ],
+  "custodyAvailable": true,
+  "energyHealthAvailable": true,
+  "volume": []
+}
+```
+
+**`operational` is a work queue, and every key maps 1:1 onto a filter you can link to.** The six
+withdrawal counts use the exact `status` vocabulary from §13, so a tile links straight to
+`/transactions/withdrawals?status=pending_approval` and the number will match that list's `totalCount`.
+`settlementsPendingAudit` and `settlementsPendingFinanceTransfer` link to `status=pending_admin_audit` and
+`status=pending_finance_transfer` respectively — the two merchant-settlement queues that need a human (§19b).
+That is enforced by test, not by convention — a tile saying 3 that opens a list of 5 is the specific bug
+being guarded against.
+
+**`custody`** mirrors `GET /ops/reconciliation` (same snapshots, same fields, per (chain, asset)):
+`ledgerTreasuryHolding`, `onChainTotal`, `drift` as display decimals, plus `driftBaseUnits` as the exact
+integer string and `decimals`. If you already call `/ops/reconciliation`, you can ignore this block.
+
+### Degraded responses — read `custodyAvailable` / `energyHealthAvailable`
+
+The custody and energy-health numbers come from MongoDB, which holds **derived observability data, never
+money truth**. If Mongo is unreachable, this endpoint still returns **200** with the SQL-backed
+`operational` counts intact — it will not fail the whole landing page and hide the operator's actual to-do
+list over an observability outage.
+
+In that case the four Mongo-derived counts are **`null`, not `0`**, `custody` is `[]`, and the two
+`*Available` flags are `false`. **Render null as "unavailable", never as zero** — a fake `0` on a drift
+figure reads as "all balanced", which is the most dangerous thing you could show on a custody tile.
+
+### `volume` is not implemented yet
+
+It returns `[]` always. The per-asset deposit/withdrawal counts and sums over a time window need a
+purpose-built grouped SQL aggregate: the existing totals path folds BigInteger money client-side by design
+(there is no SQL `SUM` translation for this project's money type), so a naive 30-day per-asset breakdown
+would load every row in the window — a table scan on the landing page, which is exactly what REQ-3's own
+acceptance criteria rule out. Build the tiles on `operational` (as REQ-3 suggested); charts follow later.
+
+---
+
 ## 17. Ledger-wide transaction search (distinct from the deposit/withdrawal screens)
 
 ### `GET /api/v1/ops/transactions` — `ops.transactions.view`
@@ -784,14 +965,20 @@ Row:
 ```json
 {
   "journalId": "guid", "referenceType": "string", "referenceId": "guid",
-  "assetId": "guid", "description": "string", "direction": "Debit|Credit",
+  "assetId": "guid", "coin": "USDT|null", "decimals": 6,
+  "description": "string", "direction": "Debit|Credit",
   "amount": "base-unit integer string — NOT display decimal, unlike everywhere else in this API",
   "createdAt": "..."
 }
 ```
 **Watch this one:** `amount` here is a raw base-unit integer string (e.g. `"1000000"` for 1 USDT), not the
-display decimal convention used everywhere else in this doc (§5). Convert client-side using the asset's
-known decimals if you need to display it.
+display decimal convention used everywhere else in this doc (§5). That is deliberate — the ledger is the
+authoritative accounting record and never rounds. Each row now carries its own `coin` and `decimals` so you
+can format it without a second lookup against the asset catalog.
+
+`coin` and `decimals` are **null** on a gas-denominated journal (`referenceType: "GasCost"`): the gas asset
+is deliberately kept out of the deposit catalog, so it has no symbol or published precision. Render those
+rows as raw base units — do **not** fall back to a guessed 6.
 
 ---
 
@@ -800,7 +987,8 @@ known decimals if you need to display it.
 | Resource | Field | Values | Casing |
 |---|---|---|---|
 | Deposit (payment intent) | `status` | `pending`, `confirmed`, `expired`, `failed` | lowercase |
-| Withdrawal | `status` | `pending`, `pending_approval`, `insufficient_balance`, `awaiting_release`, `confirmed`, `failed` | lowercase-snake |
+| Withdrawal (user payout) | `status` | `pending`, `pending_merchant_approval`, `pending_approval`, `insufficient_balance`, `awaiting_release`, `confirmed`, `failed` | lowercase-snake |
+| Withdrawal (merchant settlement) | `status` | additionally `pending_admin_audit`, `pending_finance_transfer`, `finance_settled` — see §19b | lowercase-snake |
 | Callback | `status` | `Pending`, `Notified`, `Abandoned` | PascalCase |
 | Wallet | `status` | `Active`, `Disabled`, `Suspended` | PascalCase |
 | Staff account | `status` | `Active`, `Disabled` | PascalCase |
@@ -808,16 +996,270 @@ known decimals if you need to display it.
 
 ---
 
-## 19. Known gaps — don't build UI that assumes these work today
+## 19. Merchant terms — settlement period, wallet, caps, limits, threshold
 
-- **`userId` and `payerAddress`** on the deposit/withdrawal rows are hardcoded `null` — not implemented.
+Five setters on top of §10's fees. All are **display decimals** on the way in, converted at the edge, and
+**over-precision is refused rather than truncated** (§5).
+
+| Endpoint | Permission | Body |
+|---|---|---|
+| `PUT /ops/merchants/{id}/settlement-period` | `ops.merchants.manage` | `{ "days": 1 }` (0–30; 0 = T+0) |
+| `PUT /ops/merchants/{id}/settlement-wallet` | `ops.merchants.manage` | `{ "chain": "Tron", "address": "T..." }` |
+| `PUT /ops/merchants/{id}/withdrawal-cap` | `ops.fees.manage` | `{ "chain", "coin", "flatCap": 5000.0, "percentBps": 5000 }` |
+| `PUT /ops/merchants/{id}/withdrawal-limits` | `ops.fees.manage` | `{ "chain", "coin", "minimum": 10.0, "maximum": 5000.0 }` |
+| `PUT /ops/merchants/{id}/approval-threshold` | `ops.fees.manage` | `{ "chain", "coin", "threshold": 1000.0 }` |
+
+**`null` vs `0` is a real distinction on every optional amount, not a formality:**
+
+- `null` = **unset** ⇒ the platform config value applies (`Withdrawal:Policies`).
+- `0` = an explicit zero — "no minimum", "cap cash-out at zero", "everything needs approval".
+
+Sending `0` where you meant "clear it" changes behaviour. A limits form must be able to submit `null`.
+
+**Read them back** on `GET /ops/merchants/{id}/fees` (limits, cap, threshold) and
+`GET /ops/merchants/{id}` (`settlementDelayDays`, `settlementWallets`).
+
+**The settlement wallet is staff-only, permanently.** A merchant cannot set its own cash-out destination from
+the portal — that is the control preventing a compromised merchant credential from redirecting earnings (§10).
+
+---
+
+## 19b. Merchant settlements — the audit → finance → record workflow
+
+**A merchant cash-out is not paid by this system.** An admin audits the request, a finance admin pays the
+merchant from a **company wallet outside platform custody**, and the transaction is recorded here. User
+payouts are unaffected — those are still built, signed and broadcast automatically.
+
+A merchant cash-out therefore has its own three statuses, which appear on the withdrawal screens and are
+filterable like any other:
+
+| `status` | Meaning | Action |
+|---|---|---|
+| `pending_admin_audit` | Waiting for an admin to review it | approve / reject |
+| `pending_finance_transfer` | Cleared; finance must pay it externally | record the payment |
+| `finance_settled` | Paid and the hash verified on-chain | terminal |
+
+`finance_settled` is deliberately distinct from `confirmed`: `confirmed` means *the platform paid it itself*,
+`finance_settled` means *a human paid it and we verified their hash*. Different origins of trust — show them
+differently.
+
+| Endpoint | Permission |
+|---|---|
+| `POST /ops/withdrawals/{id}/audit-approve` | `ops.withdrawals.approve` |
+| `POST /ops/withdrawals/{id}/audit-reject` — `{ "reason": "..." }` | `ops.withdrawals.approve` |
+| `POST /ops/withdrawals/{id}/record-settlement` — `{ "transactionHash", "sourceAddress?" }` | `ops.withdrawals.manage` |
+
+Recording is gated on `manage`, not `approve`, so signing a settlement off and declaring it paid can be
+separate people.
+
+**Rejecting at either stage returns the merchant's money** — the ledger reserve is released. A decline never
+strands funds.
+
+### The hash is verified before anything is written
+
+`record-settlement` checks the chain first: the transaction must exist, be **confirmed**, and carry the right
+destination, asset and at least the right amount. **On failure nothing is written** — the settlement stays in
+`pending_finance_transfer`, and the operator fixes the hash and retries. Branch on these:
+
+| `errorCode` | What the operator should do |
+|---|---|
+| `verification.tx_not_found` | Check the hash; or wait if just broadcast |
+| `verification.tx_not_confirmed` | Wait for confirmation, then retry |
+| `verification.tx_failed` | The transaction reverted; no funds moved |
+| `verification.destination_mismatch` | It paid a different address |
+| `verification.amount_mismatch` | It paid less than owed |
+| `withdrawal.duplicate_settlement_hash` | That hash is already recorded against another settlement |
+
+Surface these verbatim rather than as one generic "failed" — "still confirming" and "wrong hash" call for
+completely different actions.
+
+### Extra fields on the withdrawal rows
+
+`GET /ops/transactions/withdrawals` (and the detail endpoint) carry the settlement audit trail. **All null for
+a user payout**, which the platform pays itself:
+
+| Field | Meaning |
+|---|---|
+| `auditedBy` / `auditedAt` | Who cleared it, and when (also set on an audit rejection) |
+| `settledBy` / `settledAt` | Who recorded the external payment, and when |
+| `settlementSourceAddress` | The company wallet that paid it |
+
+For an off-system settlement this is the **only** audit trail there is — the chain cannot tell you who acted,
+because the source wallet is not ours.
+
+---
+
+## 20. Treasury — cold wallet, hot-pool reload, and top-ups
+
+All `ops.treasury.manage`. This is the human-in-the-loop custody flow: funds accumulate in a **cold** treasury
+whose key the system never holds, and an operator periodically reloads the **hot pool** that pays withdrawals.
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /ops/treasury/hot-pool?chain=Tron` | Pool wallets **with live on-chain balances**, to pick which needs topping up. **Never returns a key reference.** |
+| `POST /ops/treasury/cold-wallet` | `{ "chain", "address" }` — register the watch-only cold address |
+| `POST /ops/treasury/reload` | `{ "chain", "targetWalletId", "amount" }` → `{ reloadId, unsignedTransactionHex }` |
+| `POST /ops/treasury/reload/{reloadId}/submit` | `{ "signedHex" }` |
+
+**The UI must sign client-side.** The backend builds an *unsigned* transaction and accepts a *signed* blob; the
+cold private key must never be sent to any backend, including this one. A reload screen that collects the key
+and posts it has defeated the entire point of the cold tier. Broadcast and confirmation are done by a worker in
+the money host, so `submit` returning 200 means *accepted*, not *sent*.
+
+No ledger entry is written — treasury→hot is custody-internal, so total custody is unchanged, only its
+location. Once it confirms, parked `insufficient_balance` withdrawals resume automatically.
+
+### `POST /ops/treasury/top-up` — recording a hot-wallet top-up
+
+```json
+{ "chain": "Tron", "targetWalletId": "...", "amount": 5000.00,
+  "transactionHash": "0x...", "sourceAddress": "T..." }
+```
+
+**Different from the cold reload above.** A reload is *built and broadcast by this system*. A top-up already
+happened: an admin sent company funds into a hot wallet from their own business wallet, and is telling us
+about it. So it is verified and recorded, never executed.
+
+`GET /ops/treasury/hot-pool` returns each wallet's live `available` balance so the operator can see which one
+is running dry. A balance that could not be read comes back **`null`, not `0`** — "unknown" and "empty" call
+for opposite actions.
+
+Same verification codes as §19b. Two things worth surfacing in the UI:
+
+- **The booked amount is what the chain shows, not what was typed.** If more was sent than entered, the
+  response's `amount` reflects what actually arrived — custody must match reality.
+- A top-up **never touches merchant balances.** It raises platform custody and is recorded against a company
+  contribution account, so it can never be mistaken for merchant earnings.
+
+---
+
+## 20b. Settlement activity — company funds across the custody boundary
+
+`GET /api/v1/ops/settlement-activity?chain=&page=&pageSize=` — `ops.treasury.manage`
+
+One chronological feed of every movement of **company** money: top-ups in, merchant settlements out. Row:
+`type` (`top_up` | `merchant_settlement`), `direction` (`in` | `out`), `recordedAt`, `recordedBy`, `network`,
+`amount(+amountBaseUnits)`, `txHash`, `sourceAddress`, `destinationAddress`, `merchantId`.
+
+The `summary` block carries running totals **from the ledger, not the page**: `floatContributed` and
+`settlementsPaidExternally`.
+
+> **Do not add either figure to earnings.** Earnings are **fee revenue** only. `settlementsPaidExternally` is
+> money going *out*; counting it as income would invert its sign. The two belong in separate blocks —
+> "earned" and "company funds deployed".
+
+---
+
+## 21. Reconciliation — custody audit
+
+`GET /api/v1/ops/reconciliation?chain=Tron` — any valid staff session, no extra permission (it moves nothing).
+
+Latest snapshot per (chain, asset): `chain`, `assetId`, `coin`, `status`, `ledgerHolding`, `onChainTotal`,
+`drift`, **`driftBaseUnits`** (exact signed integer string), `addressesScanned`, `addressesUnreadable`,
+`observedAt`. **Non-`Balanced` rows are returned first.**
+
+### Where the custody sits
+
+Each row also breaks the on-chain total down by the role of the address holding it. These **sum to
+`onChainTotal`** — they come from the same balance reads, so the parts cannot disagree with the whole:
+
+| Field | Meaning |
+|---|---|
+| `coldTreasuryTotal` | Swept merchant deposits — the bulk of custody |
+| `hotPoolTotal` | Operating float for user payouts |
+| `depositAddressTotal` | Received but not yet swept |
+| `toppedUpTotal` | Of the above, how much is **company float** rather than merchant money |
+
+`toppedUpTotal` comes from the *ledger*, not the chain — it is an accounting fact about where funds came from,
+which no address balance can show. Render it as a qualifier on custody, not as an extra amount to add.
+
+**A positive drift is worth checking against `toppedUpTotal` first**: an admin who sent a top-up but has not
+yet recorded it leaves the chain ahead of the ledger by that amount. The API deliberately does **not** label
+that "explained" automatically — it cannot distinguish an unrecorded top-up from genuinely unexplained funds,
+and a custody screen must not claim more certainty than it has.
+
+Merchant settlements never appear here and never move the drift: they are paid from wallets outside custody,
+so no watched address is debited.
+
+| `status` | Meaning |
+|---|---|
+| `Balanced` | Drift within the configured tolerance |
+| `Drift` | Ledger and chain disagree beyond tolerance — surface loudly |
+| `Incomplete` | An address could not be read, so the total is partial — **not** a clean bill of health |
+
+Render `Incomplete` distinctly from `Balanced`. Collapsing them tells an operator custody is fine when the
+system does not actually know.
+
+Unlike the dashboard's custody tile, **this endpoint fails loudly if its store is unavailable** — here, "the
+audit is down" *is* the answer to the question being asked.
+
+> In dev with the in-memory chain the balance reader returns zero, so every asset reports the full ledger
+> holding as drift. Expected, not a custody problem.
+
+---
+
+## 22. Sweep and Energy — read-only operational views
+
+Read-only. There is deliberately **no ops action** (no manual retry/cancel/stake) on these yet.
+
+### `GET /api/v1/ops/sweeps` — `ops.sweep.view`
+Filters: `chain`, `status`, `walletId`, `page`, `pageSize`. Returns `{ page, pageSize, totalCount, summary, items }`.
+
+Row: `sweepId`, `walletId`, `chain`, `assetId`, `fromAddress`, `toAddress`, `amount(+amountBaseUnits)`,
+`status`, `txHash`, `confirmations`, `failureReason`, `createdAt`, `updatedAt`.
+
+### `GET /api/v1/ops/energy/operations` — `ops.energy.view`
+Filters: `chain`, `kind` (`Stake`/`Delegate`/`TopUp`), `status`, `stakingWalletId`, paging.
+
+Row: `operationId`, `kind`, `chain`, `stakingWalletId`, `ownerAddress`, `targetAddress`,
+`amountTrx(+amountSunBaseUnits)`, `status`, `txHash`, `confirmations`, `failureReason`, timestamps.
+
+### `GET /api/v1/ops/energy/resources` — `ops.energy.view`
+Per-wallet resource health, **worst-health first**: `walletId`, `chain`, `address`, `walletType`,
+`health` (`Healthy`/`Low`/`Critical`), `energyAvailable`/`energyLimit`/`energyUsed`, `bandwidthAvailable`,
+`delegatedEnergyOut`/`In`, `frozenTrxForEnergy`, `frozenTrxForBandwidth`, `availableTrxBalance` (each TRX
+figure with a `...Sun` exact integer), `targetEnergy`, `minimumEnergy`, `observedAt`.
+
+Energy counts are raw integers, not money — no decimals conversion applies to them. TRX amounts are money and
+carry both forms.
+
+---
+
+## 23. Local development data
+
+An empty database makes every screen look broken in the same way, so there is a seeder that produces a
+realistic portfolio: several merchants with different pricing, settlement periods and lifecycle states, deposit
+invoices in varied states (including one unpaid and one underpaid), credited deposits with real fee splits, and
+withdrawals sitting in **every** status this API exposes — `confirmed`, `pending_approval`,
+`pending_merchant_approval`, `insufficient_balance`.
+
+```powershell
+./tools/dev/Setup-LocalEnv.ps1
+$env:DevSampleData__Enabled = "true"
+dotnet run --project src/Api/MerchantGateway/CryptoPaymentEngine.Api.MerchantGateway
+```
+
+Full runbook, including the demo merchants' terms and the portal logins for each: **`docs/dev-sample-data.md`**.
+
+Two things worth knowing when reading the data it produces:
+
+- It seeds *inputs* and lets the real workers produce every deposit, journal and callback, so it takes 30–60
+  seconds to converge and the numbers are genuinely ledger-derived — not fabricated rows.
+- In dev the on-chain balance reader returns zero, so `/ops/reconciliation` and the dashboard custody tile
+  report the full ledger holding as drift. That is the in-memory chain, not a custody fault.
+
+---
+
+## 24. Known gaps — don't build UI that assumes these work today
+
+- **2FA** — not implemented anywhere in the backend.
+- **`volume` on the dashboard** returns `[]` — see §16b for why it was deliberately not built.
 - **No mismatch-review workflow** for deposits (§12) — by design, not a missing feature.
-- **No treasury/hot-wallet-reload/cold-wallet screens** in this API at all — that flow only exists as
-  dev-only endpoints in the *other* host (MerchantGateway's `/dev/treasury/*`), never ported here.
-- **No Energy/Sweep/Reconciliation ops screens** — those modules run as background workers with zero Ops
-  visibility today.
-- **Per-merchant withdrawal/deposit limits** (min/max) are recorded by the fee-schedule domain but nothing
-  reads them yet — config-based limits (`WithdrawalPolicy`) are what's actually enforced.
-- **2FA** — not implemented, explicitly deferred.
-- **No single-record "detail" endpoints** for deposits/withdrawals/wallets — only the paginated
-  search/list. Build detail views (if needed) by keeping the row data already returned by search.
+- **No ops *action* on Sweep or Energy** (§22) — no manual retry, cancel, or stake trigger. Read-only.
+- **No `EnergyPolicy` (threshold) read endpoint** — the resource snapshot already carries target/minimum energy.
+- **No reconciliation history / time series** (§21) — only the current snapshot per (chain, asset).
+- **No paged history endpoint** across transaction records generally — deferred to be applied uniformly.
+- **No client-side signing UI** for the treasury reload (§20) — the API is ready, the signing component is not.
+- **`userId` / `payerAddress` were removed**, not left null: both were hardcoded placeholders on every
+  deposit/withdrawal row and carried no information. If real user attribution is wanted, it will be added
+  deliberately as a populated field.

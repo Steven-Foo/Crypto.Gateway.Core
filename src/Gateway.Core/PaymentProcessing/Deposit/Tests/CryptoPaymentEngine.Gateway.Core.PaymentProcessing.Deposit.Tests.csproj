@@ -14,6 +14,7 @@
     <ProjectReference Include="../../../AssetManagement/Wallet/Contracts/CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts.csproj" />
     <ProjectReference Include="../../../Financial/Ledger/Application/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application.csproj" />
     <ProjectReference Include="../../../Financial/Ledger/Infrastructure/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\PaymentIntent\Contracts\CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -67,8 +67,9 @@ Full guide: `Scaffolding.md`. Essentials below.
         Blockchain/        Providers · Scanner · Synchronization · Resources
         Platform/          Notification · Reporting · Scheduling · Workflow
       Api/
-        MerchantGateway/   # merchant-facing host — composition root
+        MerchantGateway/   # merchant-facing HMAC API host (machine-to-machine) — composition root
         OperationsApi/     # internal/ops host — composition root
+        MerchantPortalApi/ # merchant-facing browser portal host (session auth) — composition root
       Infrastructure/       # EF Core, Redis, Mongo, event bus/outbox impl, tech only
       SharedKernel/         # Entity, ValueObject, DomainEvent, Result<T>, IEventBus, exceptions
     tests/
@@ -784,6 +785,340 @@ here needs `DOTNET_ROLL_FORWARD=LatestMajor` (its host is net8, the assemblies n
 expiry / refresh (session is fixed-TTL, re-login on expiry); per-deployment prod `Cors:AllowedOrigins` + `Auth:Cookie`
 (config only, not code).
 
+**Merchant Portal API — Phase 1 (tenant-scoped auth spine + read screens) — BUILT, full suite green (689 passed,
+8 expected skips), HTTP-verified end-to-end.** The merchant-facing back-office had **no backend** (MerchantGateway is
+machine-to-machine HMAC only — no merchant login/session, per the UI's §9.2). Phase 1 (of the confirmed 3-phase plan)
+builds the foundation from a Vue template (`Downloads/MerchantBO`, mock-auth prototype): a **new tenant identity module**
++ a **new host**, delivering login + the reusable read screens. **New module `Platform/MerchantIdentity`** (schema
+`merchantidentity`, migration `InitialMerchantIdentity`, `db/sql/105-merchantidentity.sql`): `MerchantUser` (global-unique
+username → resolves one tenant; PBKDF2 password + opaque session token via the shared SharedKernel primitives
+`Pbkdf2PasswordHash`/`OpaqueToken`, while each port stays module-owned so the two identity modules stay independent, §4.5)
++ `MerchantUserSession` (opaque server-side token, only its SHA-256 hash stored,
+revocable/fixed-TTL, **carries the tenant `MerchantId`** + a per-session CSRF token). `MerchantAuthService` mirrors
+`StaffAuthService` but binds every session to one `MerchantId`; Phase 1 grants all portal users `["*"]` (a per-merchant
+role model is Phase 2). **New host `Api/MerchantPortalApi`** (third composition root) behind
+`MerchantSessionAuthMiddleware` — the SAME httpOnly-cookie + CSRF model as the Ops host (`cpe_portal_session` cookie,
+`X-CSRF-Token` on cookie-authenticated writes, bearer accepted + CSRF-exempt, credentialed CORS allow-list). **The
+non-negotiable spine — tenant isolation:** the `MerchantId` comes ONLY from the validated session
+(`PortalTenant.MerchantId`), never from a request param/body, so a merchant cannot address another merchant's data — and
+an endpoint doesn't name a merchant at all. **Read endpoints, all tenant-scoped** (`/api/v1/portal/…`): `auth/{login,
+logout,me}`, `profile` (`IMerchantDirectory`), `funds` (`ILedgerQuery` available + settled, the two balance kinds kept
+distinct §14), `fees` (`IMerchantAssetPolicyService`), `addresses` (`IWalletDirectory.ListAssignedWalletsAsync`),
+`transactions/{payin,payout,cash-out}` (`IPaymentIntentDirectory` + `IDepositLookup` enrich; `IWithdrawalDirectory` by
+`Kind` User/Merchant). Composes the module read-Contracts read-only (§4.7 — no workers; in-memory chain/signer stubs in
+dev only to satisfy Withdrawal→Treasury→allocator DI, never signs). Dev: `AddDevelopmentMerchantPortalSeed` binds a login
+(`merchant001`, config `MerchantIdentity:DevSeed`) to the seeded `DEVMERCHANT`. **HTTP-proven on a booted host:** login
+sets the httpOnly cookie + returns `csrfToken` + `merchantId`; cookie-only auth works on every read; `/profile` + `/funds`
+return the SESSION's merchant (USDT balance, real TRON deposit address); a **`?merchantId=<other>` injection is ignored**
+(still the caller's own tenant); cookie POST without `X-CSRF-Token` → 403, with → 200; logout revokes; unauth → 401. Tests:
+`MerchantAuthServiceTests` (4 — login issues a tenant-bound + CSRF session, validate surfaces the tenant, wrong-password
+== unknown-user, expiry). **Phase 2 — DONE** (see the next milestone). **No backend, not built**
+(the §9-style gaps, filed): dashboard (no aggregate), risk-events, reconcile (platform-only custody audit), reports, 2FA
+(the portal's login accepts an `otp` field but IGNORES it — 2FA is unimplemented).
+
+
+**Merchant Portal API — Phase 2 (merchant RBAC + write actions) — BUILT, full suite green (726 passed, 8 expected
+skips), HTTP-verified end-to-end.** Turns the read-only Phase 1 portal into a working back-office: merchants now
+manage their own staff accounts and roles, rotate their API credential, maintain their IP allowlist, and submit
+money-out. **RBAC came first on purpose** — without it every portal user held the Phase 1 wildcard, so shipping
+writes first would have given every merchant user the ability to move money. **MerchantIdentity gained roles:**
+`MerchantRole` (per-tenant — unique on `(MerchantId, Name)`, so two merchants may both have a "Finance"; a role
+never crosses tenants), `MerchantUser` gained a **nullable** `RoleId` + `MustChangePassword` (migration
+`AddMerchantRolesAndAccountLifecycle`, `db/sql/105-merchantidentity.sql` regenerated). **Null role is fail-closed** —
+no role ⇒ an EMPTY permission set at login, so an account can sign in and do nothing; never an implicit grant. The
+session snapshots the role's codes at login (a role change takes effect next login — the staff module's same
+trade-off). New `MerchantRoleService` + `MerchantAccountService`, both taking the caller's `merchantId` as their
+first argument and filtering every repository query by it, so a foreign id reads as "not found" rather than being
+actionable. Account creation/reset issue a **generated one-time password** (never admin-chosen), returned once;
+`ChangeOwnPasswordAsync` requires the current password and clears the forced-change flag. Lock-out guards mirror the
+staff module: never disable yourself, never disable the tenant's last active account, never delete a role still in
+use. **Host:** new `PortalPermissions` catalog (`portal.<module>.<verb>`, host-owned §4.5) + `RequirePortalPermission`
+gate; **every** Phase 1 read is now gated too. Endpoints: accounts CRUD + status/role/reset-password,
+`account/change-password` (ungated — everyone may change their own), roles CRUD + permissions, `GET /permissions`,
+`api-credential` (metadata + rotate), `allowed-ips` (IP/CIDR validated at the edge), and money-out `payouts` /
+`cash-outs`. **Money-out calls the SAME Application services the HMAC `MerchantGateway` uses** — the service layer is
+the money boundary, not the host — so idempotency on the merchant reference, the per-merchant fee, the settled (T+N)
+gate, the liquidity cap, the ledger reserve as the atomic overdraw guard, and the approval threshold all still apply
+unchanged; the host adds only display→base conversion (refusing over-precision, §14) and the 409-on-duplicate mapping.
+The portal host gained `Withdrawal:Policies` config (it now submits requests, so it reads the same per-chain
+limits/threshold the money host does; it still registers no workers, so it never processes/signs/broadcasts, §4.7).
+**Two security decisions, both deliberate:** (1) **the settlement wallet is NOT merchant-editable** — it stays a
+staff-only Ops action precisely so a compromised merchant credential or portal session cannot redirect earnings (§10);
+(2) **portal-created user payouts were approved by the user with the risk stated** — a payout sends to a
+request-supplied address, so a stolen browser session is a wider blast radius than the server-side HMAC path; it is
+contained by its own permission code (`portal.payouts.create`, off unless a merchant admin grants it) and by the
+approval threshold, which still forces staff review above the configured amount. A cash-out carries no such risk
+(staff-whitelisted destination). Role codes are validated against the portal catalog at the edge, so a tenant cannot
+store an unknown code — **including a platform `ops.*` code** (HTTP-proven: refused 400). **HTTP-proven on a booted
+host:** an admin created a `Finance` role holding only `portal.overview.view` and an account bound to it; that user's
+session carried exactly that one code with `mustChangePassword: true`, and was allowed `/profile` (200) but refused
+`/transactions/payin`, `/accounts`, `/api-credential`, `POST /payouts`, and `POST /roles` (all 403 — it cannot
+self-promote or reach money-out); allowed-IPs rejected a malformed entry (400) and accepted an IP + CIDR; CSRF still
+enforced on every Phase 2 write (403 without the header); money-out surfaced real business rejections, not crashes
+(below-minimum, insufficient balance) and refused an over-precision amount; a `?merchantId=` injection on an
+account-list write surface was ignored. Tests: `MerchantAuthServiceTests` (8 — role codes resolved onto the session,
+no-role ⇒ empty, disabled account refused) + new `MerchantTenantIsolationTests` (9 — merchant A cannot read/edit/
+delete/reset merchant B's roles or accounts even knowing the exact id, a foreign role can never be assigned at
+creation or later, same-name roles across tenants, in-use role undeletable, self/last-account disable guards,
+change-own-password rules, global username uniqueness). Also folded the temp-password generator into a shared
+`SharedKernel.TemporaryPassword` primitive rather than adding a third copy. **Deferred:** 2FA (still unimplemented
+backend-wide — the login `otp` field remains ignored), a portal audit log of merchant-admin actions, and revoking a
+disabled account's live sessions (today it is refused at next login, mirroring the staff module).
+
+**Two-party payout approval (merchant approver → platform staff) + single-approval platform gate — BUILT, full
+suite green (731 passed, 8 expected skips), HTTP-verified.** Closes the gap between the intended payout flow and
+what Phase 2 shipped. **Intended flow, now implemented:** a merchant portal user submits a payout → it waits in the
+new **`PendingMerchantApproval`** state for the merchant's OWN approver → on approval, at/below the effective
+approval threshold it is cleared to send automatically; above it, it moves to `PendingApproval` and waits for
+platform staff. **A merchant can never approve past the platform gate** — the routing is re-resolved server-side
+against the threshold at approval time, not chosen by the merchant. **Scope: portal-initiated payouts only.** An
+HMAC-API payout passes `RequiresMerchantApproval: false` (the default) and behaves exactly as before — the
+merchant's own server already authorised it by signing the request, so the frozen API contract is untouched
+(regression-tested). **Separation of duties comes from the permission split, not a different-user rule:** approving
+requires a distinct `portal.payouts.approve` code, so a user who may only submit cannot also sign off; a merchant
+admin holding both may approve a payout they raised (which keeps one-person merchants able to pay out). **Merchant
+rejection releases the ledger reserve** via the same event path a platform rejection uses — a decline can never
+strand the merchant's money in clearing (asserted on the balances). **Also fixed a real double-gate defect:**
+`Withdrawal.Approve()` now stamps `ReleasedAt`/`ReleasedBy`, because an explicit staff approval IS the release.
+Previously an above-threshold payout tripped BOTH the request-time `PendingApproval` gate and the processing-time
+`AwaitingRelease` gate on the *identical* threshold, so staff had to approve on one Ops screen and then release on
+another for a single payout — a leftover from when `AwaitingRelease` was built during the hot-wallet float work as
+the only human checkpoint (payouts then arrived only via API with no human at request time), never reconciled when
+request-time approval landed on the same threshold. The release path is unchanged for what it is actually for —
+resuming a payout parked as `AwaitingFunds` for insufficient hot-wallet float — and the `ReleasedAt is null` check
+still backstops anything reaching `Approved` without human review (e.g. a threshold lowered mid-flight).
+**Schema:** new status value only (string-stored; `PendingMerchantApproval` is 23 chars, fits the existing
+`nvarchar(24)` — no column change) plus two nullable audit columns `MerchantApprovedBy`/`MerchantApprovedAt`
+(migration `AddMerchantPayoutApproval`, `db/sql/70-withdrawal.sql` regenerated). **No ledger-impact change** — the
+reserve still happens at request; only *where the payout waits* changed. New `IMerchantPayoutApprovalService`
+(tenant-scoped: another merchant passing a real withdrawal id gets "not found", never a silent no-op) + portal
+`POST /payouts/{id}/{approve,reject}`; the Ops directory surfaces `pending_merchant_approval` so staff can see —
+but not action — a payout still awaiting the merchant. Tests: 5 new pipeline tests in `WithdrawalFlowTests`
+(below-threshold sends on merchant approval alone; above-threshold needs merchant THEN platform and the worker
+moves nothing in between; rejection returns the reserve; cross-tenant approval refused; API payout unaffected) and
+the old "held for operator release" test rewritten to assert the single-approval behaviour. HTTP-proven: the
+approve/reject routes are gated on `portal.payouts.approve` (a user with only `portal.overview.view` gets 403), an
+unknown/foreign withdrawal id returns 404, and the permission catalog advertises the new code. **Deferred:** a
+merchant-side notification when a payout is waiting for their approval (today the portal must poll the payout list).
+**Admin-UI search gaps (Crypto.UI REQ-12/13/15) — BUILT, full suite green (742 passed, 8 expected skips).** Three
+read-only, additive filter/field gaps the frontend filed against the Ops API. **No schema, migration, ledger, key,
+or module-boundary change** — every seam is an optional parameter on an existing Contract with a default, so no
+existing call site moved. **(1) REQ-15 — `status` filter on both transaction searches (the one with real
+operational bite):** without it the settlement queue could only find the outstanding work that happened to land on
+the page an operator loaded. Both searches now filter on the **effective** status — the collapsed vocabulary the
+rows already report, not the domain enum — pushed into SQL so `totalCount` reflects it. Withdrawal:
+`pending`(=Reserving/Approved/Signing/Broadcast) | `pending_merchant_approval` | `pending_approval` |
+`insufficient_balance` | `awaiting_release` | `confirmed` | `failed`(=Rejected **and** Failed); the mapping lives
+in `WithdrawalDirectory.DomainStatusesFor` **immediately beside `EffectiveStatus`**, because the two drifting apart
+would mean a filter that silently excludes rows the same screen labels with that exact status. Deposit
+(`PaymentIntentDirectory`): `pending`|`confirmed`|`expired`|`failed`, where `expired`/`pending` are **time-derived**
+— a lapsed-but-not-yet-swept invoice is still `Waiting` in the DB but already reads expired, so the filter compares
+`ExpiresAt` against the same clock the projection uses, captured once per request. An unknown value is a **400** at
+the host and matches **nothing** in the directory (never everything — an unfiltered set shown as a filtered queue is
+the dangerous failure). Vocabularies published as `WithdrawalEffectiveStatuses`/`PaymentIntentEffectiveStatuses` in
+**Contracts** (not Infrastructure) so a host can validate without reaching past the boundary (§4.5). **(2) REQ-13 —
+`walletType` filter on `GET /ops/wallets`** (`WalletAdminFilter.WalletType`, applied in the repository; unknown ⇒
+400). **(3) REQ-12 — `coin` + `decimals` on ledger rows** (`GET /ops/transactions`): amounts deliberately stay exact
+base-unit integers (§14 — the ledger never rounds), but a consumer couldn't format them without a second catalog
+lookup; resolved once per distinct asset, and **null for a gas-denominated journal** (§5c `GasCost` — the gas
+`AssetId` is deliberately outside the deposit catalog, so a consumer must render raw base units rather than guess a
+precision). Tests (11 new, real SQL Server): the load-bearing one on both directories asserts that for **every**
+status in the published vocabulary, filtering by it returns exactly the rows the unfiltered search labels with it —
+the drift guard — plus a lapsed-invoice clock test, unknown-value-matches-nothing, kind×status AND-ing, and
+wallet-type filter/count/AND-with-status. **Still open from that list:** REQ-7 (machine-readable `errorCode`),
+REQ-6 (single-record detail endpoints), REQ-3 (dashboard aggregates), REQ-5 (`userId`/`payerAddress`, still
+hardcoded null — needs a product decision: populate or drop the columns), and REQ-8's 13 unbacked screens. **Also
+stale in `Crypto.UI/docs/backend-requirements.md`:** REQ-4 (merchant portal session API) and REQ-14 (policy
+read-back) are **already delivered** — the UI team is holding `apps/merchant` behind REQ-4 without knowing.
+
+**Admin-UI medium gaps (Crypto.UI REQ-3/5/6/7) — BUILT, full suite green (746 passed, 8 expected skips), HTTP-verified
+on a booted host.** The second batch of frontend-filed gaps, all read-only/additive; **no schema, migration, ledger, key,
+or money-path change.** **(1) REQ-7 — machine-readable `errorCode`:** every failure response now carries a stable dotted
+code alongside the human `error` string (the UI's §25 forbids pattern-matching display prose, so it previously could not
+branch on *why* something failed). Domain failures use the module's own `Error.Code` (`wallet.not_found`,
+`withdrawal.duplicate_reference`, …) — which already existed and was simply being thrown away at the edge; host-level
+validation/auth uses a new published `OpsErrorCodes` catalog (`ops.invalid_status`, `ops.permission_denied`,
+`ops.csrf_invalid`, …). Delivered via a new **`OpsResults`** — the §7.1 "one mapper per host" that was missing: there
+were **8 near-duplicate private `Fail(Error)` helpers that had already drifted apart on status codes** (Wallet/PaymentIntent
+mapped non-NotFound→409, MerchantFee/Settlement→400, five others used the full switch). Now one canonical mapping
+(NotFound→404, Conflict→409, Unauthorized→401, else 400); the drift is corrected in passing — the only behaviour change
+is Conflict-typed errors on the MerchantFee/Settlement paths now correctly returning 409 instead of 400. Success
+envelopes gained `errorCode: null` so the shape never changes between paths. **(2) REQ-6 — single-record detail
+endpoints:** `GET /ops/transactions/{deposits,withdrawals}/{systemOrderNumber}` + `GET /ops/wallets/{id}`. Each returns
+the **identical row shape** the list returns, because the row projection was extracted into a shared `BuildRowsAsync`
+that both call — a separately written detail projection is precisely how a field ends up formatted one way on the table
+and another on the record it opens. No new Contract methods for deposits/withdrawals (`SystemOrderNumber` was already a
+unique narrowing on the existing filter); Wallet gained an additive `WalletAdminFilter.WalletId`. Miss ⇒ 404
+`ops.not_found`. **(3) REQ-5 — `userId`/`payerAddress` dropped** (user's call): both were hardcoded `null` on every
+deposit/withdrawal row, so they were noise; if real user attribution is wanted later it gets added deliberately as a
+populated field, not a null placeholder. **(4) REQ-3 — dashboard aggregates** (`GET /ops/dashboard`, any staff session,
+no permission gate — gating the landing page would hand a new account a blank screen). Built the `operational` block
+(the UI explicitly said "if only one block can be built, build operational") + `custody` (free — reuses the
+reconciliation snapshots). Every key maps 1:1 onto a filter the UI can link to, using the same effective-status
+vocabulary, so a tile and the list it opens **cannot disagree** — enforced by test, not convention. Costs: grouped SQL
+COUNTs (new `IWithdrawalDirectory.GetStatusCountsAsync`, folding domain statuses into the effective buckets via the same
+mapping; new `ICallbackDeliveryQuery.GetStatusCountsAsync`) + two already-derived Mongo snapshot reads — not scans of
+transaction history. **A real defect found and fixed while verifying:** the dashboard hard-failed (500) when Mongo was
+down, hiding the SQL-backed withdrawal work queue that was perfectly healthy — unacceptable for a landing page whose
+Mongo inputs are *derived observability, never money truth* (§2). It now degrades: 200 with `operational` intact, the
+Mongo-derived counts **`null` not `0`** (a fake 0 drift reads as "all balanced" — the worst thing to show on a custody
+tile), `custody: []`, and explicit `custodyAvailable`/`energyHealthAvailable` flags. The dedicated `/ops/reconciliation`
+screen deliberately still fails loudly — there, "the custody audit is down" IS the answer to the question asked.
+**`volume` deliberately NOT built** (returns `[]`): a per-asset windowed breakdown needs a purpose-built grouped
+aggregate, because the existing totals path folds BigInteger money client-side by design (no SQL SUM translation for
+this project's money mapping, §14) — a naive 30-day version would table-scan the landing page, the one thing REQ-3's
+own acceptance criteria rule out. **HTTP-proven:** all 4 new routes in the Swagger doc; every `ops.*` validation code
+returned correctly (10 cases); 404+code on all three detail endpoints; `ops.unauthenticated`/`ops.invalid_credentials`/
+`ops.csrf_invalid` on the auth paths; the degraded dashboard returning 200 with nulls + false flags. **NOT verified
+live:** the Mongo-populated custody/energy happy path (Docker was not running locally, so no Mongo) — the degraded path
+is the one exercised. Tests: +5 (withdrawal status-counts agree with the filtered search for every status, folded
+buckets sum correctly; wallet by-id and unknown-id). **Still open from that list:** REQ-8's 13 unbacked screens
+(product decisions) and `volume`. **Stale in `Crypto.UI/docs/backend-requirements.md`:** REQ-4 (merchant portal
+session API) and REQ-14 (policy read-back) are **already delivered** — the UI team is holding `apps/merchant` behind
+REQ-4 without knowing.
+
+**Mongo dev environment repaired + the REQ-3 Mongo path verified (2026-08-26) — two real config defects found.** The
+native MongoDB 8.3.8 install on this machine cannot run at all: `mongod.exe --version` exits `0xC0000139`
+(STATUS_ENTRYPOINT_NOT_FOUND), i.e. a load-time import the OS does not export, so the service times out after 30s
+without ever writing a log (Event ID 7000/7009; MSI Error 1920 during install). **Not** AVX (Comet Lake i7-10610U has
+AVX2, and that would be 0xC000001D), **not** ACLs (NetworkService has FullControl on data+log), **not** PATH DLL
+hijacking (identical failure with a minimal PATH) — an 8.3 rapid-release vs Windows 10 19045 mismatch. **Resolved by
+downgrading to MongoDB 8.2** (`8.2.12`), which runs correctly; **dev and local staging now run Mongo NATIVELY on
+localhost:27017, not in Docker** (compose's `mongodb` service is a fallback only — running both contends for 27017,
+and the loser dies with `Error setting up transport layer`, which for the Windows service presents as that same silent
+30s timeout; that port conflict was in fact why the 8.2 service also would not start until Docker was brought down).
+Starting the service needs an elevated shell (`net start MongoDB`); non-elevated fails with `Cannot open MongoDB
+service on computer '.'`. Note `mongosh` ships with **neither** the Server MSI nor Compass — it is a separate download
+(installs to `%LOCALAPPDATA%\Programs\mongosh\`, **not** on `PATH`), so `db/mongo/00-bootstrap.js` cannot be applied on
+a fresh machine until it is installed (not fatal: collections auto-create on write; the bootstrap only adds validators
++ indexes; re-running it over populated collections is safe — it `collMod`s rather than recreates). Verifying against a
+real Mongo exposed two defects in `db/mongo/00-bootstrap.js`,
+the same silent-failure class as the [[db-sql-scripts-drift-trap]]: **(1) database-name casing** — the script used
+`cryptopaymentengine` while all three hosts + compose's `MONGO_INITDB_DATABASE` use `CryptoPaymentEngine`. MongoDB
+forbids two DBs differing only by case, and the script runs FIRST (mounted into `docker-entrypoint-initdb.d`), so it
+won the name and the app's first write would die with `db already exists with different case` — every Mongo-backed
+feature silently broken in any fresh dev environment. **(2) validators written against an imagined schema** — the
+`WalletResource` validator required camelCase `walletId`/`updatedAt` with `energy` as a BSON `long`, while the actual
+`WalletResourceDocument` writes `_id`/PascalCase/base-unit strings, so **every Energy 5a resource write was rejected**
+with `Document failed validation`; and `ResourceHistory` was declared under the unused name `WalletResourceHistory`, so
+the app auto-created the real collection *without* the TTL index — append-only history growing forever. Fixed: name
+aligned, `WalletResource` + `ResourceHistory` validators/indexes matched to the real documents, `Reconciliation` +
+`ReconciliationHistory` added (they were absent entirely — `ReconciliationHistory` now has an index and, deliberately,
+**no TTL**: the custody-drift trail is the one collection worth keeping indefinitely; `Drift` is signed so it takes
+`^-?[0-9]{1,78}$`, not the unsigned `baseUnitString`), `EnergyDelegation` marked superseded (5b moved it to the SQL
+`energy.EnergyOperation` aggregate), and `db/README.md` §2 gained a drift-check section naming the writers and flagging
+that the eight remaining collections are declared ahead of use — nothing writes them, so their shapes are proposals,
+not contracts. The corrected validators are proven **strict, not merely permissive**: with them live, an insert of the
+old camelCase `WalletResource` shape is REJECTED, a numeric (non-string) amount is REJECTED (§14), an invalid `Status`
+enum is REJECTED, and a negative `Drift` is ACCEPTED — i.e. they would have caught the original bug. **REQ-3's Mongo
+path is verified end-to-end against the NATIVE MongoDB Windows service (8.2) with Docker fully shut down**
+(previously only the degraded path was): seeded
+snapshots matching the real document shapes pass the corrected validators, and `/ops/dashboard` returns
+`custodyAvailable/energyHealthAvailable: true`, counts Drift(1) and Incomplete(1) **separately**, `energyWalletsCritical`
+1 / `Low` 2, and the custody rows carry both the display decimal and the exact signed integer (USDC drift `-0.001` /
+`driftBaseUnits: "-1000"` — the §14 point). `/ops/reconciliation` and `/ops/energy/resources` re-verified sorting
+problems/worst-health first.
+
+**Dev sample data (a demo portfolio for UI development) + two real environment defects fixed (2026-08-26) — BUILT,
+verified end-to-end on a freshly dropped database.** An empty dev DB makes every UI screen look broken the same way,
+so `Api/MerchantGateway` gained an opt-in `DevSampleDataSeeder` (`DevSampleData:Enabled`, default **false**;
+testnet tier only, §10). **The design rule: it never writes money rows.** It seeds only *inputs* — merchants (via
+`IMerchantRegistrar`/`IMerchantAssetPolicyService`), invoices (via `IPaymentIntentService`), **blocks on the
+in-memory chain**, and withdrawal requests (via the same services the API and portal call) — and the REAL
+scanner→confirmation→ledger→matcher→callback pipeline produces every deposit, journal, balance and callback.
+Fabricating double-entry rows would bypass every ledger invariant (§14/§15) and drift from the code the moment
+either changed; the only thing standing in for reality is the node, at the §8 DI seam the in-memory chain source
+already occupies. Consequences (both intended): it requires `Chains:Tron:Live=false`, and it takes 30–60s because it
+waits on the same workers a real deposit waits for (it polls `ILedgerQuery` before requesting withdrawals rather than
+assuming). Idempotent (skips if `DEMOACME` exists). Seeds 3 merchants — `DEMOACME` (T+0), `DEMOGLOBE` (T+1, 50%
+cash-out cap), `DEMOFROST` (**Frozen**) — each with 6 invoices (one unpaid, one **underpaid** so `amountMatched=false`),
+5 credited deposits, and 4 withdrawals spanning `Confirmed`/`PendingApproval`/`PendingMerchantApproval`/`AwaitingFunds`.
+**Ordering subtlety:** the settlement period + freeze are applied **last**, after the withdrawals — applying them first
+is equally correct but leaves two of three merchants with an empty payout list (a poor demo); every gate stays live
+either way (a new payout for `DEMOGLOBE` is still refused `exceeds_settled_balance`). Portal logins per tenant via a new
+`DevMerchantPortalSeedOptions.AdditionalLogins` list (so portal work can verify tenant isolation, which a single-tenant
+dev env cannot show). **Verified on a dropped+re-migrated DB:** all 12 withdrawals landed in the intended statuses, the
+parked ones auto-resumed, and the ledger proves out — `SUM(Debit)-SUM(Credit) = 0`, TreasuryAsset 14,836.50 =
+MerchantLiability 6,299.6825 + WithdrawalClearing 8,358.60 + FeeRevenue 178.2175 (a real non-zero fee split).
+**Four real defects found while doing it.** (0) **`DateTimeOffset` was never reaching Mongo as a BSON date** —
+the driver serialises a bare `DateTimeOffset` as a nested `{DateTime,Ticks,Offset}` **document**, so the
+`bsonType:"date"` validators added on 2026-08-26 rejected **every** Energy `WalletResource`/`ResourceHistory` and
+**every** Reconciliation snapshot write with a bare `Document failed validation` (the module logged
+"Resource monitor skipped …" and carried on — a feature silently not recording, exactly the class the Mongo drift
+rules warn about). Worse than the validator: a **TTL index on a non-date field expires nothing**, so
+`ResourceHistory`'s TTL was inert and it would have grown forever. Fixed with
+`[BsonRepresentation(BsonType.DateTime)]` on both documents' `ObservedAt` (UTC observations, no offset lost);
+`db/README.md` §2 gained this as a third standing rule. Derived observability only — no money, no migration (§2).
+(0b) **The demo seeder's staged energy readings silently did nothing, twice:** first because they targeted merchant
+settlement addresses while the monitor only polls **platform** wallets from `IPlatformWalletDirectory`; then because
+`InMemoryAccountResourceReader` is registered **only as `IAccountResourceReader`**, so
+`GetService<InMemoryAccountResourceReader>()` returned null and the step no-op'd (the in-memory *balance* reader IS
+registered concretely — the two differ, which is what made this easy to get wrong). Now resolved through the port and
+type-checked. (1) **`tools/dev/Setup-LocalEnv.ps1` applied 10 of 15 DbContexts** — Sweep,
+Treasury, Notification, MerchantIdentity and Audit were missing, so a fresh environment booted onto a schema the code
+could not use (symptom: `Invalid column name 'SettlementDelayDays'`, far from the cause — the same silent-failure class
+as [[db-sql-scripts-drift-trap]]). Fixed, plus a drift-check comment naming the `grep` that proves the list complete,
+and `DOTNET_ROLL_FORWARD` defaulted in-script. (2) The identity/audit contexts **cannot use MerchantGateway as the EF
+startup project** (it deliberately does not reference them, §4.7), so each context now names its own host. (3) **The
+three hosts were on different databases**: the committed `appsettings.Development.json` defaults to LocalDB while the
+setup script migrates the Docker SQL Server, and only MerchantGateway had a git-ignored `appsettings.Local.json`
+override — so the Ops host showed **only `DEVMERCHANT`** and every dashboard tile read 0. **The symptom is an empty
+screen, not an error**, which sends you debugging the API instead of the connection string. The script now writes the
+override for any host missing it and **warns rather than overwrites** one that exists (it may hold a TronGrid key).
+Docs: new `docs/dev-sample-data.md`.
+
+**Frontend integration docs brought current (2026-08-26).** New **`docs/merchant-portal-frontend-integration.md`** —
+the merchant-portal API (`Api/MerchantPortalApi`) had **no integration doc at all**, which is what `apps/merchant` was
+actually blocked on (the UI team's REQ-4 was delivered long ago and they did not know). Covers the tenant-isolation
+rule (the merchant id comes only from the session, never a request param), cookie+CSRF auth, the permission catalog,
+the two-balance funds model (available vs settled/T+N), the two-party payout approval incl. reading
+`awaitingPlatformApproval`, and the honest gaps (2FA unimplemented and the login `otp` **ignored**; **no `errorCode`
+on this host** unlike Ops — branch on HTTP status). Also fixed real drift in
+**`docs/backoffice-frontend-integration.md`**: **13 endpoints existed but were undocumented** (all 5 merchant-terms
+setters, `/ops/reconciliation`, `/ops/sweeps`, both `/ops/energy/*`, all 4 `/ops/treasury/*`) — now written up as new
+§19–§22, and §23's "known gaps" list rewritten (it still claimed Treasury/Energy/Sweep/Reconciliation screens and
+detail endpoints did not exist, and that per-merchant limits were unenforced — all built since). Verified by script
+that all 49 Ops routes now appear in the doc.
+
+**Off-system merchant settlement + hot-wallet top-up recording (2026-08-28) — BUILT, full suite green, HTTP-verified.**
+A change of direction the user specified: **merchant cash-outs are no longer paid by this system**. An admin audits the
+request, a finance admin pays the merchant from a **company wallet OUTSIDE platform custody**, and the transaction is
+recorded here after on-chain verification. Separately, when the hot pool runs low an admin tops it up from a company
+wallet and records that too. **User payouts are completely unchanged** — still built/signed/broadcast automatically by
+the KMS pipeline; the allocator, per-wallet lease and `AwaitingFunds` hold all remain, and now apply to user payouts only.
+**Ledger impact (the part that had to be right):** two new **string** `AccountType`s ⇒ **NO ledger migration**.
+`WithdrawalWalletTopUp` (credit-normal, System-owned) takes `Dr TreasuryAsset / Cr WithdrawalWalletTopUp` — custody
+genuinely rises, so reconciliation stays exact, while the credit never touches a merchant account so
+`merchant withdrawable = deposits − fees − settlements − payouts` holds **by construction**. `ExternalSettlement` takes
+`Dr WithdrawalClearing / Cr ExternalSettlement` on a finance-settled cash-out — `TreasuryAsset` is deliberately NOT
+credited, because no watched address was debited; crediting it (as an on-platform payout correctly does) would drift
+reconciliation downward by every settlement ever made. The event carries a new backward-compatible
+`WithdrawalConfirmed.ExternallySettled` flag, so the Ledger stays chain-agnostic and simply honours it.
+**States:** `PendingAdminAudit → PendingFinanceTransfer → FinanceSettled`, + `Rejected` from either (releases the
+reserve — a decline never strands merchant funds). `FinanceSettled` is deliberately distinct from `Confirmed`: different
+origins of trust (the platform paid it vs a human asserted it and we verified). **Verification is the point:** new
+keyless read-only `ITransactionVerifier` (Blockchain.Contracts) + `TronTransactionVerifier` over
+`gettransactioninfobyid`, reusing the scanner's already-tested `TryMapTransfer` so verification and detection cannot
+disagree. "Confirmed" means **solidified** (irreversible), not merely mined. Seven distinct failure codes so an operator
+can tell "still confirming" from "wrong hash" from "wrong amount". `from` is recorded but NOT constrained (the admin
+pays from whatever company wallet suits them). **Schema:** one migration `AddManualSettlementAndTopUp` —
+audit/settlement columns + `withdrawal.HotWalletTopUp` + **two unique tx-hash indexes** (proven at the DB to reject a
+duplicate: one real payment can never discharge two obligations). **Reconciliation** gained a custody breakdown
+(`ColdTreasuryTotal`/`HotPoolTotal`/`DepositAddressTotal`/`ToppedUpTotal`) grouped from the SAME balance reads, so the
+parts always sum to the whole; `TreasuryAsset` stays ONE ledger account. **Ops:** `audit-approve`/`audit-reject`
+(`ops.withdrawals.approve`) · `record-settlement` (`ops.withdrawals.manage`, so signing off and declaring paid can be
+different people) · `POST /ops/treasury/top-up` + `hot-pool` extended with live balances (unreadable ⇒ **null not 0**) ·
+`GET /ops/settlement-activity` (one feed of company funds in/out, with ledger-derived running totals). **Earnings stay
+`FeeRevenue` only** — `ExternalSettlement` is money going out and is reported as funds-deployed, never as income.
+**Two corrections made during the build, both worth keeping:** (1) the §4.5 boundary refused
+`ILedgerPoster` from Withdrawal.Application, so the top-up posting moved onto the **event/outbox path** — which also
+removed a real durability gap (a crash between "recorded" and "posted" would have understated custody with nothing to
+retry from); (2) a planned `PendingSettlementTotal` "explains drift" field was **dropped** — an external settlement
+never moves either side of the equation, so it explains nothing, and an auto-"ExplainedDrift" status was dropped too
+because the system genuinely cannot distinguish an unrecorded top-up from unexplained funds. Docs: `db/mongo/00-bootstrap.js`
+validators updated **and re-applied + proven** alongside the document (the [[db-sql-scripts-drift-trap]] class);
+`db/sql/70-withdrawal.sql` regenerated; `docs/backoffice-frontend-integration.md` §19b/§20/§20b/§21 written.
+
 Every other module in the map is a placeholder in this doc, not yet on disk — scaffold a module
 only when real feature work on it starts, creating only the layers it uses (§4.3).
 
@@ -996,8 +1331,14 @@ never double-sends.
 - Resilience: **Microsoft.Extensions.Http.Resilience** for outbound RPC/PSP calls.
 - Chain SDKs (Blockchain module Infrastructure ONLY): Nethereum (ETH), Solnet (SOL), TronNet/HTTP (TRON).
 - Testing: **xUnit v3**, **NSubstitute**, **Shouldly** (or AwesomeAssertions —
-  NOT FluentAssertions ≥8, commercial), **Testcontainers** (SQL Server/Redis/Mongo),
-  `Microsoft.AspNetCore.Mvc.Testing`.
+  NOT FluentAssertions ≥8, commercial), `Microsoft.AspNetCore.Mvc.Testing`.
+  **Integration tests are local-by-default, overridable by environment — nothing spins up its own
+  container.** SQL Server: `(localdb)\MSSQLLocalDB`, override `CPE_TEST_SQL`. MongoDB:
+  `mongodb://localhost:27017`, override `CPE_TEST_MONGO` (own database `cpe_test_energy`, dropped either
+  side of a run). Unreachable ⇒ **skip, not fail**, and fail fast (~3s) rather than stalling on a driver
+  default. **Testcontainers was removed** (2026-08-26): it needs a Docker daemon, so the two Mongo store
+  tests were the only ones in the solution that silently skipped for a developer running Mongo natively —
+  and a test that skips on the machine of the person changing the code is close to no test at all.
 - **No message broker (Kafka) is wired yet.** §7.5 defines the contract so it can be
   added later without touching module code — do not add the dependency early.
 

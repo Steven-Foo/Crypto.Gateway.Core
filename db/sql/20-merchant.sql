@@ -543,3 +543,93 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260901074236_AddMerchantTopUpFee'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantAssetPolicy] DROP CONSTRAINT [CK_MerchantAssetPolicy_FeeBps];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260901074236_AddMerchantTopUpFee'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantAssetPolicy] DROP CONSTRAINT [CK_MerchantAssetPolicy_NonNegative];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260901074236_AddMerchantTopUpFee'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantAssetPolicy] ADD [TopUpFeeBps] int NOT NULL DEFAULT 0;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260901074236_AddMerchantTopUpFee'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantAssetPolicy] ADD [TopUpFeeFixed] decimal(38,0) NOT NULL DEFAULT (0);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260901074236_AddMerchantTopUpFee'
+)
+BEGIN
+    EXEC(N'ALTER TABLE [merchant].[MerchantAssetPolicy] ADD CONSTRAINT [CK_MerchantAssetPolicy_FeeBps] CHECK ([DepositFeeBps] >= 0 AND [DepositFeeBps] < 10000 AND [WithdrawalFeeBps] >= 0 AND [WithdrawalFeeBps] <= 10000 AND [TopUpFeeBps] >= 0 AND [TopUpFeeBps] <= 10000)');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260901074236_AddMerchantTopUpFee'
+)
+BEGIN
+    EXEC(N'ALTER TABLE [merchant].[MerchantAssetPolicy] ADD CONSTRAINT [CK_MerchantAssetPolicy_NonNegative] CHECK ([SweepThreshold] >= 0 AND [WithdrawalFee] >= 0 AND [DepositFeeFixed] >= 0 AND [TopUpFeeFixed] >= 0 AND ([MinimumWithdrawal] IS NULL OR [MinimumWithdrawal] >= 0) AND ([MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= 0))');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260901074236_AddMerchantTopUpFee'
+)
+BEGIN
+    INSERT INTO [merchant].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260901074236_AddMerchantTopUpFee', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260901084839_RelaxDepositFeeBpsBound'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantAssetPolicy] DROP CONSTRAINT [CK_MerchantAssetPolicy_FeeBps];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260901084839_RelaxDepositFeeBpsBound'
+)
+BEGIN
+    EXEC(N'ALTER TABLE [merchant].[MerchantAssetPolicy] ADD CONSTRAINT [CK_MerchantAssetPolicy_FeeBps] CHECK ([DepositFeeBps] >= 0 AND [DepositFeeBps] <= 10000 AND [WithdrawalFeeBps] >= 0 AND [WithdrawalFeeBps] <= 10000 AND [TopUpFeeBps] >= 0 AND [TopUpFeeBps] <= 10000)');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260901084839_RelaxDepositFeeBpsBound'
+)
+BEGIN
+    INSERT INTO [merchant].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260901084839_RelaxDepositFeeBpsBound', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

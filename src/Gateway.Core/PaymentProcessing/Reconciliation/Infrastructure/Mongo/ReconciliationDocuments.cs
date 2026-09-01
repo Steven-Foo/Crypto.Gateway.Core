@@ -24,6 +24,17 @@ public sealed class ReconciliationDocument
     public string Status { get; set; } = null!;
     public int AddressesScanned { get; set; }
     public int AddressesUnreadable { get; set; }
+
+    // Where the custody physically sits. Base-unit strings like every other amount here; default "0" so a
+    // document written before these existed reads back as zeros rather than failing to parse.
+    public string ColdTreasuryTotal { get; set; } = "0";
+    public string HotPoolTotal { get; set; } = "0";
+    public string DepositAddressTotal { get; set; } = "0";
+    public string ToppedUpTotal { get; set; } = "0";
+    // Stored as a real BSON date, NOT the driver's default for DateTimeOffset — a bare DateTimeOffset
+    // serialises as a nested { DateTime, Ticks, Offset } document, which the collection's `bsonType: "date"`
+    // validator rejects, so every snapshot write silently failed. UTC observations, so no offset is lost.
+    [BsonRepresentation(BsonType.DateTime)]
     public DateTimeOffset ObservedAt { get; set; }
 }
 
@@ -41,6 +52,17 @@ public sealed class ReconciliationHistoryDocument
     public string Status { get; set; } = null!;
     public int AddressesScanned { get; set; }
     public int AddressesUnreadable { get; set; }
+
+    // Where the custody physically sits. Base-unit strings like every other amount here; default "0" so a
+    // document written before these existed reads back as zeros rather than failing to parse.
+    public string ColdTreasuryTotal { get; set; } = "0";
+    public string HotPoolTotal { get; set; } = "0";
+    public string DepositAddressTotal { get; set; } = "0";
+    public string ToppedUpTotal { get; set; } = "0";
+    // Stored as a real BSON date, NOT the driver's default for DateTimeOffset — a bare DateTimeOffset
+    // serialises as a nested { DateTime, Ticks, Offset } document, which the collection's `bsonType: "date"`
+    // validator rejects, so every snapshot write silently failed. UTC observations, so no offset is lost.
+    [BsonRepresentation(BsonType.DateTime)]
     public DateTimeOffset ObservedAt { get; set; }
 }
 
@@ -60,6 +82,10 @@ internal static class ReconciliationDocumentMapper
         Status = s.Status.ToString(),
         AddressesScanned = s.AddressesScanned,
         AddressesUnreadable = s.AddressesUnreadable,
+        ColdTreasuryTotal = s.ColdTreasuryTotal.ToString(),
+        HotPoolTotal = s.HotPoolTotal.ToString(),
+        DepositAddressTotal = s.DepositAddressTotal.ToString(),
+        ToppedUpTotal = s.ToppedUpTotal.ToString(),
         ObservedAt = s.ObservedAt,
     };
 
@@ -74,6 +100,10 @@ internal static class ReconciliationDocumentMapper
         Status = s.Status.ToString(),
         AddressesScanned = s.AddressesScanned,
         AddressesUnreadable = s.AddressesUnreadable,
+        ColdTreasuryTotal = s.ColdTreasuryTotal.ToString(),
+        HotPoolTotal = s.HotPoolTotal.ToString(),
+        DepositAddressTotal = s.DepositAddressTotal.ToString(),
+        ToppedUpTotal = s.ToppedUpTotal.ToString(),
         ObservedAt = s.ObservedAt,
     };
 
@@ -87,5 +117,9 @@ internal static class ReconciliationDocumentMapper
         Enum.Parse<ReconciliationStatus>(d.Status),
         d.AddressesScanned,
         d.AddressesUnreadable,
-        d.ObservedAt);
+        d.ObservedAt,
+        BigInteger.Parse(d.ColdTreasuryTotal),
+        BigInteger.Parse(d.HotPoolTotal),
+        BigInteger.Parse(d.DepositAddressTotal),
+        BigInteger.Parse(d.ToppedUpTotal));
 }

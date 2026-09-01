@@ -52,8 +52,16 @@ public static class WithdrawalModuleExtensions
         services.AddScoped<SettledBalanceGate>();
         services.AddScoped<IWithdrawalRequestService, WithdrawalRequestService>();
         services.AddScoped<IMerchantWithdrawalService, MerchantWithdrawalService>();
+        services.AddScoped<IMerchantPayoutApprovalService, MerchantPayoutApprovalService>();
         services.AddScoped<IWithdrawalApprovalService, WithdrawalApprovalService>();
         services.AddScoped<IWithdrawalFundingService, WithdrawalFundingService>();
+
+        // Merchant settlements are paid off-system by an admin and recorded here; hot-wallet top-ups are
+        // company funds moved into the pool so the automated payout path stays funded. Both verify the
+        // operator's transaction hash on-chain before writing anything (§14).
+        services.AddScoped<IHotWalletTopUpRepository, HotWalletTopUpRepository>();
+        services.AddScoped<IMerchantSettlementService, MerchantSettlementService>();
+        services.AddScoped<IHotWalletTopUpService, HotWalletTopUpService>();
 
         // WithdrawalProcessingService/WithdrawalConfirmationService are NOT registered here — they need the
         // chain-processing ports (ITransactionBuilder/ISigner/ITransactionBroadcaster/IHotWalletProvider/
