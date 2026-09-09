@@ -42,17 +42,19 @@ public static class OpsMerchantFeeEndpoints
                 network = asset?.Chain.ToString(),
                 coin = asset?.Symbol,
                 depositFeeFixed = AmountConversion.ToDisplay(BigInteger.Parse(p.DepositFeeFixed), decimals),
-                depositFeePercent = p.DepositFeeBps / 100m,
+                depositFeePercent = OpsPercent.ToPercent(p.DepositFeeBps),
                 depositFeeMinimum = AmountConversion.ToDisplay(BigInteger.Parse(p.MinimumDepositFee), decimals),
                 withdrawalFeeFixed = AmountConversion.ToDisplay(BigInteger.Parse(p.WithdrawalFee), decimals),
-                withdrawalFeePercent = p.WithdrawalFeeBps / 100m,
+                withdrawalFeePercent = OpsPercent.ToPercent(p.WithdrawalFeeBps),
                 withdrawalFeeMinimum = AmountConversion.ToDisplay(BigInteger.Parse(p.MinimumWithdrawalFee), decimals),
                 topUpFeeFixed = AmountConversion.ToDisplay(BigInteger.Parse(p.TopUpFeeFixed), decimals),
-                topUpFeePercent = p.TopUpFeeBps / 100m,
+                topUpFeePercent = OpsPercent.ToPercent(p.TopUpFeeBps),
                 minimumDeposit = p.MinimumDeposit is { } minDep ? AmountConversion.ToDisplay(BigInteger.Parse(minDep), decimals) : (decimal?)null,
                 maximumDeposit = p.MaximumDeposit is { } maxDep ? AmountConversion.ToDisplay(BigInteger.Parse(maxDep), decimals) : (decimal?)null,
                 minimumWithdrawal = p.MinimumWithdrawal is { } minWd ? AmountConversion.ToDisplay(BigInteger.Parse(minWd), decimals) : (decimal?)null,
                 maximumWithdrawal = p.MaximumWithdrawal is { } maxWd ? AmountConversion.ToDisplay(BigInteger.Parse(maxWd), decimals) : (decimal?)null,
+                merchantWithdrawalCapFlat = p.MerchantWithdrawalFlatCap is { } capFlat ? AmountConversion.ToDisplay(BigInteger.Parse(capFlat), decimals) : (decimal?)null,
+                merchantWithdrawalCapPercent = OpsPercent.ToPercent(p.MerchantWithdrawalPercentBps),
             });
         }
 
@@ -70,11 +72,11 @@ public static class OpsMerchantFeeEndpoints
         if (asset is null)
             return Bad(OpsErrorCodes.InvalidAsset, $"Unknown coin '{request.Coin}' on {chain}.");
 
-        if (!TryPercentToBps(request.DepositFeePercent, out var depositBps))
+        if (!OpsPercent.TryToBps(request.DepositFeePercent, out var depositBps))
             return Bad(OpsErrorCodes.InvalidAmount, "depositFeePercent must be non-negative, at most 100%, and at most 2 decimal places.");
-        if (!TryPercentToBps(request.WithdrawalFeePercent, out var withdrawalBps))
+        if (!OpsPercent.TryToBps(request.WithdrawalFeePercent, out var withdrawalBps))
             return Bad(OpsErrorCodes.InvalidAmount, "withdrawalFeePercent must be non-negative, at most 100%, and at most 2 decimal places.");
-        if (!TryPercentToBps(request.TopUpFeePercent, out var topUpBps))
+        if (!OpsPercent.TryToBps(request.TopUpFeePercent, out var topUpBps))
             return Bad(OpsErrorCodes.InvalidAmount, "topUpFeePercent must be non-negative, at most 100%, and at most 2 decimal places.");
 
         if (!TryFeeToBase(request.DepositFeeFixed, asset.Decimals, out var depositFixed))
@@ -142,22 +144,6 @@ public static class OpsMerchantFeeEndpoints
                 $"The {kind} minimum fee ({feeDisplay}) is at least half of this merchant's own minimum {kind} amount " +
                 $"({amountDisplay}) — small transactions could be taxed disproportionately. Not blocked; review before relying on it.");
         }
-    }
-
-    /// <summary>Plain percent (e.g. <c>2</c> = 2%) → basis points, requiring an EXACT conversion (at most 2
-    /// decimal places on the input) — rejected, never rounded, same "never truncate money" rule as an amount.</summary>
-    private static bool TryPercentToBps(decimal percent, out int bps)
-    {
-        bps = 0;
-        if (percent < 0m)
-            return false;
-
-        var scaled = percent * 100m;
-        if (scaled != decimal.Truncate(scaled) || scaled > 10_000m)
-            return false;
-
-        bps = (int)scaled;
-        return true;
     }
 
     /// <summary>The fee fixed component: like <c>AmountConversion.TryToBaseUnits</c> but a zero is valid

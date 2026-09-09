@@ -7,7 +7,7 @@ namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Application;
 
 /// <summary>Staff holds a wallet — e.g. an address received an unexpected/off-flow transfer and is being
 /// held for investigation. See <c>Wallet.Suspend</c>.</summary>
-public sealed record SuspendWalletCommand(Guid WalletId, string Reason);
+public sealed record SuspendWalletCommand(Guid WalletId, string? Reason);
 
 /// <summary>Staff lifts a hold — restores the wallet to normal deposit-accepting service.</summary>
 public sealed record ResumeWalletCommand(Guid WalletId);

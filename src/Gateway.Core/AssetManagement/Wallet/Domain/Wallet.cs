@@ -147,7 +147,7 @@ public sealed class Wallet : Entity<Guid>
     /// non-Active wallet as ignorable (<c>DepositDetectionService</c> checks <see cref="IsActive"/>), so this
     /// takes effect with no change anywhere else — a suspended address simply stops accumulating new deposits.
     /// </summary>
-    public Result Suspend(string reason, DateTimeOffset now)
+    public Result Suspend(string? reason, DateTimeOffset now)
     {
         if (Status != WalletStatus.Active)
             return Result.Failure(WalletErrors.NotActive);

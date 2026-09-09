@@ -82,8 +82,11 @@ public static class OpsMerchantSettlementEndpoints
                 flatCap = baseUnits;
         }
 
+        if (!OpsPercent.TryToBps(request.Percent, out var percentBps))
+            return Bad(OpsErrorCodes.InvalidAmount, "percent must be non-negative, at most 100%, and at most 2 decimal places.");
+
         var result = await policies.SetMerchantWithdrawalCapAsync(
-            id, asset.AssetId, flatCap, request.PercentBps, http.RequestAborted);
+            id, asset.AssetId, flatCap, percentBps, http.RequestAborted);
 
         return result.IsFailure
             ? OpsResults.Fail(result.Error!)

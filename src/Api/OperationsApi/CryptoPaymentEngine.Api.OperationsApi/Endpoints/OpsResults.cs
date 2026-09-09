@@ -60,6 +60,36 @@ public static class OpsResults
 }
 
 /// <summary>
+/// The one place this host converts a rate between the wire format and the domain's basis points.
+/// <b>Standardization rule (§ frontend integration doc "Percent vs basis points"): every percent-shaped field
+/// crossing this host's HTTP boundary — request or response — is a plain percent (<c>2</c> = 2%), never
+/// basis points.</b> Only the domain (<c>FeeSchedule</c>, <c>MerchantAssetPolicy</c>, ...) speaks bps; nothing
+/// upstream of this conversion should.
+/// </summary>
+public static class OpsPercent
+{
+    /// <summary>Plain percent (e.g. <c>2</c> = 2%) → basis points, requiring an EXACT conversion (at most 2
+    /// decimal places on the input, 0-100% inclusive) — rejected, never rounded, same "never truncate money"
+    /// rule as an amount (§14).</summary>
+    public static bool TryToBps(decimal percent, out int bps)
+    {
+        bps = 0;
+        if (percent < 0m)
+            return false;
+
+        var scaled = percent * 100m;
+        if (scaled != decimal.Truncate(scaled) || scaled > 10_000m)
+            return false;
+
+        bps = (int)scaled;
+        return true;
+    }
+
+    /// <summary>Basis points → plain percent, for a read-back response.</summary>
+    public static decimal ToPercent(int bps) => bps / 100m;
+}
+
+/// <summary>
 /// Stable error codes for failures raised by this <em>host</em> (input validation and auth), as opposed to
 /// those raised by a module, which carry their own <see cref="Error.Code"/>. Treat these as a published
 /// contract: a consumer branches on them, so rename one only as a breaking change.

@@ -249,8 +249,8 @@ public static class OpsMerchantEndpoints
             if (asset is null)
                 return OpsResults.Bad(OpsErrorCodes.InvalidAsset, "No priceable asset is configured (expected USDT on Tron).");
 
-            if (!TryPercentToBps(request.Fees.DepositFeePercent, out var depositBpsCheck)
-                || !TryPercentToBps(request.Fees.WithdrawalFeePercent, out var withdrawalBpsCheck))
+            if (!OpsPercent.TryToBps(request.Fees.DepositFeePercent, out var depositBpsCheck)
+                || !OpsPercent.TryToBps(request.Fees.WithdrawalFeePercent, out var withdrawalBpsCheck))
                 return OpsResults.Bad(OpsErrorCodes.InvalidAmount, "Fee percent must be non-negative, at most 100%, and at most 2 decimal places.");
             _ = depositBpsCheck; _ = withdrawalBpsCheck; // validated here; recomputed below once the merchant exists
         }
@@ -281,8 +281,8 @@ public static class OpsMerchantEndpoints
         // creation just means the merchant is briefly unpriced (falls back to the platform default fee).
         if (request.Fees is { } fees && asset is not null)
         {
-            TryPercentToBps(fees.DepositFeePercent, out var depositBps);
-            TryPercentToBps(fees.WithdrawalFeePercent, out var withdrawalBps);
+            OpsPercent.TryToBps(fees.DepositFeePercent, out var depositBps);
+            OpsPercent.TryToBps(fees.WithdrawalFeePercent, out var withdrawalBps);
 
             if (!TryFeeToBase(fees.DepositFeeFixed, asset.Decimals, out var depositFixed)
                 || !TryFeeToBase(fees.WithdrawalFeeFixed, asset.Decimals, out var withdrawalFixed)
@@ -360,22 +360,6 @@ public static class OpsMerchantEndpoints
         }
 
         return Enum.TryParse(value, ignoreCase: true, out mode);
-    }
-
-    /// <summary>Plain percent (e.g. <c>2</c> = 2%) → basis points, requiring an EXACT conversion (at most 2
-    /// decimal places on the input) — rejected, never rounded, same "never truncate money" rule as an amount.</summary>
-    private static bool TryPercentToBps(decimal percent, out int bps)
-    {
-        bps = 0;
-        if (percent < 0m)
-            return false;
-
-        var scaled = percent * 100m;
-        if (scaled != decimal.Truncate(scaled) || scaled > 10_000m)
-            return false;
-
-        bps = (int)scaled;
-        return true;
     }
 
     /// <summary>The fee fixed/minimum component: like <c>AmountConversion.TryToBaseUnits</c> but a zero is

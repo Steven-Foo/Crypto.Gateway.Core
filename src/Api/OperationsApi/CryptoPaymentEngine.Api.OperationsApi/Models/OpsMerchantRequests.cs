@@ -106,14 +106,15 @@ public sealed class SetSettlementWalletRequest
 }
 
 /// <summary>Sets the merchant-withdrawal (cash-out) liquidity cap for one asset: an optional flat cap in
-/// <b>display</b> units (null = no flat cap) plus a percentage cap in basis points (0 = no percent cap). Both
-/// unset ⇒ no cap. Distinct from the user Min/MaxWithdrawal.</summary>
+/// <b>display</b> units (null = no flat cap) plus a percentage cap as a plain <b>percent</b> (e.g. <c>50</c> =
+/// 50%, at most 2 decimal places — converted to basis points internally; 0 = no percent cap). Both unset ⇒ no
+/// cap. Distinct from the user Min/MaxWithdrawal.</summary>
 public sealed class SetWithdrawalCapRequest
 {
     [Required, MaxLength(16)] public string Chain { get; init; } = null!;
     [Required, MaxLength(16)] public string Coin { get; init; } = null!;
     public decimal? FlatCap { get; init; }
-    public int PercentBps { get; init; }
+    public decimal Percent { get; init; }
 }
 
 /// <summary>Sets the per-merchant <b>user-withdrawal</b> min/max for one asset, in <b>display</b> units. Null on

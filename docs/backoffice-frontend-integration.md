@@ -228,8 +228,28 @@ Response shape:
 
 All monetary fields on the wire are **decimal display values** (e.g. `1.5` USDT), already converted from
 base units server-side. Never send/parse money as strings elsewhere in this API — this is the one place it
-crosses to display form. Fee percentages are given as basis points on write (`depositFeeBps: 100` = 1%) and
-also echoed back pre-divided as `depositFeePercent` on read.
+crosses to display form.
+
+### Percent vs basis points — standardized, read this before building any rate field
+
+**Every percentage-shaped field on this API — request or response — is a plain percent, never basis points.**
+`2` means 2%, `50` means 50%. The frontend should never construct or display a bps value; it only ever
+sends/reads plain percent. (An earlier version of this doc said the opposite — write as bps, read as percent
+— that was wrong and has been corrected; if you built against that, you were reading raw bps as if it were
+percent, e.g. `120` displaying as "120%" instead of "1.2%" — that's the exact bug reported against the
+merchant fee screen.)
+
+- **At most 2 decimal places.** `1.65` is fine; `1.655` is **rejected with 400**, never silently rounded —
+  same "never truncate money" rule the API applies to amounts (§14). If a user needs finer precision than
+  2 decimal places on a rate, that's a product conversation, not something to work around client-side.
+- **Range 0–100 inclusive** (`0`–`100`, not `0`–`1`). `100` = 100% is legal on some fields (e.g. a deposit fee
+  that credits the merchant nothing) even though it's an unusual value to actually set.
+- **Every field that carries this today:** `depositFeePercent`, `withdrawalFeePercent`, `topUpFeePercent`
+  (§10, both the create-merchant `fees` block and `PUT/GET .../fees`), and `percent` on
+  `PUT .../withdrawal-cap` (§19), read back as `merchantWithdrawalCapPercent`.
+- Internally the backend converts to basis points (`percent × 100`) once, at the API boundary, and every
+  domain calculation and DB column is in bps from then on — that's purely internal; nothing upstream of this
+  API's request/response layer should ever see, send, or expect a bps number.
 
 ---
 
@@ -616,7 +636,8 @@ param (client-side filter on the returned page for now).
         "withdrawalFeeFixed": 1.0, "withdrawalFeePercent": 0.5, "withdrawalFeeMinimum": 2.0,
         "topUpFeeFixed": 0, "topUpFeePercent": 0,
         "minimumDeposit": 1.0, "maximumDeposit": null,
-        "minimumWithdrawal": null, "maximumWithdrawal": null
+        "minimumWithdrawal": null, "maximumWithdrawal": null,
+        "merchantWithdrawalCapFlat": null, "merchantWithdrawalCapPercent": 25
       }
     ]
   },
@@ -624,8 +645,9 @@ param (client-side filter on the returned page for now).
 }
 ```
 An unpriced merchant simply has an empty `fees` array — which means **zero fee**, not an error.
-`minimumDeposit`/`maximumDeposit`/`minimumWithdrawal`/`maximumWithdrawal` are read-only here (set via
-`PUT .../deposit-limits` and `PUT .../withdrawal-limits` respectively) — included for a single-screen view.
+`minimumDeposit`/`maximumDeposit`/`minimumWithdrawal`/`maximumWithdrawal`/`merchantWithdrawalCapFlat`/
+`merchantWithdrawalCapPercent` are read-only here (set via `PUT .../deposit-limits`, `PUT .../withdrawal-limits`,
+and `PUT .../withdrawal-cap` respectively) — included for a single-screen view.
 
 ### `PUT /api/v1/ops/merchants/{id}/fees` — `ops.fees.manage`
 Request:
@@ -733,7 +755,7 @@ in the list above (it is built by the same projection, so the table and the reco
 disagree about a field). Unknown id → **404** `ops.not_found`.
 
 ### `POST /api/v1/ops/wallets/{id}/suspend` — `ops.wallets.manage`
-Request: `{ "reason": "string, required, max 512" }`
+Request: `{ "reason": "string, optional, max 512" }`
 Response: `{ "walletId": "guid", "status": "Suspended" }`. 409 if the wallet isn't currently `Active`
 (already suspended or disabled). 404 if the wallet doesn't exist.
 
@@ -1094,7 +1116,7 @@ Five setters on top of §10's fees. All are **display decimals** on the way in, 
 |---|---|---|
 | `PUT /ops/merchants/{id}/settlement-period` | `ops.merchants.manage` | `{ "days": 1 }` (0–30; 0 = T+0) |
 | `PUT /ops/merchants/{id}/settlement-wallet` | `ops.merchants.manage` | `{ "chain": "Tron", "address": "T..." }` |
-| `PUT /ops/merchants/{id}/withdrawal-cap` | `ops.fees.manage` | `{ "chain", "coin", "flatCap": 5000.0, "percentBps": 5000 }` |
+| `PUT /ops/merchants/{id}/withdrawal-cap` | `ops.fees.manage` | `{ "chain", "coin", "flatCap": 5000.0, "percent": 50 }` (percent, not bps — see §"Percent vs basis points") |
 | `PUT /ops/merchants/{id}/withdrawal-limits` | `ops.fees.manage` | `{ "chain", "coin", "minimum": 10.0, "maximum": 5000.0 }` |
 | `PUT /ops/merchants/{id}/deposit-limits` | `ops.fees.manage` | `{ "chain", "coin", "minimum": 1.0, "maximum": null }` |
 | `PUT /ops/merchants/{id}/approval-threshold` | `ops.fees.manage` | `{ "chain", "coin", "threshold": 1000.0 }` |
