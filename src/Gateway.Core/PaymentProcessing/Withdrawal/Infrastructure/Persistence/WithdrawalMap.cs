@@ -28,6 +28,13 @@ public sealed class WithdrawalMap : IEntityTypeConfiguration<WithdrawalEntity>
         builder.Property(w => w.Amount).IsRequired();
         builder.Property(w => w.Fee).IsRequired();
 
+        // The rate inputs that produced Fee, captured at pricing time — fee transparency (最低手续费 proof),
+        // never re-derived from the merchant's (possibly since-changed) live rate.
+        builder.Property(w => w.FeeBps).IsRequired().HasDefaultValue(0);
+        builder.Property(w => w.FeeFixed).IsRequired().HasDefaultValueSql("0");
+        builder.Property(w => w.FeeMinimum).IsRequired().HasDefaultValueSql("0");
+        builder.Property(w => w.MinimumFeeApplied).IsRequired().HasDefaultValue(false);
+
         builder.Property(w => w.MerchantTransactionId).IsUnicode(false).HasMaxLength(128).IsRequired();
         builder.Property(w => w.CallbackUrl).HasMaxLength(512);
         // 24, not 16: the funding-hold statuses ("AwaitingFunds"/"AwaitingRelease") are longer than the

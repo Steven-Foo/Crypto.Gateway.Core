@@ -2,6 +2,7 @@ using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Events;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Application;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Application.Handlers;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infrastructure.Configuration;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infrastructure.Persistence;
 using CryptoPaymentEngine.Infrastructure.Persistence.Money;
@@ -39,6 +40,7 @@ public static class PaymentIntentModuleExtensions
         services.AddScoped<IPaymentIntentDirectory, PaymentIntentDirectory>();
         // The deposit scanner's kind lookup (customer payment vs merchant top-up) — see IDepositKindResolver.
         services.AddScoped<IDepositKindResolver, DepositKindResolver>();
+        services.AddSingleton<IPlatformDepositFloor, ConfigurationPlatformDepositFloor>();
 
         // Consumes Deposit's confirmation event to match invoices (§7.5). Coexists with the Ledger's own
         // handler for the same event — both fire; each owns a separate transaction.

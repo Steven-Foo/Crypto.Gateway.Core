@@ -1,3 +1,4 @@
+using System.Numerics;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
@@ -76,17 +77,32 @@ public sealed class DepositDetectionService(
             // the record and carried on the confirmation/orphan events, so the Ledger books exactly this value
             // and never re-derives from a schedule that could change during the confirmation wait (§14).
             // A top-up is priced from the merchant's own top-up rate (zero unless explicitly declared), never
-            // the customer deposit rate: a merchant funding its own float is not a customer payment.
-            var fee = kind == DepositKind.MerchantTopUp
-                ? await feeSchedule.QuoteTopUpFeeAsync(
-                    owner.MerchantId.Value, transfer.AssetId, transfer.Amount, cancellationToken)
-                : await feeSchedule.QuoteDepositFeeAsync(
+            // the customer deposit rate: a merchant funding its own float is not a customer payment — it also
+            // has no minimum-fee floor concept, so its rate snapshot stays zero/false.
+            BigInteger fee;
+            int feeBps = 0;
+            BigInteger feeFixed = default, feeMinimum = default;
+            bool minimumFeeApplied = false;
+            if (kind == DepositKind.MerchantTopUp)
+            {
+                fee = await feeSchedule.QuoteTopUpFeeAsync(
                     owner.MerchantId.Value, transfer.AssetId, transfer.Amount, cancellationToken);
+            }
+            else
+            {
+                var quote = await feeSchedule.QuoteDepositFeeAsync(
+                    owner.MerchantId.Value, transfer.AssetId, transfer.Amount, cancellationToken);
+                fee = quote.Fee;
+                feeBps = quote.Bps;
+                feeFixed = quote.Fixed;
+                feeMinimum = quote.Minimum;
+                minimumFeeApplied = quote.MinimumApplied;
+            }
 
             var deposit = DepositEntity.Record(
                 transfer.Chain, transfer.Address, owner.WalletId, owner.MerchantId.Value, transfer.AssetId,
                 transfer.Amount, fee, transfer.TransactionHash, transfer.OutputIndex, transfer.BlockNumber, transfer.BlockHash,
-                policy, timeProvider.GetUtcNow(), kind);
+                policy, timeProvider.GetUtcNow(), kind, feeBps, feeFixed, feeMinimum, minimumFeeApplied);
 
             if (deposit.IsFailure)
             {

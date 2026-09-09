@@ -276,15 +276,15 @@ public sealed class MerchantWithdrawalServiceTests
 
     private sealed class FakeFees(BigInteger fee) : IMerchantFeeSchedule
     {
-        public Task<BigInteger> QuoteDepositFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
-            Task.FromResult(BigInteger.Zero);
+        public Task<FeeQuote> QuoteDepositFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new FeeQuote(BigInteger.Zero, 0, BigInteger.Zero, BigInteger.Zero, false));
 
         /// <summary>These fakes exercise paths unrelated to top-up pricing, so a top-up is quoted free.</summary>
         public Task<BigInteger> QuoteTopUpFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
             Task.FromResult(BigInteger.Zero);
 
-        public Task<BigInteger> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
-            Task.FromResult(fee);
+        public Task<FeeQuote> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new FeeQuote(fee, 0, BigInteger.Zero, BigInteger.Zero, false));
     }
 
     private sealed class FakeLedgerQuery(BigInteger balance, BigInteger? settled = null) : ILedgerQuery

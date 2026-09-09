@@ -324,6 +324,8 @@ public sealed class MerchantAssetPolicyServiceTests
             throw new NotSupportedException();
         public Task<bool> CodeExistsAsync(string merchantCode, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
+        public Task<int> GetNextMerchantCodeSequenceAsync(CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
         public Task<(IReadOnlyList<MerchantEntity> Items, int TotalCount)> GetPagedAsync(int page, int pageSize, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
         public Task<IReadOnlyList<string>> GetAllAllowedIpsExceptAsync(Guid merchantId, CancellationToken cancellationToken = default) =>
@@ -333,5 +335,7 @@ public sealed class MerchantAssetPolicyServiceTests
         public Task<MerchantApiCredential?> FindActiveCredentialByMerchantAsync(Guid merchantId, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
         public void Add(MerchantEntity merchant) => throw new NotSupportedException();
+        public Task<bool> TrySaveNewMerchantAsync(MerchantEntity merchant, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
     }
 }

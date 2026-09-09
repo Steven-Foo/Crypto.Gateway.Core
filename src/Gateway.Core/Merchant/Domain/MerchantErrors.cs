@@ -35,6 +35,9 @@ public static class MerchantErrors
     public static readonly Error WithdrawalRangeInvalid =
         Error.Validation("merchant.withdrawal_range_invalid", "Minimum withdrawal must not exceed maximum withdrawal.");
 
+    public static readonly Error DepositRangeInvalid =
+        Error.Validation("merchant.deposit_range_invalid", "Minimum deposit must not exceed maximum deposit.");
+
     public static readonly Error AmountNegative =
         Error.Validation("merchant.amount_negative", "Base-unit amounts cannot be negative.");
 

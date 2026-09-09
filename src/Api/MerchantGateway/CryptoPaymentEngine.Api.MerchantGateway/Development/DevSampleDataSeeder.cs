@@ -40,7 +40,10 @@ public sealed class DevSampleDataSeeder(
     ILogger<DevSampleDataSeeder> logger) : IHostedService
 {
     private const decimal Usdt = 1_000_000m;   // USDT-TRON: 6 dp
-    private const string MarkerMerchantCode = "DEMOACME";
+
+    // MerchantCode is now backend-minted (ME00001, ME00002, ...) rather than caller-chosen, so the
+    // idempotency marker below has to key on the fixed demo NAME instead of a fixed demo code.
+    private const string MarkerMerchantName = "Acme Payments";
 
     private readonly DevSampleDataOptions _options = options.Value;
     private CancellationTokenSource? _cts;
@@ -78,11 +81,11 @@ public sealed class DevSampleDataSeeder(
             await using (var probe = scopeFactory.CreateAsyncScope())
             {
                 var merchants = probe.ServiceProvider.GetRequiredService<IMerchantDirectory>();
-                if (await merchants.FindByCodeAsync(MarkerMerchantCode, ct) is not null)
+                if ((await merchants.SearchIdsByNameAsync(MarkerMerchantName, ct)).Count > 0)
                 {
                     logger.LogInformation(
-                        "Dev sample data already present ({Code} exists) — skipping. Drop the database to re-seed.",
-                        MarkerMerchantCode);
+                        "Dev sample data already present ('{Name}' exists) — skipping. Drop the database to re-seed.",
+                        MarkerMerchantName);
                     return;
                 }
             }
@@ -150,13 +153,13 @@ public sealed class DevSampleDataSeeder(
     {
         var blueprints = new[]
         {
-            new Blueprint(MarkerMerchantCode, "Acme Payments", DepositBps: 100, WithdrawalBps: 50,
+            new Blueprint(MarkerMerchantName, DepositBps: 100, WithdrawalBps: 50,
                 SettlementDelayDays: 0, CashOutPercentBps: 0, Freeze: false,
                 SettlementAddress: "TDemoAcmeSettlementWalletAddr0001"),
-            new Blueprint("DEMOGLOBE", "Globe Commerce", DepositBps: 150, WithdrawalBps: 75,
+            new Blueprint("Globe Commerce", DepositBps: 150, WithdrawalBps: 75,
                 SettlementDelayDays: 1, CashOutPercentBps: 5_000, Freeze: false,
                 SettlementAddress: "TDemoGlobeSettlementWalletAddr001"),
-            new Blueprint("DEMOFROST", "Frostbite Retail (frozen)", DepositBps: 100, WithdrawalBps: 50,
+            new Blueprint("Frostbite Retail (frozen)", DepositBps: 100, WithdrawalBps: 50,
                 SettlementDelayDays: 2, CashOutPercentBps: 0, Freeze: true,
                 SettlementAddress: "TDemoFrostSettlementWalletAddr001"),
         };
@@ -169,16 +172,17 @@ public sealed class DevSampleDataSeeder(
             var registrar = scope.ServiceProvider.GetRequiredService<IMerchantRegistrar>();
             var policies = scope.ServiceProvider.GetRequiredService<IMerchantAssetPolicyService>();
 
-            var registration = await registrar.RegisterAsync(
-                blueprint.Code, blueprint.Name, _options.CallbackUrl, ct);
+            // MerchantCode is backend-minted (ME00001, ME00002, ...) — the blueprint no longer chooses it.
+            var registration = await registrar.RegisterAsync(blueprint.Name, _options.CallbackUrl, ct);
             if (registration.IsFailure)
             {
-                logger.LogWarning("Dev sample data: could not register {Code}: {Error}.",
-                    blueprint.Code, registration.Error!.Message);
+                logger.LogWarning("Dev sample data: could not register '{Name}': {Error}.",
+                    blueprint.Name, registration.Error!.Message);
                 continue;
             }
 
             var merchantId = registration.Value.MerchantId;
+            var merchantCode = registration.Value.MerchantCode;
 
             // Pricing through the same services the staff Ops endpoints call — validated, not fabricated.
             await policies.SetFeesAsync(merchantId, assetId,
@@ -189,12 +193,12 @@ public sealed class DevSampleDataSeeder(
                 await policies.SetMerchantWithdrawalCapAsync(merchantId, assetId, flatCap: null, blueprint.CashOutPercentBps, ct);
 
             // NOTE: the settlement period and the freeze are applied LAST (see ApplyFinalTermsAsync), not here.
-            created.Add(new DemoMerchant(merchantId, blueprint.Code, blueprint.Freeze, blueprint.SettlementDelayDays));
+            created.Add(new DemoMerchant(merchantId, merchantCode, blueprint.Freeze, blueprint.SettlementDelayDays));
 
             // The API key is a public identifier; the secrets are NOT logged (§10). A developer who needs to
             // sign as a demo merchant rotates its credential from the back office.
             logger.LogInformation("Dev sample data: registered merchant {Code} ({Id}) with X-Api-Key {ApiKey}.",
-                blueprint.Code, merchantId, registration.Value.ApiKey);
+                merchantCode, merchantId, registration.Value.ApiKey);
         }
 
         return created;
@@ -484,7 +488,7 @@ public sealed class DevSampleDataSeeder(
     private static BigInteger ToBaseUnits(decimal display) => new(decimal.Truncate(display * Usdt));
 
     private sealed record Blueprint(
-        string Code, string Name, int DepositBps, int WithdrawalBps, int SettlementDelayDays,
+        string Name, int DepositBps, int WithdrawalBps, int SettlementDelayDays,
         int CashOutPercentBps, bool Freeze, string SettlementAddress);
 
     private sealed record DemoMerchant(Guid MerchantId, string Code, bool Freeze, int SettlementDelayDays);

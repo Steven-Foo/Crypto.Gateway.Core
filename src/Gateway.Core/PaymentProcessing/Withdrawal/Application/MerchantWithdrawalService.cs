@@ -81,12 +81,14 @@ public sealed class MerchantWithdrawalService(
             if (cap.HasCap && command.Amount > EffectiveCap(cap, settled))
                 return Result.Failure<WithdrawalResult>(WithdrawalErrors.ExceedsMerchantWithdrawalLimit);
 
-            // The same per-merchant withdrawal fee as a user payout — the merchant bears it; the platform bears gas.
-            var fee = await feeSchedule.QuoteWithdrawalFeeAsync(command.MerchantId, command.AssetId, command.Amount, cancellationToken);
+            // The same per-merchant withdrawal fee as a user payout — the merchant bears it; the platform bears
+            // gas. The rate inputs travel with it onto the record (fee transparency).
+            var quote = await feeSchedule.QuoteWithdrawalFeeAsync(command.MerchantId, command.AssetId, command.Amount, cancellationToken);
 
             var created = WithdrawalEntity.Request(
-                command.MerchantId, command.AssetId, command.Chain, destination, command.Amount, fee,
-                command.MerchantTransactionId, command.CallbackUrl, timeProvider.GetUtcNow(), WithdrawalKind.Merchant);
+                command.MerchantId, command.AssetId, command.Chain, destination, command.Amount, quote.Fee,
+                command.MerchantTransactionId, command.CallbackUrl, timeProvider.GetUtcNow(), WithdrawalKind.Merchant,
+                feeBps: quote.Bps, feeFixed: quote.Fixed, feeMinimum: quote.Minimum, minimumFeeApplied: quote.MinimumApplied);
             if (created.IsFailure)
                 return Result.Failure<WithdrawalResult>(created.Error!);
 

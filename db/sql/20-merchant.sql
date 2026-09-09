@@ -1,4 +1,8 @@
-﻿IF OBJECT_ID(N'[merchant].[__EFMigrationsHistory]') IS NULL
+﻿SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+GO
+
+IF OBJECT_ID(N'[merchant].[__EFMigrationsHistory]') IS NULL
 BEGIN
     IF SCHEMA_ID(N'merchant') IS NULL EXEC(N'CREATE SCHEMA [merchant];');
     CREATE TABLE [merchant].[__EFMigrationsHistory] (
@@ -628,6 +632,99 @@ IF NOT EXISTS (
 BEGIN
     INSERT INTO [merchant].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
     VALUES (N'20260901084839_RelaxDepositFeeBpsBound', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260909073340_AddMerchantFeeMinimumsAndProfile'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantAssetPolicy] DROP CONSTRAINT [CK_MerchantAssetPolicy_NonNegative];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260909073340_AddMerchantFeeMinimumsAndProfile'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantAssetPolicy] ADD [MaximumDeposit] decimal(38,0) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260909073340_AddMerchantFeeMinimumsAndProfile'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantAssetPolicy] ADD [MinimumDeposit] decimal(38,0) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260909073340_AddMerchantFeeMinimumsAndProfile'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantAssetPolicy] ADD [MinimumDepositFee] decimal(38,0) NOT NULL DEFAULT (0);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260909073340_AddMerchantFeeMinimumsAndProfile'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantAssetPolicy] ADD [MinimumWithdrawalFee] decimal(38,0) NOT NULL DEFAULT (0);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260909073340_AddMerchantFeeMinimumsAndProfile'
+)
+BEGIN
+    ALTER TABLE [merchant].[Merchant] ADD [ContactEmail] nvarchar(256) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260909073340_AddMerchantFeeMinimumsAndProfile'
+)
+BEGIN
+    ALTER TABLE [merchant].[Merchant] ADD [Remark] nvarchar(1024) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260909073340_AddMerchantFeeMinimumsAndProfile'
+)
+BEGIN
+    ALTER TABLE [merchant].[Merchant] ADD [SettlementMode] nvarchar(16) NOT NULL DEFAULT ('Manual');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260909073340_AddMerchantFeeMinimumsAndProfile'
+)
+BEGIN
+    EXEC(N'ALTER TABLE [merchant].[MerchantAssetPolicy] ADD CONSTRAINT [CK_MerchantAssetPolicy_DepositRange] CHECK ([MaximumDeposit] IS NULL OR [MinimumDeposit] IS NULL OR [MaximumDeposit] >= [MinimumDeposit])');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260909073340_AddMerchantFeeMinimumsAndProfile'
+)
+BEGIN
+    EXEC(N'ALTER TABLE [merchant].[MerchantAssetPolicy] ADD CONSTRAINT [CK_MerchantAssetPolicy_NonNegative] CHECK ([SweepThreshold] >= 0 AND [WithdrawalFee] >= 0 AND [DepositFeeFixed] >= 0 AND [TopUpFeeFixed] >= 0 AND [MinimumDepositFee] >= 0 AND [MinimumWithdrawalFee] >= 0 AND ([MinimumWithdrawal] IS NULL OR [MinimumWithdrawal] >= 0) AND ([MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= 0) AND ([MinimumDeposit] IS NULL OR [MinimumDeposit] >= 0) AND ([MaximumDeposit] IS NULL OR [MaximumDeposit] >= 0))');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260909073340_AddMerchantFeeMinimumsAndProfile'
+)
+BEGIN
+    INSERT INTO [merchant].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260909073340_AddMerchantFeeMinimumsAndProfile', N'10.0.9');
 END;
 
 COMMIT;

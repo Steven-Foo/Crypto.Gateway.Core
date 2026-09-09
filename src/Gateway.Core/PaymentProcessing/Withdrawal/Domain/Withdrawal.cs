@@ -31,7 +31,11 @@ public sealed class Withdrawal : Entity<Guid>
         string merchantTransactionId,
         string? callbackUrl,
         WithdrawalStatus status,
-        DateTimeOffset now) : base(id)
+        DateTimeOffset now,
+        int feeBps,
+        BigInteger feeFixed,
+        BigInteger feeMinimum,
+        bool minimumFeeApplied) : base(id)
     {
         MerchantId = merchantId;
         AssetId = assetId;
@@ -40,6 +44,10 @@ public sealed class Withdrawal : Entity<Guid>
         DestinationAddress = destinationAddress;
         Amount = amount;
         Fee = fee;
+        FeeBps = feeBps;
+        FeeFixed = feeFixed;
+        FeeMinimum = feeMinimum;
+        MinimumFeeApplied = minimumFeeApplied;
         MerchantTransactionId = merchantTransactionId;
         CallbackUrl = callbackUrl;
         Status = status;
@@ -62,6 +70,21 @@ public sealed class Withdrawal : Entity<Guid>
     public string DestinationAddress { get; private set; } = null!;
     public BigInteger Amount { get; private set; }
     public BigInteger Fee { get; private set; }
+
+    /// <summary>
+    /// The merchant's withdrawal rate inputs at the moment this payout was priced — captured alongside
+    /// <see cref="Fee"/> so the exact calculation is provable later even if the merchant's rate has since
+    /// changed (fee transparency, matches 最低手续费). Zero/false for any withdrawal predating this feature.
+    /// </summary>
+    public int FeeBps { get; private set; }
+
+    public BigInteger FeeFixed { get; private set; }
+
+    public BigInteger FeeMinimum { get; private set; }
+
+    /// <summary>True when the 最低手续费 floor actually determined <see cref="Fee"/>.</summary>
+    public bool MinimumFeeApplied { get; private set; }
+
     public string MerchantTransactionId { get; private set; } = null!;
     public WithdrawalStatus Status { get; private set; }
     public string? ApprovedBy { get; private set; }
@@ -165,7 +188,11 @@ public sealed class Withdrawal : Entity<Guid>
         string merchantTransactionId,
         string? callbackUrl,
         DateTimeOffset now,
-        WithdrawalKind kind = WithdrawalKind.User)
+        WithdrawalKind kind = WithdrawalKind.User,
+        int feeBps = 0,
+        BigInteger feeFixed = default,
+        BigInteger feeMinimum = default,
+        bool minimumFeeApplied = false)
     {
         if (merchantId == Guid.Empty || assetId == Guid.Empty)
             return Result.Failure<Withdrawal>(WithdrawalErrors.OwnerRequired);
@@ -182,7 +209,7 @@ public sealed class Withdrawal : Entity<Guid>
         return Result.Success(new Withdrawal(
             Guid.CreateVersion7(), merchantId, assetId, chain, kind, destinationAddress.Trim(), amount, fee,
             merchantTransactionId.Trim(), string.IsNullOrWhiteSpace(callbackUrl) ? null : callbackUrl.Trim(),
-            WithdrawalStatus.Reserving, now));
+            WithdrawalStatus.Reserving, now, feeBps, feeFixed, feeMinimum, minimumFeeApplied));
     }
 
     /// <summary>Funds are locked. Moves to PendingApproval above the threshold, otherwise Approved.</summary>

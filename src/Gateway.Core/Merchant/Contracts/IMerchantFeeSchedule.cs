@@ -12,10 +12,19 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 /// an overcharge. The fee arithmetic itself lives in the domain <c>FeeSchedule</c>; this port only resolves
 /// the right schedule and delegates.
 /// </summary>
+/// <summary>
+/// A resolved fee quote, with enough detail for the caller to snapshot on the transaction it prices — the
+/// merchant-facing "proof" of the calculation (最低手续费 transparency): the final <paramref name="Fee"/>, the
+/// exact rate inputs that produced it (<paramref name="Bps"/>/<paramref name="Fixed"/>/<paramref name="Minimum"/>,
+/// captured at THIS moment so a later change to the merchant's rate never rewrites history), and whether the
+/// minimum-fee floor actually kicked in.
+/// </summary>
+public sealed record FeeQuote(BigInteger Fee, int Bps, BigInteger Fixed, BigInteger Minimum, bool MinimumApplied);
+
 public interface IMerchantFeeSchedule
 {
     /// <summary>The platform fee taken from a confirmed deposit of <paramref name="receivedAmount"/> base units.</summary>
-    Task<BigInteger> QuoteDepositFeeAsync(
+    Task<FeeQuote> QuoteDepositFeeAsync(
         Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -31,7 +40,7 @@ public interface IMerchantFeeSchedule
         Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default);
 
     /// <summary>The platform fee charged on a withdrawal of <paramref name="amount"/> base units.</summary>
-    Task<BigInteger> QuoteWithdrawalFeeAsync(
+    Task<FeeQuote> QuoteWithdrawalFeeAsync(
         Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default);
 
 }

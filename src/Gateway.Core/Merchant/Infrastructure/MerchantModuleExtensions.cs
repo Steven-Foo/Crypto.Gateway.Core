@@ -47,6 +47,7 @@ public static class MerchantModuleExtensions
         services.AddScoped<IMerchantSettlementDirectory, MerchantSettlementDirectory>();
         services.AddScoped<IMerchantWithdrawalCap, MerchantWithdrawalCapReader>();
         services.AddScoped<IMerchantWithdrawalLimits, MerchantWithdrawalLimitsReader>();
+        services.AddScoped<IMerchantDepositLimits, MerchantDepositLimitsReader>();
         services.AddScoped<IMerchantApprovalThreshold, MerchantApprovalThresholdReader>();
         services.AddScoped<IMerchantRegistrar, MerchantRegistrar>();
         services.AddScoped<IMerchantAssetPolicyService, MerchantAssetPolicyService>();

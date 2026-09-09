@@ -16,6 +16,19 @@ public enum MerchantStatus
     Closed = 4,
 }
 
+/// <summary>How the merchant's matured (T+N settled) earnings get cashed out. <b>Record only today</b> — no
+/// worker or service reads this yet; every merchant behaves as <see cref="Manual"/> regardless of the stored
+/// value. A future auto-settlement job is the deferred follow-up (not a priority task).</summary>
+public enum SettlementMode
+{
+    /// <summary>Staff calculate and trigger the cash-out themselves (today's only real behaviour).</summary>
+    Manual = 1,
+
+    /// <summary>Intended: the platform settles automatically on a schedule. Not implemented — stored as a
+    /// preference for when the logic is built.</summary>
+    Auto = 2,
+}
+
 public enum CredentialStatus
 {
     Active = 1,

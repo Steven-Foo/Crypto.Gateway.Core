@@ -20,6 +20,12 @@ public static class PaymentIntentErrors
     public static readonly Error AmountNotPositive =
         Error.Validation("payment_intent.amount_not_positive", "Expected amount must be a positive base-unit integer.");
 
+    public static readonly Error BelowMinimum =
+        Error.Validation("payment_intent.below_minimum", "Requested amount is below the merchant's minimum deposit.");
+
+    public static readonly Error AboveMaximum =
+        Error.Validation("payment_intent.above_maximum", "Requested amount is above the merchant's maximum deposit.");
+
     public static readonly Error ExpiryInPast =
         Error.Validation("payment_intent.expiry_in_past", "Expiry must be in the future.");
 

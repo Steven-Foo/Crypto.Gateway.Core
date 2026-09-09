@@ -23,7 +23,11 @@ public sealed record MerchantAssetPolicyView(
     string? MaximumWithdrawal,
     string? ApprovalThreshold,
     string TopUpFeeFixed = "0",
-    int TopUpFeeBps = 0);
+    int TopUpFeeBps = 0,
+    string MinimumDepositFee = "0",
+    string MinimumWithdrawalFee = "0",
+    string? MinimumDeposit = null,
+    string? MaximumDeposit = null);
 
 /// <summary>
 /// Staff-facing pricing management — the write path that was missing, so a merchant's <c>fixed + %</c> fee
@@ -60,7 +64,17 @@ public interface IMerchantAssetPolicyService
         int withdrawalFeeBps,
         BigInteger? topUpFeeFixed = null,
         int? topUpFeeBps = null,
+        BigInteger? minimumDepositFee = null,
+        BigInteger? minimumWithdrawalFee = null,
         CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Sets the per-merchant <b>deposit (payin)</b> min/max for one asset (base units; null = unset ⇒ min falls
+    /// back to the platform dust-floor config, max stays unbounded). Creates an otherwise-default policy row if
+    /// none exists; preserves fees, the withdrawal limits, and the cash-out cap.
+    /// </summary>
+    Task<Result> SetDepositLimitsAsync(
+        Guid merchantId, Guid assetId, BigInteger? minimum, BigInteger? maximum, CancellationToken cancellationToken = default);
 
     /// <summary>
     /// Sets the per-merchant <b>user-withdrawal</b> min/max for one asset (base units; null = unset ⇒ the flow
@@ -106,6 +120,8 @@ public sealed class MerchantAssetPolicyService(IMerchantRepository repository, T
         int withdrawalFeeBps,
         BigInteger? topUpFeeFixed = null,
         int? topUpFeeBps = null,
+        BigInteger? minimumDepositFee = null,
+        BigInteger? minimumWithdrawalFee = null,
         CancellationToken cancellationToken = default)
     {
         var merchant = await repository.GetByIdAsync(merchantId, cancellationToken);
@@ -113,16 +129,19 @@ public sealed class MerchantAssetPolicyService(IMerchantRepository repository, T
             return Result.Failure(MerchantErrors.NotFound);
 
         // Preserve existing operational limits — this call sets the price, not the limits (set via
-        // SetWithdrawalLimitsAsync). A first-time policy leaves min/max unset (null ⇒ config default).
+        // SetWithdrawalLimitsAsync/SetDepositLimitsAsync). A first-time policy leaves min/max unset (null ⇒
+        // config default).
         var existing = merchant.AssetPolicies.SingleOrDefault(p => p.AssetId == assetId);
 
         // Validate pricing in the domain (bps bounds, non-negative, deposit bps < 100%) before touching state.
-        // An omitted top-up component keeps whatever was already declared, so pricing deposits/withdrawals
-        // never silently zeroes a top-up rate someone set deliberately.
+        // An omitted top-up/minimum component keeps whatever was already declared, so pricing deposits/
+        // withdrawals never silently zeroes a rate someone set deliberately.
         var fees = FeeSchedule.Create(
             depositFeeFixed, depositFeeBps, withdrawalFee, withdrawalFeeBps,
             topUpFeeFixed ?? existing?.TopUpFeeFixed ?? BigInteger.Zero,
-            topUpFeeBps ?? existing?.TopUpFeeBps ?? 0);
+            topUpFeeBps ?? existing?.TopUpFeeBps ?? 0,
+            minimumDepositFee ?? existing?.MinimumDepositFee ?? BigInteger.Zero,
+            minimumWithdrawalFee ?? existing?.MinimumWithdrawalFee ?? BigInteger.Zero);
         if (fees.IsFailure)
             return Result.Failure(fees.Error!);
         var sweepThreshold = existing?.SweepThreshold ?? BigInteger.Zero;
@@ -131,6 +150,21 @@ public sealed class MerchantAssetPolicyService(IMerchantRepository repository, T
 
         var result = merchant.SetAssetPolicy(
             assetId, sweepThreshold, minimumWithdrawal, maximumWithdrawal, fees.Value, timeProvider.GetUtcNow());
+        if (result.IsFailure)
+            return result;
+
+        await repository.SaveChangesAsync(cancellationToken);
+        return Result.Success();
+    }
+
+    public async Task<Result> SetDepositLimitsAsync(
+        Guid merchantId, Guid assetId, BigInteger? minimum, BigInteger? maximum, CancellationToken cancellationToken = default)
+    {
+        var merchant = await repository.GetByIdAsync(merchantId, cancellationToken);
+        if (merchant is null)
+            return Result.Failure(MerchantErrors.NotFound);
+
+        var result = merchant.SetDepositLimits(assetId, minimum, maximum, timeProvider.GetUtcNow());
         if (result.IsFailure)
             return result;
 
@@ -206,7 +240,11 @@ public sealed class MerchantAssetPolicyService(IMerchantRepository repository, T
                 p.MaximumWithdrawal?.ToString(CultureInfo.InvariantCulture),
                 p.ApprovalThreshold?.ToString(CultureInfo.InvariantCulture),
                 p.TopUpFeeFixed.ToString(CultureInfo.InvariantCulture),
-                p.TopUpFeeBps))
+                p.TopUpFeeBps,
+                p.MinimumDepositFee.ToString(CultureInfo.InvariantCulture),
+                p.MinimumWithdrawalFee.ToString(CultureInfo.InvariantCulture),
+                p.MinimumDeposit?.ToString(CultureInfo.InvariantCulture),
+                p.MaximumDeposit?.ToString(CultureInfo.InvariantCulture)))
             .ToList();
 
         return Result.Success(views);

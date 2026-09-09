@@ -22,12 +22,17 @@ public sealed partial class Merchant : Entity<Guid>
     private readonly List<MerchantAssetPolicy> _assetPolicies = [];
     private readonly List<MerchantSettlementWallet> _settlementWallets = [];
 
-    private Merchant(Guid id, string merchantCode, string name, string? callbackUrl, DateTimeOffset createdAt)
+    private Merchant(
+        Guid id, string merchantCode, string name, string? callbackUrl,
+        string? contactEmail, string? remark, SettlementMode settlementMode, DateTimeOffset createdAt)
         : base(id)
     {
         MerchantCode = merchantCode;
         Name = name;
         CallbackUrl = callbackUrl;
+        ContactEmail = contactEmail;
+        Remark = remark;
+        SettlementMode = settlementMode;
         Status = MerchantStatus.Active;
         SettlementDelayDays = 0;
         CreatedAt = createdAt;
@@ -42,6 +47,17 @@ public sealed partial class Merchant : Entity<Guid>
     public string MerchantCode { get; private set; } = null!;
     public string Name { get; private set; } = null!;
     public string? CallbackUrl { get; private set; }
+
+    /// <summary>Staff contact for this merchant (support/ops reference). Not used by any money flow —
+    /// webhook delivery resolves its target entirely from the per-request <c>callbackUrl</c> on each
+    /// deposit/withdrawal, never from a merchant-level field.</summary>
+    public string? ContactEmail { get; private set; }
+
+    public string? Remark { get; private set; }
+
+    /// <summary>See <see cref="Domain.SettlementMode"/> — record only, no behaviour wired yet.</summary>
+    public SettlementMode SettlementMode { get; private set; }
+
     public MerchantStatus Status { get; private set; }
 
     /// <summary>The merchant's settlement period, in whole days (T+N). Deposits confirmed on calendar day D
@@ -64,7 +80,10 @@ public sealed partial class Merchant : Entity<Guid>
         string merchantCode,
         string name,
         string? callbackUrl,
-        TimeProvider? timeProvider = null)
+        TimeProvider? timeProvider = null,
+        string? contactEmail = null,
+        string? remark = null,
+        SettlementMode settlementMode = SettlementMode.Manual)
     {
         if (string.IsNullOrWhiteSpace(merchantCode))
             return Result.Failure<Merchant>(MerchantErrors.CodeRequired);
@@ -81,7 +100,35 @@ public sealed partial class Merchant : Entity<Guid>
             return Result.Failure<Merchant>(callbackResult.Error!);
 
         var now = (timeProvider ?? TimeProvider.System).GetUtcNow();
-        return Result.Success(new Merchant(Guid.CreateVersion7(), normalisedCode, name.Trim(), callbackResult.Value, now));
+        return Result.Success(new Merchant(
+            Guid.CreateVersion7(), normalisedCode, name.Trim(), callbackResult.Value,
+            string.IsNullOrWhiteSpace(contactEmail) ? null : contactEmail.Trim(),
+            string.IsNullOrWhiteSpace(remark) ? null : remark.Trim(),
+            settlementMode, now));
+    }
+
+    /// <summary>
+    /// Updates the staff-facing profile fields — contact email, settlement mode, and remark. The caller sends
+    /// only what changed: a JSON field the request omits binds to <c>null</c> here and leaves that field
+    /// unchanged; sending an explicit empty string clears it. <paramref name="settlementMode"/> has no "clear"
+    /// state (it always has a value), so null there simply means "leave it".
+    /// </summary>
+    public Result SetProfile(string? contactEmail, SettlementMode? settlementMode, string? remark, DateTimeOffset now)
+    {
+        if (Status == MerchantStatus.Closed)
+            return Result.Failure(MerchantErrors.Closed);
+
+        if (contactEmail is not null)
+            ContactEmail = contactEmail.Trim() is { Length: > 0 } trimmedEmail ? trimmedEmail : null;
+
+        if (settlementMode is { } mode)
+            SettlementMode = mode;
+
+        if (remark is not null)
+            Remark = remark.Trim() is { Length: > 0 } trimmedRemark ? trimmedRemark : null;
+
+        UpdatedAt = now;
+        return Result.Success();
     }
 
     /// <summary>Also reopens a <c>Closed</c> merchant — status transitions are always reversible (see
@@ -265,6 +312,33 @@ public sealed partial class Merchant : Entity<Guid>
         }
 
         var result = policy.SetWithdrawalLimits(minimum, maximum, now);
+        if (result.IsSuccess)
+            UpdatedAt = now;
+
+        return result;
+    }
+
+    /// <summary>Sets the per-merchant deposit (payin) min/max override for an asset. Null = unset (min falls
+    /// back to the platform dust-floor config, max stays unbounded). Creates an unpriced policy (limits only)
+    /// if none exists, otherwise updates just the deposit limits — fees and the withdrawal limits are preserved.</summary>
+    public Result SetDepositLimits(Guid assetId, BigInteger? minimum, BigInteger? maximum, DateTimeOffset now)
+    {
+        if (Status == MerchantStatus.Closed)
+            return Result.Failure(MerchantErrors.Closed);
+
+        var policy = _assetPolicies.SingleOrDefault(p => p.AssetId == assetId);
+        if (policy is null)
+        {
+            var createResult = MerchantAssetPolicy.Create(
+                Id, assetId, BigInteger.Zero, null, null, FeeSchedule.None, now);
+            if (createResult.IsFailure)
+                return Result.Failure(createResult.Error!);
+
+            policy = createResult.Value;
+            _assetPolicies.Add(policy);
+        }
+
+        var result = policy.SetDepositLimits(minimum, maximum, now);
         if (result.IsSuccess)
             UpdatedAt = now;
 

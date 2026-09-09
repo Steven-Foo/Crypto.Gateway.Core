@@ -70,7 +70,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         MerchantRegistrationResult registration;
         await using (var context = NewContext())
         {
-            var result = await NewRegistrar(context).RegisterAsync("ACME-1", "Acme Payments", "https://acme.test/hook", Ct);
+            var result = await NewRegistrar(context).RegisterAsync("Acme Payments", "https://acme.test/hook", Ct);
             result.IsSuccess.ShouldBeTrue();
             registration = result.Value;
         }
@@ -82,7 +82,9 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
                 .Include(m => m.Credentials)
                 .SingleAsync(m => m.Id == registration.MerchantId, Ct);
 
-            merchant.MerchantCode.ShouldBe("ACME-1");
+            // First registration against a freshly-created (empty) database, so the generated
+            // sequence deterministically starts at 1.
+            merchant.MerchantCode.ShouldBe("ME00001");
             merchant.Status.ShouldBe(MerchantStatus.Active);
             merchant.Configuration.ShouldNotBeNull();
             merchant.Credentials.Count.ShouldBe(1);
@@ -96,7 +98,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
     {
         Guid merchantId;
         await using (var context = NewContext())
-            merchantId = (await NewRegistrar(context).RegisterAsync("ACTIVATE-1", "Acme", null, Ct)).Value.MerchantId;
+            merchantId = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value.MerchantId;
 
         await using (var context = NewContext())
             (await NewRegistrar(context).FreezeAsync(merchantId, Ct)).IsSuccess.ShouldBeTrue();
@@ -123,7 +125,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
     {
         Guid merchantId;
         await using (var context = NewContext())
-            merchantId = (await NewRegistrar(context).RegisterAsync("CLOSE-1", "Acme", null, Ct)).Value.MerchantId;
+            merchantId = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value.MerchantId;
 
         await using (var context = NewContext())
             (await NewRegistrar(context).CloseAsync(merchantId, Ct)).IsSuccess.ShouldBeTrue();
@@ -168,7 +170,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         MerchantRegistrationResult registration;
         await using (var context = NewContext())
         {
-            registration = (await NewRegistrar(context).RegisterAsync("SECRET-1", "Acme", null, Ct)).Value;
+            registration = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value;
         }
 
         await using (var context = NewContext())
@@ -211,31 +213,64 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
     [Fact]
     public async Task Duplicate_merchant_code_is_rejected_by_the_database()
     {
+        string generatedCode;
         await using (var context = NewContext())
         {
-            (await NewRegistrar(context).RegisterAsync("DUPE", "First", null, Ct)).IsSuccess.ShouldBeTrue();
+            var result = await NewRegistrar(context).RegisterAsync("First", null, Ct);
+            result.IsSuccess.ShouldBeTrue();
+            generatedCode = result.Value.MerchantCode;
         }
 
         // Bypass the application's friendly pre-check to prove the UNIQUE index is the real arbiter.
+        // Reuses the code the registrar just generated, since a caller can no longer choose one.
         await using (var context = NewContext())
         {
-            var second = MerchantEntity.Create("DUPE", "Second", null).Value;
+            var second = MerchantEntity.Create(generatedCode, "Second", null).Value;
             context.Merchants.Add(second);
             await Should.ThrowAsync<DbUpdateException>(() => context.SaveChangesAsync(Ct));
         }
     }
 
+    /// <summary>The generator's pre-check (<c>CodeExistsAsync</c>) skips past a candidate that's already
+    /// taken rather than failing outright — proven here by manually claiming "ME00001" (the first code the
+    /// generator would try against a fresh database) and confirming registration still succeeds, one
+    /// candidate further along.</summary>
     [Fact]
-    public async Task Registrar_returns_a_conflict_rather_than_throwing_on_duplicate_code()
+    public async Task Registering_skips_a_generated_code_that_is_already_taken()
     {
         await using (var context = NewContext())
         {
-            (await NewRegistrar(context).RegisterAsync("TAKEN", "First", null, Ct)).IsSuccess.ShouldBeTrue();
+            var taken = MerchantEntity.Create("ME00001", "Manually seeded", null).Value;
+            context.Merchants.Add(taken);
+            await context.SaveChangesAsync(Ct);
         }
 
         await using (var context = NewContext())
         {
-            var result = await NewRegistrar(context).RegisterAsync("taken", "Second", null, Ct);
+            var result = await NewRegistrar(context).RegisterAsync("Acme", null, Ct);
+
+            result.IsSuccess.ShouldBeTrue();
+            result.Value.MerchantCode.ShouldBe("ME00002");
+        }
+    }
+
+    /// <summary>The bounded retry (<c>MerchantRegistrar.MaxCodeGenerationAttempts</c>, currently 8) has to
+    /// give up eventually rather than loop forever — proven by manually claiming every candidate code it
+    /// would try and confirming a friendly conflict comes back instead of an exception.</summary>
+    [Fact]
+    public async Task Registrar_returns_a_conflict_when_every_retry_candidate_is_already_taken()
+    {
+        await using (var context = NewContext())
+        {
+            for (var i = 1; i <= 8; i++)
+                context.Merchants.Add(MerchantEntity.Create($"ME{i:D5}", $"Blocker {i}", null).Value);
+
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using (var context = NewContext())
+        {
+            var result = await NewRegistrar(context).RegisterAsync("Acme", null, Ct);
 
             result.IsFailure.ShouldBeTrue();
             result.Error!.Code.ShouldBe(MerchantErrors.CodeAlreadyExists.Code);
@@ -251,7 +286,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
 
         await using (var context = NewContext())
         {
-            var registration = (await NewRegistrar(context).RegisterAsync("KEYDUP", "Acme", null, Ct)).Value;
+            var registration = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value;
             merchantId = registration.MerchantId;
             apiKey = registration.ApiKey;
         }
@@ -276,7 +311,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
 
         await using (var context = NewContext())
         {
-            merchantId = (await NewRegistrar(context).RegisterAsync("MONEY-1", "Acme", null, Ct)).Value.MerchantId;
+            merchantId = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value.MerchantId;
         }
 
         await using (var context = NewContext())
@@ -306,7 +341,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
 
         await using (var context = NewContext())
         {
-            merchantId = (await NewRegistrar(context).RegisterAsync("POLICY-1", "Acme", null, Ct)).Value.MerchantId;
+            merchantId = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value.MerchantId;
         }
 
         await using (var context = NewContext())
@@ -340,7 +375,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
 
         await using (var context = NewContext())
         {
-            merchantId = (await NewRegistrar(context).RegisterAsync("CHECK-1", "Acme", null, Ct)).Value.MerchantId;
+            merchantId = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value.MerchantId;
         }
 
         await using (var context = NewContext())
@@ -365,7 +400,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         Guid merchantId;
         await using (var context = NewContext())
         {
-            merchantId = (await NewRegistrar(context).RegisterAsync("CHECK-2", "Acme", null, Ct)).Value.MerchantId;
+            merchantId = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value.MerchantId;
         }
 
         await using (var context = NewContext())
@@ -395,13 +430,13 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         var asset = Guid.CreateVersion7();
         Guid merchantId;
         await using (var context = NewContext())
-            merchantId = (await NewRegistrar(context).RegisterAsync("DEFFEE-1", "Acme", null, Ct)).Value.MerchantId;
+            merchantId = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value.MerchantId;
 
         await using (var verify = NewContext())
         {
             var fees = NewFeeSchedule(verify, withdrawalBps: 50); // 0.5% platform default
             // No policy for the merchant ⇒ the default applies: 0.5% of 1,000,000 = 5,000.
-            (await fees.QuoteWithdrawalFeeAsync(merchantId, asset, new BigInteger(1_000_000), Ct))
+            (await fees.QuoteWithdrawalFeeAsync(merchantId, asset, new BigInteger(1_000_000), Ct)).Fee
                 .ShouldBe(new BigInteger(5_000));
         }
     }
@@ -412,7 +447,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         var asset = Guid.CreateVersion7();
         Guid merchantId;
         await using (var context = NewContext())
-            merchantId = (await NewRegistrar(context).RegisterAsync("DEFFEE-2", "Acme", null, Ct)).Value.MerchantId;
+            merchantId = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value.MerchantId;
 
         await using (var context = NewContext())
         {
@@ -425,7 +460,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         {
             var fees = NewFeeSchedule(verify, withdrawalBps: 50); // default 0.5% would give 5,000...
             // ...but the merchant's own 1% fee wins: 1% of 1,000,000 = 10,000.
-            (await fees.QuoteWithdrawalFeeAsync(merchantId, asset, new BigInteger(1_000_000), Ct))
+            (await fees.QuoteWithdrawalFeeAsync(merchantId, asset, new BigInteger(1_000_000), Ct)).Fee
                 .ShouldBe(new BigInteger(10_000));
         }
     }
@@ -436,12 +471,12 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         var asset = Guid.CreateVersion7();
         Guid merchantId;
         await using (var context = NewContext())
-            merchantId = (await NewRegistrar(context).RegisterAsync("DEFFEE-3", "Acme", null, Ct)).Value.MerchantId;
+            merchantId = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value.MerchantId;
 
         await using (var verify = NewContext())
         {
             var fees = NewFeeSchedule(verify); // 0/0 = no platform default
-            (await fees.QuoteWithdrawalFeeAsync(merchantId, asset, new BigInteger(1_000_000), Ct))
+            (await fees.QuoteWithdrawalFeeAsync(merchantId, asset, new BigInteger(1_000_000), Ct)).Fee
                 .ShouldBe(BigInteger.Zero);
         }
     }
@@ -454,7 +489,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         Guid merchantId;
         await using (var context = NewContext())
         {
-            merchantId = (await NewRegistrar(context).RegisterAsync("CONC-1", "Acme", null, Ct)).Value.MerchantId;
+            merchantId = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value.MerchantId;
         }
 
         await using var first = NewContext();
@@ -478,7 +513,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         MerchantRegistrationResult registration;
         await using (var context = NewContext())
         {
-            registration = (await NewRegistrar(context).RegisterAsync("AUTH-1", "Acme", null, Ct)).Value;
+            registration = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value;
             var merchant = await context.Merchants.SingleAsync(m => m.Id == registration.MerchantId, Ct);
             merchant.Activate(DateTimeOffset.UtcNow);
             await context.SaveChangesAsync(Ct);
@@ -500,7 +535,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         MerchantRegistrationResult registration;
         await using (var context = NewContext())
         {
-            registration = (await NewRegistrar(context).RegisterAsync("AUTH-2", "Acme", null, Ct)).Value;
+            registration = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value;
         }
 
         await using (var context = NewContext())
@@ -521,7 +556,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         MerchantRegistrationResult registration;
         await using (var context = NewContext())
         {
-            registration = (await NewRegistrar(context).RegisterAsync("AUTH-3", "Acme", null, Ct)).Value;
+            registration = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value;
         }
 
         await using (var context = NewContext())
@@ -542,7 +577,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         MerchantRegistrationResult registration;
         await using (var context = NewContext())
         {
-            registration = (await NewRegistrar(context).RegisterAsync("AUTH-4", "Acme", null, Ct)).Value;
+            registration = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value;
             var merchant = await context.Merchants.Include(m => m.Credentials).SingleAsync(m => m.Id == registration.MerchantId, Ct);
             merchant.Activate(DateTimeOffset.UtcNow);
             merchant.RevokeCredential(merchant.Credentials[0].Id, DateTimeOffset.UtcNow);
@@ -566,7 +601,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         Guid merchantId;
         await using (var context = NewContext())
         {
-            merchantId = (await NewRegistrar(context).RegisterAsync("DIR-1", "Acme Payments", "https://acme.test/h", Ct)).Value.MerchantId;
+            merchantId = (await NewRegistrar(context).RegisterAsync("Acme Payments", "https://acme.test/h", Ct)).Value.MerchantId;
             var merchant = await context.Merchants.SingleAsync(m => m.Id == merchantId, Ct);
             merchant.Activate(DateTimeOffset.UtcNow);
             await context.SaveChangesAsync(Ct);
@@ -574,11 +609,14 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
 
         await using (var context = NewContext())
         {
-            var summary = await new MerchantDirectory(context).FindByCodeAsync("dir-1", Ct);
+            // First registration against a freshly-created (empty) database, so the generated
+            // sequence deterministically starts at 1 — lower-cased here to double as the
+            // case-insensitive lookup check this test always carried.
+            var summary = await new MerchantDirectory(context).FindByCodeAsync("me00001", Ct);
 
             summary.ShouldNotBeNull();
             summary.MerchantId.ShouldBe(merchantId);
-            summary.MerchantCode.ShouldBe("DIR-1");
+            summary.MerchantCode.ShouldBe("ME00001");
             summary.CanTransact.ShouldBeTrue();
         }
     }
@@ -603,14 +641,14 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         var asset = Guid.CreateVersion7();
         Guid merchantId;
         await using (var context = NewContext())
-            merchantId = (await NewRegistrar(context).RegisterAsync("DEFFEE-3", "Acme", null, Ct)).Value.MerchantId;
+            merchantId = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value.MerchantId;
 
         await using (var verify = NewContext())
         {
             var fees = NewFeeSchedule(verify, depositBps: 100); // 1% platform default
 
             // The control: the default genuinely applies to a customer deposit on this merchant/asset.
-            (await fees.QuoteDepositFeeAsync(merchantId, asset, new BigInteger(1_000_000), Ct))
+            (await fees.QuoteDepositFeeAsync(merchantId, asset, new BigInteger(1_000_000), Ct)).Fee
                 .ShouldBe(new BigInteger(10_000));
 
             // ...but a top-up on the same unpriced merchant is free.
@@ -627,7 +665,7 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         var asset = Guid.CreateVersion7();
         Guid merchantId;
         await using (var context = NewContext())
-            merchantId = (await NewRegistrar(context).RegisterAsync("DEFFEE-4", "Acme", null, Ct)).Value.MerchantId;
+            merchantId = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value.MerchantId;
 
         await using (var context = NewContext())
         {

@@ -1,4 +1,8 @@
-﻿IF OBJECT_ID(N'[withdrawal].[__EFMigrationsHistory]') IS NULL
+﻿SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+GO
+
+IF OBJECT_ID(N'[withdrawal].[__EFMigrationsHistory]') IS NULL
 BEGIN
     IF SCHEMA_ID(N'withdrawal') IS NULL EXEC(N'CREATE SCHEMA [withdrawal];');
     CREATE TABLE [withdrawal].[__EFMigrationsHistory] (
@@ -486,6 +490,51 @@ IF NOT EXISTS (
 BEGIN
     INSERT INTO [withdrawal].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
     VALUES (N'20260828104824_AddManualSettlementAndTopUp', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260909073418_AddWithdrawalFeeMinimumSnapshot'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [FeeBps] int NOT NULL DEFAULT 0;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260909073418_AddWithdrawalFeeMinimumSnapshot'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [FeeFixed] decimal(38,0) NOT NULL DEFAULT (0);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260909073418_AddWithdrawalFeeMinimumSnapshot'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [FeeMinimum] decimal(38,0) NOT NULL DEFAULT (0);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260909073418_AddWithdrawalFeeMinimumSnapshot'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [MinimumFeeApplied] bit NOT NULL DEFAULT CAST(0 AS bit);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260909073418_AddWithdrawalFeeMinimumSnapshot'
+)
+BEGIN
+    INSERT INTO [withdrawal].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260909073418_AddWithdrawalFeeMinimumSnapshot', N'10.0.9');
 END;
 
 COMMIT;

@@ -36,7 +36,11 @@ public sealed class Deposit : Entity<Guid>
         string blockHash,
         DepositKind kind,
         DepositStatus status,
-        DateTimeOffset now) : base(id)
+        DateTimeOffset now,
+        int feeBps,
+        BigInteger feeFixed,
+        BigInteger feeMinimum,
+        bool minimumFeeApplied) : base(id)
     {
         Chain = chain;
         Address = address;
@@ -45,6 +49,10 @@ public sealed class Deposit : Entity<Guid>
         AssetId = assetId;
         Amount = amount;
         Fee = fee;
+        FeeBps = feeBps;
+        FeeFixed = feeFixed;
+        FeeMinimum = feeMinimum;
+        MinimumFeeApplied = minimumFeeApplied;
         TransactionHash = transactionHash;
         OutputIndex = outputIndex;
         BlockNumber = blockNumber;
@@ -76,6 +84,23 @@ public sealed class Deposit : Entity<Guid>
     /// Zero for an unpriced merchant.
     /// </summary>
     public BigInteger Fee { get; private set; }
+
+    /// <summary>
+    /// The merchant's deposit rate inputs at the moment this deposit was priced — captured alongside
+    /// <see cref="Fee"/> so the exact calculation is provable later even if the merchant's rate has since
+    /// changed (fee transparency, matches 最低手续费). Zero/false for a merchant top-up (no minimum-fee
+    /// concept applies there) and for any deposit predating this feature.
+    /// </summary>
+    public int FeeBps { get; private set; }
+
+    public BigInteger FeeFixed { get; private set; }
+
+    public BigInteger FeeMinimum { get; private set; }
+
+    /// <summary>True when the 最低手续费 floor actually determined <see cref="Fee"/> (the calculated
+    /// fixed+% fee came out below <see cref="FeeMinimum"/>) — lets a merchant/support agent see at a glance
+    /// why this deposit's fee looks disproportionate to the amount.</summary>
+    public bool MinimumFeeApplied { get; private set; }
 
     public string TransactionHash { get; private set; } = null!;
     public int OutputIndex { get; private set; }
@@ -130,7 +155,11 @@ public sealed class Deposit : Entity<Guid>
         string blockHash,
         DepositPolicy policy,
         DateTimeOffset now,
-        DepositKind kind = DepositKind.Customer)
+        DepositKind kind = DepositKind.Customer,
+        int feeBps = 0,
+        BigInteger feeFixed = default,
+        BigInteger feeMinimum = default,
+        bool minimumFeeApplied = false)
     {
         if (string.IsNullOrWhiteSpace(address))
             return Result.Failure<Deposit>(DepositErrors.AddressRequired);
@@ -151,7 +180,8 @@ public sealed class Deposit : Entity<Guid>
 
         return Result.Success(new Deposit(
             Guid.CreateVersion7(), chain, address.Trim(), walletId, merchantId, assetId, amount, fee,
-            transactionHash.Trim(), outputIndex, blockNumber, blockHash, kind, status, now));
+            transactionHash.Trim(), outputIndex, blockNumber, blockHash, kind, status, now,
+            feeBps, feeFixed, feeMinimum, minimumFeeApplied));
     }
 
     /// <summary>

@@ -1,3 +1,4 @@
+using System.Globalization;
 using System.Numerics;
 using CryptoPaymentEngine.Api.OperationsApi.Models;
 using CryptoPaymentEngine.Api.OperationsApi.Security;
@@ -41,14 +42,17 @@ public static class OpsMerchantFeeEndpoints
                 network = asset?.Chain.ToString(),
                 coin = asset?.Symbol,
                 depositFeeFixed = AmountConversion.ToDisplay(BigInteger.Parse(p.DepositFeeFixed), decimals),
-                depositFeeBps = p.DepositFeeBps,
                 depositFeePercent = p.DepositFeeBps / 100m,
+                depositFeeMinimum = AmountConversion.ToDisplay(BigInteger.Parse(p.MinimumDepositFee), decimals),
                 withdrawalFeeFixed = AmountConversion.ToDisplay(BigInteger.Parse(p.WithdrawalFee), decimals),
-                withdrawalFeeBps = p.WithdrawalFeeBps,
                 withdrawalFeePercent = p.WithdrawalFeeBps / 100m,
+                withdrawalFeeMinimum = AmountConversion.ToDisplay(BigInteger.Parse(p.MinimumWithdrawalFee), decimals),
                 topUpFeeFixed = AmountConversion.ToDisplay(BigInteger.Parse(p.TopUpFeeFixed), decimals),
-                topUpFeeBps = p.TopUpFeeBps,
                 topUpFeePercent = p.TopUpFeeBps / 100m,
+                minimumDeposit = p.MinimumDeposit is { } minDep ? AmountConversion.ToDisplay(BigInteger.Parse(minDep), decimals) : (decimal?)null,
+                maximumDeposit = p.MaximumDeposit is { } maxDep ? AmountConversion.ToDisplay(BigInteger.Parse(maxDep), decimals) : (decimal?)null,
+                minimumWithdrawal = p.MinimumWithdrawal is { } minWd ? AmountConversion.ToDisplay(BigInteger.Parse(minWd), decimals) : (decimal?)null,
+                maximumWithdrawal = p.MaximumWithdrawal is { } maxWd ? AmountConversion.ToDisplay(BigInteger.Parse(maxWd), decimals) : (decimal?)null,
             });
         }
 
@@ -66,16 +70,27 @@ public static class OpsMerchantFeeEndpoints
         if (asset is null)
             return Bad(OpsErrorCodes.InvalidAsset, $"Unknown coin '{request.Coin}' on {chain}.");
 
+        if (!TryPercentToBps(request.DepositFeePercent, out var depositBps))
+            return Bad(OpsErrorCodes.InvalidAmount, "depositFeePercent must be non-negative, at most 100%, and at most 2 decimal places.");
+        if (!TryPercentToBps(request.WithdrawalFeePercent, out var withdrawalBps))
+            return Bad(OpsErrorCodes.InvalidAmount, "withdrawalFeePercent must be non-negative, at most 100%, and at most 2 decimal places.");
+        if (!TryPercentToBps(request.TopUpFeePercent, out var topUpBps))
+            return Bad(OpsErrorCodes.InvalidAmount, "topUpFeePercent must be non-negative, at most 100%, and at most 2 decimal places.");
+
         if (!TryFeeToBase(request.DepositFeeFixed, asset.Decimals, out var depositFixed))
             return Bad(OpsErrorCodes.InvalidAmount, "depositFeeFixed is negative or finer than the asset's precision.");
         if (!TryFeeToBase(request.WithdrawalFeeFixed, asset.Decimals, out var withdrawalFixed))
             return Bad(OpsErrorCodes.InvalidAmount, "withdrawalFeeFixed is negative or finer than the asset's precision.");
         if (!TryFeeToBase(request.TopUpFeeFixed, asset.Decimals, out var topUpFixed))
             return Bad(OpsErrorCodes.InvalidAmount, "topUpFeeFixed is negative or finer than the asset's precision.");
+        if (!TryFeeToBase(request.DepositFeeMinimum, asset.Decimals, out var depositMinimum))
+            return Bad(OpsErrorCodes.InvalidAmount, "depositFeeMinimum is negative or finer than the asset's precision.");
+        if (!TryFeeToBase(request.WithdrawalFeeMinimum, asset.Decimals, out var withdrawalMinimum))
+            return Bad(OpsErrorCodes.InvalidAmount, "withdrawalFeeMinimum is negative or finer than the asset's precision.");
 
         var result = await policies.SetFeesAsync(
-            id, asset.AssetId, depositFixed, request.DepositFeeBps, withdrawalFixed, request.WithdrawalFeeBps,
-            topUpFixed, request.TopUpFeeBps,
+            id, asset.AssetId, depositFixed, depositBps, withdrawalFixed, withdrawalBps,
+            topUpFixed, topUpBps, depositMinimum, withdrawalMinimum,
             http.RequestAborted);
 
         if (result.IsFailure)
@@ -84,15 +99,65 @@ public static class OpsMerchantFeeEndpoints
         var actor = AuditActor.From(http);
         await audit.LogAsync(new LogAuditEntryCommand(
             actor.StaffUserId, actor.Username, "merchant.fee_updated", "Merchant", id.ToString(),
-            $"{asset.Symbol}: deposit={request.DepositFeeFixed}+{request.DepositFeeBps}bps, withdrawal={request.WithdrawalFeeFixed}+{request.WithdrawalFeeBps}bps, topup={request.TopUpFeeFixed}+{request.TopUpFeeBps}bps",
+            $"{asset.Symbol}: deposit={request.DepositFeeFixed}+{request.DepositFeePercent}%(min {request.DepositFeeMinimum}), " +
+            $"withdrawal={request.WithdrawalFeeFixed}+{request.WithdrawalFeePercent}%(min {request.WithdrawalFeeMinimum}), " +
+            $"topup={request.TopUpFeeFixed}+{request.TopUpFeePercent}%",
             actor.IpAddress), http.RequestAborted);
+
+        // Soft warning only — never blocks the save. Flags a minimum fee that looks disproportionate next to
+        // this merchant's OWN configured minimum transaction amount (best-effort: doesn't chase the platform
+        // config fallback when the merchant hasn't set one, since that's a per-chain, not per-merchant, number).
+        var policy = (await policies.ListAsync(id, http.RequestAborted)).Value.SingleOrDefault(p => p.AssetId == asset.AssetId);
+        var warnings = new List<string>();
+        AddMinimumFeeWarning(warnings, "deposit", policy?.MinimumDeposit, depositMinimum, asset.Decimals);
+        AddMinimumFeeWarning(warnings, "withdrawal", policy?.MinimumWithdrawal, withdrawalMinimum, asset.Decimals);
 
         return Results.Ok(new
         {
             isSuccess = true,
             data = new { merchantId = id, assetId = asset.AssetId, coin = asset.Symbol, network = chain.ToString() },
+            warnings,
             error = (string?)null, errorCode = (string?)null,
         });
+    }
+
+    /// <summary>A minimum fee at or above half of this merchant's own minimum transaction amount is flagged —
+    /// not blocked — as likely-disproportionate pricing (e.g. a 5 USDT minimum fee on a 1 USDT minimum
+    /// deposit would tax a customer's smallest allowed payment at 100%+). Silent when the merchant has no
+    /// minimum amount of their own set (nothing concrete to compare against).</summary>
+    private static void AddMinimumFeeWarning(List<string> warnings, string kind, string? minimumAmountBase, BigInteger minimumFee, int decimals)
+    {
+        if (minimumAmountBase is null || minimumFee <= BigInteger.Zero)
+            return;
+
+        var minimumAmount = BigInteger.Parse(minimumAmountBase, CultureInfo.InvariantCulture);
+        if (minimumAmount <= BigInteger.Zero)
+            return;
+
+        if (minimumFee * 2 >= minimumAmount)
+        {
+            var feeDisplay = AmountConversion.ToDisplay(minimumFee, decimals);
+            var amountDisplay = AmountConversion.ToDisplay(minimumAmount, decimals);
+            warnings.Add(
+                $"The {kind} minimum fee ({feeDisplay}) is at least half of this merchant's own minimum {kind} amount " +
+                $"({amountDisplay}) — small transactions could be taxed disproportionately. Not blocked; review before relying on it.");
+        }
+    }
+
+    /// <summary>Plain percent (e.g. <c>2</c> = 2%) → basis points, requiring an EXACT conversion (at most 2
+    /// decimal places on the input) — rejected, never rounded, same "never truncate money" rule as an amount.</summary>
+    private static bool TryPercentToBps(decimal percent, out int bps)
+    {
+        bps = 0;
+        if (percent < 0m)
+            return false;
+
+        var scaled = percent * 100m;
+        if (scaled != decimal.Truncate(scaled) || scaled > 10_000m)
+            return false;
+
+        bps = (int)scaled;
+        return true;
     }
 
     /// <summary>The fee fixed component: like <c>AmountConversion.TryToBaseUnits</c> but a zero is valid

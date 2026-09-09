@@ -30,12 +30,16 @@ public sealed class MerchantAssetPolicy : Entity<Guid>
         SweepThreshold = sweepThreshold;
         MinimumWithdrawal = minimumWithdrawal;
         MaximumWithdrawal = maximumWithdrawal;
+        MinimumDeposit = null;                  // unset ⇒ the invoice flow falls back to the platform dust-floor config
+        MaximumDeposit = null;                  // unset ⇒ no platform-wide default exists, so it stays unbounded
         DepositFeeFixed = fees.DepositFeeFixed;
         DepositFeeBps = fees.DepositFeeBps;
         WithdrawalFee = fees.WithdrawalFee;
         WithdrawalFeeBps = fees.WithdrawalFeeBps;
         TopUpFeeFixed = fees.TopUpFeeFixed;
         TopUpFeeBps = fees.TopUpFeeBps;
+        MinimumDepositFee = fees.MinimumDepositFee;
+        MinimumWithdrawalFee = fees.MinimumWithdrawalFee;
         MerchantWithdrawalFlatCap = null;       // no merchant-withdrawal (cash-out) cap until one is set
         MerchantWithdrawalPercentBps = 0;
         ApprovalThreshold = null;               // unset ⇒ the withdrawal flow uses the platform config threshold
@@ -59,11 +63,26 @@ public sealed class MerchantAssetPolicy : Entity<Guid>
     /// platform config maximum. A set value overrides. (Zero would be indistinguishable from "unlimited", hence null.)</summary>
     public BigInteger? MaximumWithdrawal { get; private set; }
 
+    /// <summary>Per-merchant deposit (payin) <b>minimum</b> — the smallest invoice amount the merchant may
+    /// request. Null = unset ⇒ the PaymentIntent flow falls back to the platform's per-chain dust-floor config.
+    /// A set value (including 0) fully overrides.</summary>
+    public BigInteger? MinimumDeposit { get; private set; }
+
+    /// <summary>Per-merchant deposit (payin) <b>maximum</b>. Null = unset ⇒ no platform-wide default exists
+    /// today, so the invoice stays unbounded until this is set.</summary>
+    public BigInteger? MaximumDeposit { get; private set; }
+
     // ── Pricing (flat columns, rehydrated into a FeeSchedule via Fees) ──
     public BigInteger DepositFeeFixed { get; private set; }
     public int DepositFeeBps { get; private set; }
     public BigInteger WithdrawalFee { get; private set; }
     public int WithdrawalFeeBps { get; private set; }
+
+    /// <summary>Floor under the deposit fee (最低手续费) — see <see cref="FeeSchedule.MinimumDepositFee"/>.</summary>
+    public BigInteger MinimumDepositFee { get; private set; }
+
+    /// <summary>Floor under the withdrawal fee (最低手续费) — see <see cref="FeeSchedule.MinimumWithdrawalFee"/>.</summary>
+    public BigInteger MinimumWithdrawalFee { get; private set; }
 
     /// <summary>Fee on a merchant top-up (funding its own balance). Zero unless staff declared a rate —
     /// deliberately never inherits the platform default, so a merchant is not charged to fund its own float.</summary>
@@ -88,7 +107,9 @@ public sealed class MerchantAssetPolicy : Entity<Guid>
     public DateTimeOffset UpdatedAt { get; private set; }
 
     /// <summary>The merchant's pricing for this asset. The single home of the fee arithmetic.</summary>
-    public FeeSchedule Fees => FeeSchedule.FromTrusted(DepositFeeFixed, DepositFeeBps, WithdrawalFee, WithdrawalFeeBps, TopUpFeeFixed, TopUpFeeBps);
+    public FeeSchedule Fees => FeeSchedule.FromTrusted(
+        DepositFeeFixed, DepositFeeBps, WithdrawalFee, WithdrawalFeeBps, TopUpFeeFixed, TopUpFeeBps,
+        MinimumDepositFee, MinimumWithdrawalFee);
 
     internal static Result<MerchantAssetPolicy> Create(
         Guid merchantId,
@@ -128,7 +149,24 @@ public sealed class MerchantAssetPolicy : Entity<Guid>
         WithdrawalFeeBps = fees.WithdrawalFeeBps;
         TopUpFeeFixed = fees.TopUpFeeFixed;
         TopUpFeeBps = fees.TopUpFeeBps;
+        MinimumDepositFee = fees.MinimumDepositFee;
+        MinimumWithdrawalFee = fees.MinimumWithdrawalFee;
         UpdatedAt = updatedAt;
+        return Result.Success();
+    }
+
+    /// <summary>Sets the per-merchant deposit (payin) min/max independently of fees, cap, and the withdrawal
+    /// limits. Null = unset ⇒ the PaymentIntent flow falls back to platform defaults (min: dust-floor config;
+    /// max: unbounded). Validates non-negative, storable, and min ≤ max (when both are set).</summary>
+    internal Result SetDepositLimits(BigInteger? minimumDeposit, BigInteger? maximumDeposit, DateTimeOffset now)
+    {
+        var validation = ValidateLimits(SweepThreshold, MinimumWithdrawal, MaximumWithdrawal, minimumDeposit, maximumDeposit);
+        if (validation.IsFailure)
+            return validation;
+
+        MinimumDeposit = minimumDeposit;
+        MaximumDeposit = maximumDeposit;
+        UpdatedAt = now;
         return Result.Success();
     }
 
@@ -188,9 +226,11 @@ public sealed class MerchantAssetPolicy : Entity<Guid>
     private static Result ValidateLimits(
         BigInteger sweepThreshold,
         BigInteger? minimumWithdrawal,
-        BigInteger? maximumWithdrawal)
+        BigInteger? maximumWithdrawal,
+        BigInteger? minimumDeposit = null,
+        BigInteger? maximumDeposit = null)
     {
-        BigInteger?[] amounts = [sweepThreshold, minimumWithdrawal, maximumWithdrawal];
+        BigInteger?[] amounts = [sweepThreshold, minimumWithdrawal, maximumWithdrawal, minimumDeposit, maximumDeposit];
 
         foreach (var amount in amounts)
         {
@@ -206,6 +246,9 @@ public sealed class MerchantAssetPolicy : Entity<Guid>
 
         if (maximumWithdrawal is { } max && minimumWithdrawal is { } min && min > max)
             return Result.Failure(MerchantErrors.WithdrawalRangeInvalid);
+
+        if (maximumDeposit is { } depositMax && minimumDeposit is { } depositMin && depositMin > depositMax)
+            return Result.Failure(MerchantErrors.DepositRangeInvalid);
 
         return Result.Success();
     }

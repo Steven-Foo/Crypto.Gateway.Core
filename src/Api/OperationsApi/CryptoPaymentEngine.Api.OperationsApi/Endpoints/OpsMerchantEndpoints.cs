@@ -1,4 +1,5 @@
 using System.Net;
+using System.Numerics;
 using CryptoPaymentEngine.Api.OperationsApi.Models;
 using CryptoPaymentEngine.Api.OperationsApi.Security;
 using CryptoPaymentEngine.Api.OperationsApi.Services;
@@ -7,6 +8,7 @@ using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Application;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Application.Abstractions;
+using CryptoPaymentEngine.Gateway.Core.Merchant.Domain;
 using CryptoPaymentEngine.Gateway.Core.Platform.Audit.Application;
 using CryptoPaymentEngine.SharedKernel;
 
@@ -32,6 +34,7 @@ public static class OpsMerchantEndpoints
 
         // Mutations — ops.merchants.manage (key rotation gets its own, more sensitive code).
         app.MapPost("/api/v1/ops/merchants", CreateMerchantAsync).RequirePermission(OpsPermissions.Merchants.Manage);
+        app.MapPut("/api/v1/ops/merchants/{id:guid}/profile", UpdateProfileAsync).RequirePermission(OpsPermissions.Merchants.Manage);
         app.MapPatch("/api/v1/ops/merchants/{id:guid}/status", SetStatusAsync).RequirePermission(OpsPermissions.Merchants.Manage);
         app.MapPost("/api/v1/ops/merchants/{id:guid}/close", CloseMerchantAsync).RequirePermission(OpsPermissions.Merchants.Manage);
         app.MapPost("/api/v1/ops/merchants/{id:guid}/regenerate-key", RegenerateKeyAsync).RequirePermission(OpsPermissions.Merchants.RotateKey);
@@ -219,10 +222,30 @@ public static class OpsMerchantEndpoints
 
     private static async Task<IResult> CreateMerchantAsync(
         CreateMerchantRequest request, IMerchantRegistrar registrar, IDepositAddressProvisioner provisioner,
-        IAuditLogger audit, ILogger<Program> logger, HttpContext http)
+        IMerchantAssetPolicyService policies, IAssetCatalog assets, IAuditLogger audit, ILogger<Program> logger, HttpContext http)
     {
+        if (!TryParseSettlementMode(request.SettlementMode, out var settlementMode))
+            return OpsResults.Bad(OpsErrorCodes.InvalidAmount, $"Unknown settlementMode '{request.SettlementMode}'. Use 'auto' or 'manual'.");
+
+        // Only TRX/USDT is priceable today (§CLAUDE.md — no BSC/ETH adapter exists yet). Resolved up front so a
+        // Fees block on an unsupported asset is rejected outright, before the merchant is even created.
+        AssetDto? asset = null;
+        if (request.Fees is not null)
+        {
+            asset = await assets.FindAsync(Chain.Tron, "USDT", http.RequestAborted);
+            if (asset is null)
+                return OpsResults.Bad(OpsErrorCodes.InvalidAsset, "No priceable asset is configured (expected USDT on Tron).");
+
+            if (!TryPercentToBps(request.Fees.DepositFeePercent, out var depositBpsCheck)
+                || !TryPercentToBps(request.Fees.WithdrawalFeePercent, out var withdrawalBpsCheck))
+                return OpsResults.Bad(OpsErrorCodes.InvalidAmount, "Fee percent must be non-negative, at most 100%, and at most 2 decimal places.");
+            _ = depositBpsCheck; _ = withdrawalBpsCheck; // validated here; recomputed below once the merchant exists
+        }
+
         var result = await registrar.RegisterAsync(
-            request.MerchantCode, request.Name, request.CallbackUrl, http.RequestAborted);
+            request.Name, callbackUrl: null, http.RequestAborted,
+            contactEmail: request.ContactEmail, remark: request.Remark,
+            settlementMode: settlementMode, settlementDelayDays: request.SettlementDays);
 
         if (result.IsFailure)
             return OpsResults.Fail(result.Error!);
@@ -239,6 +262,37 @@ public static class OpsMerchantEndpoints
                 "deposit call will provision one synchronously instead.", merchant.MerchantId, provisioned.Error!.Code);
         else
             wallet = new { chain = provisioned.Value.Chain.ToString(), address = provisioned.Value.Address };
+
+        // A failure here does NOT roll back the merchant — same non-blocking philosophy as the seed wallet
+        // above. Staff can always price the merchant afterward via PUT .../fees; a failed pricing call at
+        // creation just means the merchant is briefly unpriced (falls back to the platform default fee).
+        if (request.Fees is { } fees && asset is not null)
+        {
+            TryPercentToBps(fees.DepositFeePercent, out var depositBps);
+            TryPercentToBps(fees.WithdrawalFeePercent, out var withdrawalBps);
+
+            if (!TryFeeToBase(fees.DepositFeeFixed, asset.Decimals, out var depositFixed)
+                || !TryFeeToBase(fees.WithdrawalFeeFixed, asset.Decimals, out var withdrawalFixed)
+                || !TryFeeToBase(fees.DepositFeeMinimum, asset.Decimals, out var depositMinimum)
+                || !TryFeeToBase(fees.WithdrawalFeeMinimum, asset.Decimals, out var withdrawalMinimum))
+            {
+                logger.LogWarning(
+                    "Initial fee for merchant {MerchantId} was invalid (negative or over-precise) and was skipped; " +
+                    "the merchant is unpriced until staff set it via PUT .../fees.", merchant.MerchantId);
+            }
+            else
+            {
+                var priced = await policies.SetFeesAsync(
+                    merchant.MerchantId, asset.AssetId, depositFixed, depositBps, withdrawalFixed, withdrawalBps,
+                    minimumDepositFee: depositMinimum, minimumWithdrawalFee: withdrawalMinimum,
+                    cancellationToken: http.RequestAborted);
+
+                if (priced.IsFailure)
+                    logger.LogWarning(
+                        "Initial fee for merchant {MerchantId} failed to save: {Error}. The merchant is unpriced " +
+                        "until staff set it via PUT .../fees.", merchant.MerchantId, priced.Error!.Code);
+            }
+        }
 
         var actor = AuditActor.From(http);
         await audit.LogAsync(new LogAuditEntryCommand(
@@ -259,5 +313,68 @@ public static class OpsMerchantEndpoints
             },
             error = (string?)null, errorCode = (string?)null,
         });
+    }
+
+    private static async Task<IResult> UpdateProfileAsync(
+        Guid id, UpdateMerchantProfileRequest request, IMerchantRegistrar registrar, IAuditLogger audit, HttpContext http)
+    {
+        SettlementMode? settlementMode = null;
+        if (request.SettlementMode is not null)
+        {
+            if (!TryParseSettlementMode(request.SettlementMode, out var mode))
+                return OpsResults.Bad(OpsErrorCodes.InvalidAmount, $"Unknown settlementMode '{request.SettlementMode}'. Use 'auto' or 'manual'.");
+            settlementMode = mode;
+        }
+
+        var result = await registrar.SetProfileAsync(id, request.ContactEmail, settlementMode, request.Remark, http.RequestAborted);
+        if (result.IsFailure)
+            return OpsResults.Fail(result.Error!);
+
+        var actor = AuditActor.From(http);
+        await audit.LogAsync(new LogAuditEntryCommand(
+            actor.StaffUserId, actor.Username, "merchant.profile_updated", "Merchant", id.ToString(), null, actor.IpAddress),
+            http.RequestAborted);
+
+        return Results.Ok(new { isSuccess = true, data = new { merchantId = id }, error = (string?)null, errorCode = (string?)null });
+    }
+
+    private static bool TryParseSettlementMode(string? value, out SettlementMode mode)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+        {
+            mode = SettlementMode.Manual;
+            return true;
+        }
+
+        return Enum.TryParse(value, ignoreCase: true, out mode);
+    }
+
+    /// <summary>Plain percent (e.g. <c>2</c> = 2%) → basis points, requiring an EXACT conversion (at most 2
+    /// decimal places on the input) — rejected, never rounded, same "never truncate money" rule as an amount.</summary>
+    private static bool TryPercentToBps(decimal percent, out int bps)
+    {
+        bps = 0;
+        if (percent < 0m)
+            return false;
+
+        var scaled = percent * 100m;
+        if (scaled != decimal.Truncate(scaled) || scaled > 10_000m)
+            return false;
+
+        bps = (int)scaled;
+        return true;
+    }
+
+    /// <summary>The fee fixed/minimum component: like <c>AmountConversion.TryToBaseUnits</c> but a zero is
+    /// valid. Still refuses negatives and over-precision — never truncates money (§14).</summary>
+    private static bool TryFeeToBase(decimal display, int decimals, out BigInteger baseUnits)
+    {
+        if (display == 0m)
+        {
+            baseUnits = BigInteger.Zero;
+            return true;
+        }
+
+        return AmountConversion.TryToBaseUnits(display, decimals, out baseUnits);
     }
 }

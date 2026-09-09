@@ -57,6 +57,8 @@ public sealed class PaymentIntentService(
     IWalletDirectory walletDirectory,
     IWalletReservationLock walletLock,
     IDepositAddressProvisioner addressProvisioner,
+    IMerchantDepositLimits depositLimits,
+    IPlatformDepositFloor platformDepositFloor,
     IOptions<PaymentIntentOptions> options,
     TimeProvider timeProvider,
     ILogger<PaymentIntentService> logger) : IPaymentIntentService
@@ -84,6 +86,18 @@ public sealed class PaymentIntentService(
         //    asked to pay more than the invoice they agreed to; the merchant reconciles from the amount we
         //    record against each deposit, which is exactly what arrived.
         var expectedAmount = command.InvoiceAmount;
+
+        // Deposit (payin) min/max: a crypto deposit can't be rejected once it's already on-chain, so this is
+        // the only point that can actually gate it — before the payer ever gets an address to send to.
+        // Merchant override (null bound) falls back to the platform's per-chain dust-floor config for the
+        // minimum; there is no platform-wide default maximum today, so an unset merchant max stays unbounded.
+        var limits = await depositLimits.GetAsync(command.MerchantId, command.AssetId, cancellationToken);
+        var effectiveMinimum = limits.Minimum ?? platformDepositFloor.For(command.Chain);
+        if (expectedAmount < effectiveMinimum)
+            return Result.Failure<PaymentIntentResult>(PaymentIntentErrors.BelowMinimum);
+        if (limits.Maximum is { } maximum && expectedAmount > maximum)
+            return Result.Failure<PaymentIntentResult>(PaymentIntentErrors.AboveMaximum);
+
         var reservationTtl = TimeSpan.FromMinutes(_options.ExpiryMinutes + _options.GraceMinutes);
 
         // 3. Reserve an address and insert. First attempt reuses a free address; retries mint a fresh one —

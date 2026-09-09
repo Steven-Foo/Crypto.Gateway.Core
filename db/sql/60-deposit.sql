@@ -1,4 +1,8 @@
-﻿IF OBJECT_ID(N'[deposit].[__EFMigrationsHistory]') IS NULL
+﻿SET QUOTED_IDENTIFIER ON;
+SET ANSI_NULLS ON;
+GO
+
+IF OBJECT_ID(N'[deposit].[__EFMigrationsHistory]') IS NULL
 BEGIN
     IF SCHEMA_ID(N'deposit') IS NULL EXEC(N'CREATE SCHEMA [deposit];');
     CREATE TABLE [deposit].[__EFMigrationsHistory] (
@@ -234,6 +238,51 @@ IF NOT EXISTS (
 BEGIN
     INSERT INTO [deposit].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
     VALUES (N'20260901072830_AddDepositKind', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [deposit].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260909073402_AddDepositFeeMinimumSnapshot'
+)
+BEGIN
+    ALTER TABLE [deposit].[Deposit] ADD [FeeBps] int NOT NULL DEFAULT 0;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [deposit].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260909073402_AddDepositFeeMinimumSnapshot'
+)
+BEGIN
+    ALTER TABLE [deposit].[Deposit] ADD [FeeFixed] decimal(38,0) NOT NULL DEFAULT (0);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [deposit].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260909073402_AddDepositFeeMinimumSnapshot'
+)
+BEGIN
+    ALTER TABLE [deposit].[Deposit] ADD [FeeMinimum] decimal(38,0) NOT NULL DEFAULT (0);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [deposit].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260909073402_AddDepositFeeMinimumSnapshot'
+)
+BEGIN
+    ALTER TABLE [deposit].[Deposit] ADD [MinimumFeeApplied] bit NOT NULL DEFAULT CAST(0 AS bit);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [deposit].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260909073402_AddDepositFeeMinimumSnapshot'
+)
+BEGIN
+    INSERT INTO [deposit].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260909073402_AddDepositFeeMinimumSnapshot', N'10.0.9');
 END;
 
 COMMIT;

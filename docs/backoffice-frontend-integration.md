@@ -368,17 +368,48 @@ that needs to round-trip exactly, since `balance` can lose precision once cast t
 Creates **and auto-activates** the merchant (no separate activation step), and seeds **exactly one**
 deposit wallet (not a pool — every wallet after the first is minted on-demand as the merchant needs one).
 
+`merchantCode` is **server-generated** (`ME00001`, `ME00002`, ...) — never supplied by the caller. There is
+no `callbackUrl` field either: deposit/withdrawal webhook delivery resolves its target entirely from the
+`callbackUrl` on each individual `/deposit`/`/withdraw` request, never from anything stored on the merchant,
+so nothing is lost by not collecting one here.
+
 Request:
 ```json
-{ "merchantCode": "string, required, max 64", "name": "string, required, max 256", "callbackUrl": "string, optional, valid absolute URL" }
+{
+  "name": "string, required, max 256",
+  "contactEmail": "string, optional, max 256",
+  "remark": "string, optional, max 1024",
+  "settlementDays": 0,
+  "settlementMode": "manual",
+  "fees": {
+    "depositFeeFixed": 0,
+    "depositFeePercent": 2,
+    "depositFeeMinimum": 0.5,
+    "withdrawalFeeFixed": 1,
+    "withdrawalFeePercent": 1,
+    "withdrawalFeeMinimum": 2
+  }
+}
 ```
+- `settlementDays`: T+N in whole days, 0-30 (0 = withdrawable immediately). The UI can offer 0/1/2 as presets;
+  the backend accepts the full range.
+- `settlementMode`: `"auto"` or `"manual"`, case-insensitive, defaults to `"manual"` if omitted. **Record only
+  today** — no automated settlement logic runs yet regardless of this value; every merchant behaves as manual.
+- `fees` is **entirely optional** — omit it to create the merchant unpriced (it falls back to the platform
+  default fee, exactly as before this field existed). When present, all six sub-fields are required numbers
+  (`0` is valid — e.g. `depositFeeMinimum: 0` means no minimum-fee floor). `*Percent` is a **plain percent**
+  (`2` = 2%), at most 2 decimal places — a finer value (e.g. `2.505`) is rejected with 400, never rounded.
+  `*Minimum` is the 最低手续费 floor: `max(fixed + amount × percent, minimum)`. Only TRX/USDT is priceable
+  today; this always prices that asset. A failed/invalid `fees` block does **not** fail merchant creation —
+  it's logged and the merchant is created unpriced; price it afterward via `PUT .../fees`.
+
 Response 200:
 ```json
 {
   "isSuccess": true,
   "data": {
     "merchantId": "guid",
-    "merchantCode": "ACME-1",
+    "merchantCode": "ME00001",
     "apiKey": "string",
     "apiSecret": "string — shown once, never retrievable again",
     "signingSecret": "string — shown once, never retrievable again",
@@ -393,7 +424,19 @@ explicit "save this now" warning. `wallet` can be `null` if seed provisioning fa
 this does not indicate a problem worth surfacing loudly — the merchant is still fully usable, the first
 deposit call just provisions a wallet synchronously instead.
 
-400 on duplicate `merchantCode` or invalid callback URL.
+400 on an invalid `settlementMode`, an invalid `fees` percent (negative, >100%, or finer than 2 decimals), or
+a negative/over-precise fixed/minimum amount.
+
+### `PUT /api/v1/ops/merchants/{id}/profile` — `ops.merchants.manage`
+Write-only — updates the staff-facing profile fields. Every field is optional; the caller sends only what
+changed. An **omitted** field is left unchanged; an explicit **empty string** clears `contactEmail`/`remark`.
+There is no read-back shape from this endpoint (read the current values back via `GET /merchants/{id}`).
+
+Request (send only what changed):
+```json
+{ "contactEmail": "ops@merchant.com", "settlementMode": "auto", "remark": "VIP account" }
+```
+Response 200: `{ "merchantId": "guid" }`. 404 on an unknown `id`, 400 on an invalid `settlementMode`.
 
 ### `PATCH /api/v1/ops/merchants/{id}/status` — `ops.merchants.manage`
 Request: `{ "active": true|false }` (`true` → activate, `false` → freeze).
@@ -555,9 +598,11 @@ param (client-side filter on the returned page for now).
     "fees": [
       {
         "assetId": "guid", "network": "Tron", "coin": "USDT",
-        "depositFeeFixed": 0.5, "depositFeeBps": 100, "depositFeePercent": 1.0,
-        "withdrawalFeeFixed": 1.0, "withdrawalFeeBps": 50, "withdrawalFeePercent": 0.5,
-        "topUpFeeFixed": 0, "topUpFeeBps": 0, "topUpFeePercent": 0
+        "depositFeeFixed": 0.5, "depositFeePercent": 1.0, "depositFeeMinimum": 0.5,
+        "withdrawalFeeFixed": 1.0, "withdrawalFeePercent": 0.5, "withdrawalFeeMinimum": 2.0,
+        "topUpFeeFixed": 0, "topUpFeePercent": 0,
+        "minimumDeposit": 1.0, "maximumDeposit": null,
+        "minimumWithdrawal": null, "maximumWithdrawal": null
       }
     ]
   },
@@ -565,25 +610,55 @@ param (client-side filter on the returned page for now).
 }
 ```
 An unpriced merchant simply has an empty `fees` array — which means **zero fee**, not an error.
+`minimumDeposit`/`maximumDeposit`/`minimumWithdrawal`/`maximumWithdrawal` are read-only here (set via
+`PUT .../deposit-limits` and `PUT .../withdrawal-limits` respectively) — included for a single-screen view.
 
 ### `PUT /api/v1/ops/merchants/{id}/fees` — `ops.fees.manage`
 Request:
 ```json
 {
   "chain": "Tron", "coin": "USDT",
-  "depositFeeFixed": 0.5, "depositFeeBps": 100,
-  "withdrawalFeeFixed": 1.0, "withdrawalFeeBps": 50,
-  "topUpFeeFixed": 0, "topUpFeeBps": 0
+  "depositFeeFixed": 0.5, "depositFeePercent": 1.0, "depositFeeMinimum": 0.5,
+  "withdrawalFeeFixed": 1.0, "withdrawalFeePercent": 0.5, "withdrawalFeeMinimum": 2.0,
+  "topUpFeeFixed": 0, "topUpFeePercent": 0
 }
 ```
-All three `*FeeFixed` values are **display-unit decimals** (not base units), and a `0` is valid (pure
-percentage pricing). 400 if the chain/coin is unrecognized, or a fixed amount is negative or has more
+All `*FeeFixed`/`*FeeMinimum` values are **display-unit decimals** (not base units), and a `0` is valid (pure
+percentage pricing, or no minimum-fee floor). `*FeePercent` is a **plain percent** (`2` = 2%, not basis
+points), at most 2 decimal places — a finer value is rejected with 400, never rounded. 400 if the chain/coin
+is unrecognized, a percent is negative/>100%/too-precise, or a fixed/minimum amount is negative or has more
 decimal precision than the asset supports.
+
+**`*FeeMinimum` is the 最低手续费 floor:** the actual fee charged is `max(fixed + amount×percent, minimum)`
+— it never drops below `*FeeMinimum` no matter how small the transaction, but it also never exceeds what a
+deposit actually received (a deposit fee is capped at the deposit amount itself, so a tiny deposit against a
+high minimum fee is entirely consumed as fee revenue rather than crediting a negative balance).
+
+Response 200 includes a `warnings` array (soft, non-blocking): populated when a `*FeeMinimum` is at least
+half of this merchant's own configured minimum transaction amount (set via the limits endpoints below) — a
+sign that small transactions could be taxed disproportionately. The save still succeeds; surface the warning
+to staff but don't block on it.
 
 **This is a full replacement, not a patch.** Every fee field is written on each call, and an omitted field
 deserialises to `0` rather than being left alone — so posting only `depositFee*` silently sets the
-withdrawal and top-up fees to zero. **A UI that edits one fee must GET the record first and post all of
-them back.** There is no partial-update endpoint.
+withdrawal and top-up fees (and their minimums) to zero. **A UI that edits one fee must GET the record first
+and post all of them back.** There is no partial-update endpoint.
+
+### `PUT /api/v1/ops/merchants/{id}/deposit-limits` — `ops.fees.manage`
+Mirrors `PUT .../withdrawal-limits` (§ below) for the **payin** side — new, previously no such concept
+existed for deposits.
+
+Request:
+```json
+{ "chain": "Tron", "coin": "USDT", "minimum": 1.0, "maximum": null }
+```
+`minimum`/`maximum` in **display units**; `null` on a bound = unset (minimum falls back to the platform's
+per-chain dust-floor config, maximum stays unbounded — there is no platform-wide default maximum today); a
+set value (including `0`) fully overrides. Enforced when a merchant requests a deposit invoice
+(`POST /api/v1/deposit`) — a request outside the range is rejected **before** any payment address is issued,
+since a crypto deposit can't be rejected after it's already arrived on-chain.
+
+Response 200: `{ "merchantId": "guid", "assetId": "guid", "coin": "USDT", "network": "Tron" }`.
 
 #### Fees are deducted from what arrives — not added on top
 
@@ -1007,7 +1082,9 @@ Five setters on top of §10's fees. All are **display decimals** on the way in, 
 | `PUT /ops/merchants/{id}/settlement-wallet` | `ops.merchants.manage` | `{ "chain": "Tron", "address": "T..." }` |
 | `PUT /ops/merchants/{id}/withdrawal-cap` | `ops.fees.manage` | `{ "chain", "coin", "flatCap": 5000.0, "percentBps": 5000 }` |
 | `PUT /ops/merchants/{id}/withdrawal-limits` | `ops.fees.manage` | `{ "chain", "coin", "minimum": 10.0, "maximum": 5000.0 }` |
+| `PUT /ops/merchants/{id}/deposit-limits` | `ops.fees.manage` | `{ "chain", "coin", "minimum": 1.0, "maximum": null }` |
 | `PUT /ops/merchants/{id}/approval-threshold` | `ops.fees.manage` | `{ "chain", "coin", "threshold": 1000.0 }` |
+| `PUT /ops/merchants/{id}/profile` | `ops.merchants.manage` | `{ "contactEmail", "settlementMode", "remark" }` — all optional, write-only |
 
 **`null` vs `0` is a real distinction on every optional amount, not a formality:**
 

@@ -19,11 +19,11 @@ public sealed class FeeSchedule : ValueObject
     public const int MaxBps = 10_000;
 
     /// <summary>The no-fee schedule — an unpriced merchant is charged nothing (a documented ops gap, never an overcharge).</summary>
-    public static FeeSchedule None { get; } = new(BigInteger.Zero, 0, BigInteger.Zero, 0, BigInteger.Zero, 0);
+    public static FeeSchedule None { get; } = new(BigInteger.Zero, 0, BigInteger.Zero, 0, BigInteger.Zero, 0, BigInteger.Zero, BigInteger.Zero);
 
     private FeeSchedule(
         BigInteger depositFeeFixed, int depositFeeBps, BigInteger withdrawalFee, int withdrawalFeeBps,
-        BigInteger topUpFeeFixed, int topUpFeeBps)
+        BigInteger topUpFeeFixed, int topUpFeeBps, BigInteger minimumDepositFee, BigInteger minimumWithdrawalFee)
     {
         DepositFeeFixed = depositFeeFixed;
         DepositFeeBps = depositFeeBps;
@@ -31,6 +31,8 @@ public sealed class FeeSchedule : ValueObject
         WithdrawalFeeBps = withdrawalFeeBps;
         TopUpFeeFixed = topUpFeeFixed;
         TopUpFeeBps = topUpFeeBps;
+        MinimumDepositFee = minimumDepositFee;
+        MinimumWithdrawalFee = minimumWithdrawalFee;
     }
 
     public BigInteger DepositFeeFixed { get; }
@@ -56,24 +58,38 @@ public sealed class FeeSchedule : ValueObject
     /// </summary>
     public int TopUpFeeBps { get; }
 
+    /// <summary>Floor under the calculated deposit fee (fixed + %) — 最低手续费. Zero = no floor. See
+    /// <see cref="QuoteDepositFeeDetailed"/> for the <c>max(calculated, minimum)</c> arithmetic.</summary>
+    public BigInteger MinimumDepositFee { get; }
+
+    /// <summary>Floor under the calculated withdrawal fee (fixed + %) — 最低手续费. Zero = no floor. See
+    /// <see cref="QuoteWithdrawalFeeDetailed"/>.</summary>
+    public BigInteger MinimumWithdrawalFee { get; }
+
     /// <summary>
-    /// Prices deposits and withdrawals, leaving the merchant top-up free. This is the overload every caller
-    /// that predates top-up pricing uses, and "no top-up fee" is the correct default for them: a top-up is
-    /// only ever charged when an admin explicitly declares a rate for it.
+    /// Prices deposits and withdrawals, leaving the merchant top-up free and no minimum-fee floor. This is
+    /// the overload every caller that predates top-up/minimum pricing uses.
     /// </summary>
     public static Result<FeeSchedule> Create(
         BigInteger depositFeeFixed, int depositFeeBps, BigInteger withdrawalFee, int withdrawalFeeBps) =>
-        Create(depositFeeFixed, depositFeeBps, withdrawalFee, withdrawalFeeBps, BigInteger.Zero, 0);
+        Create(depositFeeFixed, depositFeeBps, withdrawalFee, withdrawalFeeBps, BigInteger.Zero, 0, BigInteger.Zero, BigInteger.Zero);
 
     public static Result<FeeSchedule> Create(
         BigInteger depositFeeFixed, int depositFeeBps, BigInteger withdrawalFee, int withdrawalFeeBps,
-        BigInteger topUpFeeFixed, int topUpFeeBps)
+        BigInteger topUpFeeFixed, int topUpFeeBps) =>
+        Create(depositFeeFixed, depositFeeBps, withdrawalFee, withdrawalFeeBps, topUpFeeFixed, topUpFeeBps, BigInteger.Zero, BigInteger.Zero);
+
+    public static Result<FeeSchedule> Create(
+        BigInteger depositFeeFixed, int depositFeeBps, BigInteger withdrawalFee, int withdrawalFeeBps,
+        BigInteger topUpFeeFixed, int topUpFeeBps, BigInteger minimumDepositFee, BigInteger minimumWithdrawalFee)
     {
-        if (depositFeeFixed < BigInteger.Zero || withdrawalFee < BigInteger.Zero || topUpFeeFixed < BigInteger.Zero)
+        if (depositFeeFixed < BigInteger.Zero || withdrawalFee < BigInteger.Zero || topUpFeeFixed < BigInteger.Zero
+            || minimumDepositFee < BigInteger.Zero || minimumWithdrawalFee < BigInteger.Zero)
             return Result.Failure<FeeSchedule>(MerchantErrors.AmountNegative);
 
         if (!MoneyLimits.IsStorable(depositFeeFixed) || !MoneyLimits.IsStorable(withdrawalFee)
-            || !MoneyLimits.IsStorable(topUpFeeFixed))
+            || !MoneyLimits.IsStorable(topUpFeeFixed) || !MoneyLimits.IsStorable(minimumDepositFee)
+            || !MoneyLimits.IsStorable(minimumWithdrawalFee))
             return Result.Failure<FeeSchedule>(MerchantErrors.AmountTooLarge);
 
         // Every fee is DEDUCTED from what arrives (there is no payer-on-top gross-up any more), so all three
@@ -88,30 +104,51 @@ public sealed class FeeSchedule : ValueObject
         if (withdrawalFeeBps < 0 || withdrawalFeeBps > MaxBps)
             return Result.Failure<FeeSchedule>(MerchantErrors.FeeBpsInvalid);
 
-        return Result.Success(new FeeSchedule(depositFeeFixed, depositFeeBps, withdrawalFee, withdrawalFeeBps, topUpFeeFixed, topUpFeeBps));
+        return Result.Success(new FeeSchedule(
+            depositFeeFixed, depositFeeBps, withdrawalFee, withdrawalFeeBps, topUpFeeFixed, topUpFeeBps,
+            minimumDepositFee, minimumWithdrawalFee));
     }
 
     /// <summary>Rehydrates from already-validated persisted columns. Persistence only — skips validation.</summary>
     internal static FeeSchedule FromTrusted(
         BigInteger depositFeeFixed, int depositFeeBps, BigInteger withdrawalFee, int withdrawalFeeBps,
-        BigInteger topUpFeeFixed = default, int topUpFeeBps = 0) =>
-        new(depositFeeFixed, depositFeeBps, withdrawalFee, withdrawalFeeBps, topUpFeeFixed, topUpFeeBps);
+        BigInteger topUpFeeFixed = default, int topUpFeeBps = 0,
+        BigInteger minimumDepositFee = default, BigInteger minimumWithdrawalFee = default) =>
+        new(depositFeeFixed, depositFeeBps, withdrawalFee, withdrawalFeeBps, topUpFeeFixed, topUpFeeBps,
+            minimumDepositFee, minimumWithdrawalFee);
 
     /// <summary>
-    /// The platform fee taken from a deposit of <paramref name="receivedAmount"/> base units. Computed on
-    /// the amount that actually arrived, so it needs no invoice — the Ledger can split any confirmed
-    /// deposit independently.
+    /// The platform fee taken from a deposit of <paramref name="receivedAmount"/> base units:
+    /// <c>max(fixed + amount×bps/10000, minimum)</c> — 实收手续费. Computed on the amount that actually
+    /// arrived, so it needs no invoice — the Ledger can split any confirmed deposit independently.
     /// </summary>
-    public BigInteger QuoteDepositFee(BigInteger receivedAmount) =>
-        receivedAmount <= BigInteger.Zero
-            ? BigInteger.Zero
-            : DepositFeeFixed + receivedAmount * DepositFeeBps / MaxBps;
+    public BigInteger QuoteDepositFee(BigInteger receivedAmount) => QuoteDepositFeeDetailed(receivedAmount).Fee;
 
-    /// <summary>The platform fee charged on a withdrawal of <paramref name="amount"/> base units.</summary>
-    public BigInteger QuoteWithdrawalFee(BigInteger amount) =>
-        amount <= BigInteger.Zero
-            ? BigInteger.Zero
-            : WithdrawalFee + amount * WithdrawalFeeBps / MaxBps;
+    /// <summary>Same as <see cref="QuoteDepositFee"/>, plus whether the 最低手续费 floor actually kicked in
+    /// (the calculated fixed+% fee came out below the minimum) — the one place this arithmetic lives, so
+    /// every caller that needs to know/record it (fee transparency on the deposit record) shares it.</summary>
+    public (BigInteger Fee, bool MinimumApplied) QuoteDepositFeeDetailed(BigInteger receivedAmount)
+    {
+        if (receivedAmount <= BigInteger.Zero)
+            return (BigInteger.Zero, false);
+
+        var calculated = DepositFeeFixed + receivedAmount * DepositFeeBps / MaxBps;
+        return calculated < MinimumDepositFee ? (MinimumDepositFee, true) : (calculated, false);
+    }
+
+    /// <summary>The platform fee charged on a withdrawal of <paramref name="amount"/> base units:
+    /// <c>max(fixed + amount×bps/10000, minimum)</c>.</summary>
+    public BigInteger QuoteWithdrawalFee(BigInteger amount) => QuoteWithdrawalFeeDetailed(amount).Fee;
+
+    /// <summary>Same as <see cref="QuoteWithdrawalFee"/>, plus whether the 最低手续费 floor kicked in.</summary>
+    public (BigInteger Fee, bool MinimumApplied) QuoteWithdrawalFeeDetailed(BigInteger amount)
+    {
+        if (amount <= BigInteger.Zero)
+            return (BigInteger.Zero, false);
+
+        var calculated = WithdrawalFee + amount * WithdrawalFeeBps / MaxBps;
+        return calculated < MinimumWithdrawalFee ? (MinimumWithdrawalFee, true) : (calculated, false);
+    }
 
     /// <summary>
     /// The platform fee taken from a <b>merchant top-up</b> of <paramref name="receivedAmount"/> base units.
@@ -132,5 +169,7 @@ public sealed class FeeSchedule : ValueObject
         yield return WithdrawalFeeBps;
         yield return TopUpFeeFixed;
         yield return TopUpFeeBps;
+        yield return MinimumDepositFee;
+        yield return MinimumWithdrawalFee;
     }
 }

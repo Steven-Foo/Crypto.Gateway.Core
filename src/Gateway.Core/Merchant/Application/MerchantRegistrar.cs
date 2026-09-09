@@ -24,17 +24,33 @@ public sealed record MerchantAdminView(
     DateTimeOffset CreatedAt,
     bool HasActiveCredential,
     IReadOnlyList<string> AllowedIps,
-    IReadOnlyList<MerchantSettlementWalletView> SettlementWallets);
+    IReadOnlyList<MerchantSettlementWalletView> SettlementWallets,
+    string? ContactEmail = null,
+    string? Remark = null,
+    string SettlementMode = "Manual");
 
 /// <summary>A merchant's whitelisted cash-out destination for a chain, for staff read-back.</summary>
 public sealed record MerchantSettlementWalletView(string Chain, string Address);
 
 public interface IMerchantRegistrar
 {
+    /// <summary>Registers a merchant under a backend-minted code — <c>"ME"</c> + a zero-padded 5-digit
+    /// sequence (<c>ME00001</c>, <c>ME00002</c>, …). Callers never supply or influence the code; see the
+    /// implementation for how collisions against the sequence are handled.</summary>
     Task<Result<MerchantRegistrationResult>> RegisterAsync(
-        string merchantCode,
         string name,
         string? callbackUrl,
+        CancellationToken cancellationToken = default,
+        string? contactEmail = null,
+        string? remark = null,
+        Domain.SettlementMode settlementMode = Domain.SettlementMode.Manual,
+        int settlementDelayDays = 0);
+
+    /// <summary>Updates the staff-facing profile fields (contact email, settlement mode, remark). Every
+    /// parameter is optional — a caller sends only what changed; an omitted (null) field is left unchanged,
+    /// an explicit empty string clears it. Write-only: returns success/failure only, no read-back shape.</summary>
+    Task<Result> SetProfileAsync(
+        Guid merchantId, string? contactEmail, Domain.SettlementMode? settlementMode, string? remark,
         CancellationToken cancellationToken = default);
 
     /// <summary>
@@ -88,38 +104,67 @@ public sealed class MerchantRegistrar(
     ISecretCipher secretCipher,
     TimeProvider timeProvider) : IMerchantRegistrar
 {
+    /// <summary>Bounded retries for a generated-code collision — see <see cref="RegisterAsync"/>.</summary>
+    private const int MaxCodeGenerationAttempts = 8;
+
     public async Task<Result<MerchantRegistrationResult>> RegisterAsync(
-        string merchantCode,
         string name,
         string? callbackUrl,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default,
+        string? contactEmail = null,
+        string? remark = null,
+        Domain.SettlementMode settlementMode = Domain.SettlementMode.Manual,
+        int settlementDelayDays = 0)
     {
-        var merchantResult = Domain.Merchant.Create(merchantCode, name, callbackUrl, timeProvider);
-        if (merchantResult.IsFailure)
-            return Result.Failure<MerchantRegistrationResult>(merchantResult.Error!);
+        for (var attempt = 1; attempt <= MaxCodeGenerationAttempts; attempt++)
+        {
+            var sequence = await repository.GetNextMerchantCodeSequenceAsync(cancellationToken);
+            var candidateCode = $"ME{sequence:D5}";
 
-        var merchant = merchantResult.Value;
+            var merchantResult = Domain.Merchant.Create(
+                candidateCode, name, callbackUrl, timeProvider, contactEmail, remark, settlementMode);
+            if (merchantResult.IsFailure)
+                return Result.Failure<MerchantRegistrationResult>(merchantResult.Error!);
 
-        // Pre-check for a friendly error. The UNIQUE index on MerchantCode remains the real
-        // arbiter — two concurrent registrations will still collide there, by design.
-        if (await repository.CodeExistsAsync(merchant.MerchantCode, cancellationToken))
-            return Result.Failure<MerchantRegistrationResult>(MerchantErrors.CodeAlreadyExists);
+            var merchant = merchantResult.Value;
 
-        var credential = generator.Generate();
-        var secretHash = hasher.Hash(credential.Secret);
-        var signingSecretCipher = secretCipher.Protect(credential.SigningSecret);
+            if (settlementDelayDays != 0)
+            {
+                var delayResult = merchant.SetSettlementDelay(settlementDelayDays, timeProvider.GetUtcNow());
+                if (delayResult.IsFailure)
+                    return Result.Failure<MerchantRegistrationResult>(delayResult.Error!);
+            }
 
-        var issueResult = merchant.IssueCredential(
-            credential.ApiKey, secretHash, hasher.CurrentVersion, signingSecretCipher, timeProvider.GetUtcNow());
+            // Pre-check for a friendly, fast retry. The UNIQUE index on MerchantCode remains the real
+            // arbiter — two concurrent registrations reading the same "next" sequence will still collide
+            // there (caught below), by design; either check losing just means this candidate is taken,
+            // so move on to the next one.
+            if (await repository.CodeExistsAsync(merchant.MerchantCode, cancellationToken))
+                continue;
 
-        if (issueResult.IsFailure)
-            return Result.Failure<MerchantRegistrationResult>(issueResult.Error!);
+            var credential = generator.Generate();
+            var secretHash = hasher.Hash(credential.Secret);
+            var signingSecretCipher = secretCipher.Protect(credential.SigningSecret);
 
-        repository.Add(merchant);
-        await repository.SaveChangesAsync(cancellationToken);
+            var issueResult = merchant.IssueCredential(
+                credential.ApiKey, secretHash, hasher.CurrentVersion, signingSecretCipher, timeProvider.GetUtcNow());
 
-        return Result.Success(new MerchantRegistrationResult(
-            merchant.Id, merchant.MerchantCode, credential.ApiKey, credential.Secret, credential.SigningSecret));
+            if (issueResult.IsFailure)
+                return Result.Failure<MerchantRegistrationResult>(issueResult.Error!);
+
+            repository.Add(merchant);
+
+            // Lost the insert race for this candidate to a concurrent registration that read the same
+            // "next" sequence? TrySaveNewMerchantAsync detaches the doomed insert and returns false —
+            // retry with a fresh candidate rather than surfacing it.
+            if (!await repository.TrySaveNewMerchantAsync(merchant, cancellationToken))
+                continue;
+
+            return Result.Success(new MerchantRegistrationResult(
+                merchant.Id, merchant.MerchantCode, credential.ApiKey, credential.Secret, credential.SigningSecret));
+        }
+
+        return Result.Failure<MerchantRegistrationResult>(MerchantErrors.CodeAlreadyExists);
     }
 
     public async Task<Result> ActivateAsync(Guid merchantId, CancellationToken cancellationToken = default)
@@ -157,6 +202,22 @@ public sealed class MerchantRegistrar(
             return Result.Failure(MerchantErrors.NotFound);
 
         var result = merchant.Close(timeProvider.GetUtcNow());
+        if (result.IsFailure)
+            return result;
+
+        await repository.SaveChangesAsync(cancellationToken);
+        return Result.Success();
+    }
+
+    public async Task<Result> SetProfileAsync(
+        Guid merchantId, string? contactEmail, Domain.SettlementMode? settlementMode, string? remark,
+        CancellationToken cancellationToken = default)
+    {
+        var merchant = await repository.GetByIdAsync(merchantId, cancellationToken);
+        if (merchant is null)
+            return Result.Failure(MerchantErrors.NotFound);
+
+        var result = merchant.SetProfile(contactEmail, settlementMode, remark, timeProvider.GetUtcNow());
         if (result.IsFailure)
             return result;
 
@@ -264,5 +325,8 @@ public sealed class MerchantRegistrar(
         merchant.CreatedAt,
         merchant.Credentials.Any(c => c.IsActive),
         merchant.Configuration.AllowedIps,
-        merchant.SettlementWallets.Select(w => new MerchantSettlementWalletView(w.Chain.ToString(), w.Address)).ToList());
+        merchant.SettlementWallets.Select(w => new MerchantSettlementWalletView(w.Chain.ToString(), w.Address)).ToList(),
+        merchant.ContactEmail,
+        merchant.Remark,
+        merchant.SettlementMode.ToString());
 }

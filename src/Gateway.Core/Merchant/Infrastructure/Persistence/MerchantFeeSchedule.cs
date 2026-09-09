@@ -15,13 +15,21 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence;
 /// </summary>
 public sealed class MerchantFeeSchedule(MerchantDbContext context, MerchantDefaultFee defaultFee) : IMerchantFeeSchedule
 {
-    public async Task<BigInteger> QuoteDepositFeeAsync(
-        Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
-        (await LoadFeesAsync(merchantId, assetId, cancellationToken)).QuoteDepositFee(receivedAmount);
+    public async Task<FeeQuote> QuoteDepositFeeAsync(
+        Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default)
+    {
+        var schedule = await LoadFeesAsync(merchantId, assetId, cancellationToken);
+        var (fee, minimumApplied) = schedule.QuoteDepositFeeDetailed(receivedAmount);
+        return new FeeQuote(fee, schedule.DepositFeeBps, schedule.DepositFeeFixed, schedule.MinimumDepositFee, minimumApplied);
+    }
 
-    public async Task<BigInteger> QuoteWithdrawalFeeAsync(
-        Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
-        (await LoadFeesAsync(merchantId, assetId, cancellationToken)).QuoteWithdrawalFee(amount);
+    public async Task<FeeQuote> QuoteWithdrawalFeeAsync(
+        Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default)
+    {
+        var schedule = await LoadFeesAsync(merchantId, assetId, cancellationToken);
+        var (fee, minimumApplied) = schedule.QuoteWithdrawalFeeDetailed(amount);
+        return new FeeQuote(fee, schedule.WithdrawalFeeBps, schedule.WithdrawalFee, schedule.MinimumWithdrawalFee, minimumApplied);
+    }
 
     /// <summary>
     /// Prices a merchant top-up from the merchant's OWN schedule — deliberately bypassing the platform

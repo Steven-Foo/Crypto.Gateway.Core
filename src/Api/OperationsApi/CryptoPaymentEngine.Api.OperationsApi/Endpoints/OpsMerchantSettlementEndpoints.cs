@@ -23,6 +23,7 @@ public static class OpsMerchantSettlementEndpoints
         app.MapPut("/api/v1/ops/merchants/{id:guid}/settlement-wallet", SetSettlementWalletAsync).RequirePermission(OpsPermissions.Merchants.Manage);
         app.MapPut("/api/v1/ops/merchants/{id:guid}/withdrawal-cap", SetWithdrawalCapAsync).RequirePermission(OpsPermissions.Fees.Manage);
         app.MapPut("/api/v1/ops/merchants/{id:guid}/withdrawal-limits", SetWithdrawalLimitsAsync).RequirePermission(OpsPermissions.Fees.Manage);
+        app.MapPut("/api/v1/ops/merchants/{id:guid}/deposit-limits", SetDepositLimitsAsync).RequirePermission(OpsPermissions.Fees.Manage);
         app.MapPut("/api/v1/ops/merchants/{id:guid}/approval-threshold", SetApprovalThresholdAsync).RequirePermission(OpsPermissions.Fees.Manage);
     }
 
@@ -111,6 +112,34 @@ public static class OpsMerchantSettlementEndpoints
             return Bad(OpsErrorCodes.InvalidAmount, "maximum is negative or finer than the asset's precision.");
 
         var result = await policies.SetWithdrawalLimitsAsync(id, asset.AssetId, minimum, maximum, http.RequestAborted);
+        return result.IsFailure
+            ? OpsResults.Fail(result.Error!)
+            : Results.Ok(new
+            {
+                isSuccess = true,
+                data = new { merchantId = id, assetId = asset.AssetId, coin = asset.Symbol, network = chain.ToString() },
+                error = (string?)null, errorCode = (string?)null,
+            });
+    }
+
+    private static async Task<IResult> SetDepositLimitsAsync(
+        Guid id, SetDepositLimitsRequest request, IMerchantAssetPolicyService policies, IAssetCatalog assets, HttpContext http)
+    {
+        if (!Enum.TryParse<Chain>(request.Chain, ignoreCase: true, out var chain))
+            return Bad(OpsErrorCodes.InvalidChain, $"Unknown chain '{request.Chain}'.");
+
+        var asset = await assets.FindAsync(chain, request.Coin.Trim().ToUpperInvariant(), http.RequestAborted);
+        if (asset is null)
+            return Bad(OpsErrorCodes.InvalidAsset, $"Unknown coin '{request.Coin}' on {chain}.");
+
+        // null = unset (min falls back to the platform dust-floor config, max stays unbounded); 0 = an explicit
+        // "no minimum". Never truncates (§14).
+        if (!TryLimitToBase(request.Minimum, asset.Decimals, out var minimum))
+            return Bad(OpsErrorCodes.InvalidAmount, "minimum is negative or finer than the asset's precision.");
+        if (!TryLimitToBase(request.Maximum, asset.Decimals, out var maximum))
+            return Bad(OpsErrorCodes.InvalidAmount, "maximum is negative or finer than the asset's precision.");
+
+        var result = await policies.SetDepositLimitsAsync(id, asset.AssetId, minimum, maximum, http.RequestAborted);
         return result.IsFailure
             ? OpsResults.Fail(result.Error!)
             : Results.Ok(new

@@ -229,15 +229,15 @@ public sealed class DepositToLedgerTests : IAsyncLifetime
     /// <summary>A priced merchant: a flat deposit fee taken off the top.</summary>
     private sealed class FixedDepositFeeSchedule(BigInteger depositFee) : IMerchantFeeSchedule
     {
-        public Task<BigInteger> QuoteDepositFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
-            Task.FromResult(depositFee);
+        public Task<FeeQuote> QuoteDepositFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new FeeQuote(depositFee, 0, BigInteger.Zero, BigInteger.Zero, false));
 
         /// <summary>These fakes exercise paths unrelated to top-up pricing, so a top-up is quoted free.</summary>
         public Task<BigInteger> QuoteTopUpFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
             Task.FromResult(BigInteger.Zero);
 
-        public Task<BigInteger> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
-            Task.FromResult(BigInteger.Zero);
+        public Task<FeeQuote> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new FeeQuote(BigInteger.Zero, 0, BigInteger.Zero, BigInteger.Zero, false));
     }
 
     private sealed class StubWalletDirectory : IWalletDirectory
@@ -274,15 +274,15 @@ public sealed class DepositToLedgerTests : IAsyncLifetime
     /// <summary>Unpriced merchant: the deposit is credited in full (no fee split).</summary>
     private sealed class NoFeeSchedule : IMerchantFeeSchedule
     {
-        public Task<BigInteger> QuoteDepositFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
-            Task.FromResult(BigInteger.Zero);
+        public Task<FeeQuote> QuoteDepositFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new FeeQuote(BigInteger.Zero, 0, BigInteger.Zero, BigInteger.Zero, false));
 
         /// <summary>These fakes exercise paths unrelated to top-up pricing, so a top-up is quoted free.</summary>
         public Task<BigInteger> QuoteTopUpFeeAsync(Guid merchantId, Guid assetId, BigInteger receivedAmount, CancellationToken cancellationToken = default) =>
             Task.FromResult(BigInteger.Zero);
 
-        public Task<BigInteger> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
-            Task.FromResult(BigInteger.Zero);
+        public Task<FeeQuote> QuoteWithdrawalFeeAsync(Guid merchantId, Guid assetId, BigInteger amount, CancellationToken cancellationToken = default) =>
+            Task.FromResult(new FeeQuote(BigInteger.Zero, 0, BigInteger.Zero, BigInteger.Zero, false));
     }
 
     private sealed class NoOpLock : IDistributedLockFactory

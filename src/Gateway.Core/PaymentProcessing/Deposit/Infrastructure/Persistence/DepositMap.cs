@@ -28,6 +28,14 @@ public sealed class DepositMap : IEntityTypeConfiguration<DepositEntity>
         // rows were all unpriced, and an unpriced deposit is a zero-fee deposit. BigInteger → decimal(38,0).
         builder.Property(d => d.Fee).IsRequired().HasDefaultValueSql("0");
 
+        // The rate inputs that produced Fee, captured at pricing time — fee transparency (最低手续费 proof),
+        // never re-derived from the merchant's (possibly since-changed) live rate. Zero/false default for
+        // every existing row and every merchant top-up (no minimum-fee concept there).
+        builder.Property(d => d.FeeBps).IsRequired().HasDefaultValue(0);
+        builder.Property(d => d.FeeFixed).IsRequired().HasDefaultValueSql("0");
+        builder.Property(d => d.FeeMinimum).IsRequired().HasDefaultValueSql("0");
+        builder.Property(d => d.MinimumFeeApplied).IsRequired().HasDefaultValue(false);
+
         builder.Property(d => d.TransactionHash).IsUnicode(false).HasMaxLength(128).IsRequired();
         builder.Property(d => d.OutputIndex).IsRequired();
         builder.Property(d => d.BlockNumber).IsRequired();

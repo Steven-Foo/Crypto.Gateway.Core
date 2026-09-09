@@ -94,13 +94,15 @@ public sealed class WithdrawalRequestService(
                     return Result.Failure<WithdrawalResult>(WithdrawalErrors.ExceedsSettledBalance);
             }
 
-            // Pricing is per-merchant (fixed + %), resolved from the Merchant module — the source of truth,
-            // superseding the config policy's flat fee. The merchant bears this fee; the platform bears gas.
-            var fee = await feeSchedule.QuoteWithdrawalFeeAsync(command.MerchantId, command.AssetId, command.Amount, cancellationToken);
+            // Pricing is per-merchant (fixed + %, floored at the minimum-fee), resolved from the Merchant
+            // module — the source of truth, superseding the config policy's flat fee. The merchant bears this
+            // fee; the platform bears gas. The rate inputs travel with it onto the record (fee transparency).
+            var quote = await feeSchedule.QuoteWithdrawalFeeAsync(command.MerchantId, command.AssetId, command.Amount, cancellationToken);
 
             var created = WithdrawalEntity.Request(
                 command.MerchantId, command.AssetId, command.Chain, command.DestinationAddress,
-                command.Amount, fee, command.MerchantTransactionId, command.CallbackUrl, timeProvider.GetUtcNow());
+                command.Amount, quote.Fee, command.MerchantTransactionId, command.CallbackUrl, timeProvider.GetUtcNow(),
+                feeBps: quote.Bps, feeFixed: quote.Fixed, feeMinimum: quote.Minimum, minimumFeeApplied: quote.MinimumApplied);
             if (created.IsFailure)
                 return Result.Failure<WithdrawalResult>(created.Error!);
 

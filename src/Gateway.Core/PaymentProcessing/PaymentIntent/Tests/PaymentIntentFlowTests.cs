@@ -3,6 +3,7 @@ using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Events;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Application;
+using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Application.Handlers;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Domain;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infrastructure.Persistence;
@@ -104,10 +105,19 @@ public sealed class PaymentIntentFlowTests : IAsyncLifetime
     }
 
     private static PaymentIntentService Service(
-        PaymentIntentDbContext context, IDepositAddressProvisioner provisioner, IWalletDirectory directory, IWalletReservationLock? walletLock = null) =>
-        new(new PaymentIntentRepository(context), directory, walletLock ?? new FakeWalletReservationLock(), provisioner,
+        PaymentIntentDbContext context, IDepositAddressProvisioner provisioner, IWalletDirectory directory, IWalletReservationLock? walletLock = null)
+    {
+        var depositLimits = Substitute.For<IMerchantDepositLimits>();
+        depositLimits.GetAsync(Arg.Any<Guid>(), Arg.Any<Guid>(), Arg.Any<CancellationToken>()).Returns(MerchantDepositLimits.None);
+
+        var depositFloor = Substitute.For<IPlatformDepositFloor>();
+        depositFloor.For(Arg.Any<Chain>()).Returns(BigInteger.Zero);
+
+        return new(new PaymentIntentRepository(context), directory, walletLock ?? new FakeWalletReservationLock(), provisioner,
+            depositLimits, depositFloor,
             Options.Create(new PaymentIntentOptions { ExpiryMinutes = 30 }),
             TimeProvider.System, NullLogger<PaymentIntentService>.Instance);
+    }
 
     private static PaymentIntentMatchHandler Handler(PaymentIntentDbContext context, IWalletReservationLock? walletLock = null) =>
         new(new PaymentIntentRepository(context), walletLock ?? new FakeWalletReservationLock(),

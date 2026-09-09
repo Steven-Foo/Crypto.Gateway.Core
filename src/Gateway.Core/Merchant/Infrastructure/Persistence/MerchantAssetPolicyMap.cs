@@ -18,12 +18,22 @@ public sealed class MerchantAssetPolicyMap : IEntityTypeConfiguration<MerchantAs
         builder.Property(p => p.MinimumWithdrawal); // null = unset (fall back to the platform config minimum)
         builder.Property(p => p.MaximumWithdrawal); // null = unset (fall back to the platform config maximum)
 
+        // Deposit (payin) min/max — null = unset (min falls back to the platform dust-floor config, max stays
+        // unbounded; there is no platform-wide max config today).
+        builder.Property(p => p.MinimumDeposit);
+        builder.Property(p => p.MaximumDeposit);
+
         // Pricing: fixed base-unit components + basis-point percentages (§14). Defaults keep existing
         // rows (and unpriced merchants) at zero fee.
         builder.Property(p => p.DepositFeeFixed).IsRequired().HasDefaultValueSql("0"); // BigInteger → decimal(38,0)
         builder.Property(p => p.DepositFeeBps).IsRequired().HasDefaultValue(0);
         builder.Property(p => p.WithdrawalFee).IsRequired();
         builder.Property(p => p.WithdrawalFeeBps).IsRequired().HasDefaultValue(0);
+
+        // Minimum-fee floors (最低手续费) — max(fixed + amount×bps/10000, minimum). Zero = no floor, so every
+        // existing row keeps behaving exactly as before.
+        builder.Property(p => p.MinimumDepositFee).IsRequired().HasDefaultValueSql("0");
+        builder.Property(p => p.MinimumWithdrawalFee).IsRequired().HasDefaultValueSql("0");
 
         // Merchant top-up pricing. Defaults to zero and, unlike deposit/withdrawal, never falls back to the
         // platform default fee — a merchant is not charged to fund its own float unless staff say so.
@@ -50,7 +60,7 @@ public sealed class MerchantAssetPolicyMap : IEntityTypeConfiguration<MerchantAs
         {
             t.HasCheckConstraint(
                 "CK_MerchantAssetPolicy_NonNegative",
-                "[SweepThreshold] >= 0 AND [WithdrawalFee] >= 0 AND [DepositFeeFixed] >= 0 AND [TopUpFeeFixed] >= 0 AND ([MinimumWithdrawal] IS NULL OR [MinimumWithdrawal] >= 0) AND ([MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= 0)");
+                "[SweepThreshold] >= 0 AND [WithdrawalFee] >= 0 AND [DepositFeeFixed] >= 0 AND [TopUpFeeFixed] >= 0 AND [MinimumDepositFee] >= 0 AND [MinimumWithdrawalFee] >= 0 AND ([MinimumWithdrawal] IS NULL OR [MinimumWithdrawal] >= 0) AND ([MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= 0) AND ([MinimumDeposit] IS NULL OR [MinimumDeposit] >= 0) AND ([MaximumDeposit] IS NULL OR [MaximumDeposit] >= 0)");
 
             // Every fee is deducted from what arrives, so all three rates share the same 0-100% bound.
             t.HasCheckConstraint(
@@ -60,6 +70,10 @@ public sealed class MerchantAssetPolicyMap : IEntityTypeConfiguration<MerchantAs
             t.HasCheckConstraint(
                 "CK_MerchantAssetPolicy_WithdrawalRange",
                 "[MaximumWithdrawal] IS NULL OR [MinimumWithdrawal] IS NULL OR [MaximumWithdrawal] >= [MinimumWithdrawal]");
+
+            t.HasCheckConstraint(
+                "CK_MerchantAssetPolicy_DepositRange",
+                "[MaximumDeposit] IS NULL OR [MinimumDeposit] IS NULL OR [MaximumDeposit] >= [MinimumDeposit]");
 
             t.HasCheckConstraint(
                 "CK_MerchantAssetPolicy_MerchantWithdrawalCap",

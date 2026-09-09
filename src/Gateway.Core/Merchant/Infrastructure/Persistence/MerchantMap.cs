@@ -17,6 +17,9 @@ public sealed class MerchantMap : IEntityTypeConfiguration<Domain.Merchant>
         builder.Property(m => m.MerchantCode).IsUnicode(false).HasMaxLength(Domain.Merchant.MaxCodeLength).IsRequired();
         builder.Property(m => m.Name).HasMaxLength(256).IsRequired();
         builder.Property(m => m.CallbackUrl).HasMaxLength(512);
+        builder.Property(m => m.ContactEmail).HasMaxLength(256);
+        builder.Property(m => m.Remark).HasMaxLength(1024);
+        builder.Property(m => m.SettlementMode).HasConversion<string>().HasMaxLength(16).IsRequired().HasDefaultValueSql("'Manual'");
         builder.Property(m => m.Status).HasConversion<string>().HasMaxLength(16).IsRequired();
         builder.Property(m => m.SettlementDelayDays).HasDefaultValue(0).IsRequired();
         builder.Property<byte[]>("RowVersion").IsRowVersion();
