@@ -31,6 +31,7 @@ public static class OpsMerchantEndpoints
         app.MapGet("/api/v1/ops/merchants", ListMerchantsAsync).RequirePermission(OpsPermissions.Merchants.View);
         app.MapGet("/api/v1/ops/merchants/{id:guid}", GetMerchantAsync).RequirePermission(OpsPermissions.Merchants.View);
         app.MapGet("/api/v1/ops/merchants/{id:guid}/allowed-ips", GetAllowedIpsAsync).RequirePermission(OpsPermissions.Merchants.View);
+        app.MapGet("/api/v1/ops/merchants/next-code", GetNextCodeAsync).RequirePermission(OpsPermissions.Merchants.View);
 
         // Mutations — ops.merchants.manage (key rotation gets its own, more sensitive code).
         app.MapPost("/api/v1/ops/merchants", CreateMerchantAsync).RequirePermission(OpsPermissions.Merchants.Manage);
@@ -155,6 +156,18 @@ public static class OpsMerchantEndpoints
             },
             error = (string?)null, errorCode = (string?)null,
         });
+    }
+
+    /// <summary>
+    /// Preview of the code <c>POST .../merchants</c> will most likely mint next (e.g. "ME00042") — for the
+    /// create-merchant form to display before submission. NOT a reservation: a concurrent create can still
+    /// claim this exact number first, in which case the real generator silently rolls to the next one, same
+    /// as it always has. Refresh this right before showing the create form, not once and cached.
+    /// </summary>
+    private static async Task<IResult> GetNextCodeAsync(IMerchantRegistrar registrar, HttpContext http)
+    {
+        var nextCode = await registrar.PreviewNextMerchantCodeAsync(http.RequestAborted);
+        return Results.Ok(new { isSuccess = true, data = new { nextMerchantCode = nextCode }, error = (string?)null, errorCode = (string?)null });
     }
 
     private static async Task<IResult> GetAllowedIpsAsync(Guid id, IMerchantRegistrar registrar, HttpContext http)

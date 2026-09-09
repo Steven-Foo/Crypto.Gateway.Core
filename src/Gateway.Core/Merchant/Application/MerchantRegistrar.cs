@@ -93,6 +93,14 @@ public interface IMerchantRegistrar
 
     Task<Result<MerchantAdminView>> GetAsync(Guid merchantId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// The merchant code <see cref="RegisterAsync"/> will most likely mint next (e.g. "ME00042") — a preview
+    /// for the create-merchant UI to display, computed the same way the real generator does. This is NOT a
+    /// reservation: a concurrent registration can still claim this exact number first, in which case
+    /// <see cref="RegisterAsync"/>'s own collision retry silently rolls to the next one, same as always.
+    /// </summary>
+    Task<string> PreviewNextMerchantCodeAsync(CancellationToken cancellationToken = default);
+
     Task<(IReadOnlyList<MerchantAdminView> Items, int TotalCount)> ListAsync(
         int page, int pageSize, CancellationToken cancellationToken = default);
 }
@@ -165,6 +173,12 @@ public sealed class MerchantRegistrar(
         }
 
         return Result.Failure<MerchantRegistrationResult>(MerchantErrors.CodeAlreadyExists);
+    }
+
+    public async Task<string> PreviewNextMerchantCodeAsync(CancellationToken cancellationToken = default)
+    {
+        var sequence = await repository.GetNextMerchantCodeSequenceAsync(cancellationToken);
+        return $"ME{sequence:D5}";
     }
 
     public async Task<Result> ActivateAsync(Guid merchantId, CancellationToken cancellationToken = default)

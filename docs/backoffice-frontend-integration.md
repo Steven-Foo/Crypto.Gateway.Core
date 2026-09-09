@@ -364,6 +364,20 @@ that needs to round-trip exactly, since `balance` can lose precision once cast t
 { "merchantId": "guid", "allowedIps": ["1.2.3.4"] }
 ```
 
+### `GET /api/v1/ops/merchants/next-code` — `ops.merchants.view`
+Preview of the code `POST .../merchants` will most likely mint next (`ME00001`, `ME00002`, ... — one past the
+highest existing `ME#####`-shaped code; a hand-picked legacy/test code that doesn't match that exact shape is
+ignored and can never perturb it). For the create-merchant form to show before submission.
+
+Response 200:
+```json
+{ "isSuccess": true, "data": { "nextMerchantCode": "ME00042" }, "error": null }
+```
+**Not a reservation.** If two staff open the create form at the same moment, both could see the same preview
+— only one will actually get it; the real arbiter is the unique-code retry already built into creation, which
+silently rolls to the next number on a collision. Re-fetch this right before showing the form each time,
+don't cache it.
+
 ### `POST /api/v1/ops/merchants` — `ops.merchants.manage`
 Creates **and auto-activates** the merchant (no separate activation step), and seeds **exactly one**
 deposit wallet (not a pool — every wallet after the first is minted on-demand as the merchant needs one).
