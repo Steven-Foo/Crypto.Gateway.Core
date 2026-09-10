@@ -1,0 +1,29 @@
+{
+  "__comment": "DEV, PER-DEVELOPER, GIT-IGNORED. Highest config precedence for a local run. Points the host at LOCAL backing services (LocalDB) and holds your own secrets (TronGrid key, xpub). Never committed.",
+
+  "Db": {
+    "ConnectionString": "Server=(localdb)\\MSSQLLocalDB;Database=CryptoPaymentEngine;Trusted_Connection=True;TrustServerCertificate=True"
+  },
+
+  "Chains": {
+    "Tron": {
+      "__comment": "Set Live=true and paste your OWN fresh TronGrid API key to detect REAL mainnet deposits. NEVER the leaked 3a26aa49... key. Live=false keeps the deterministic in-memory chain source (no network).",
+      "Live": false,
+      "RpcBaseUrl": "https://api.trongrid.io",
+      "ApiKey": "",
+      "Confirmations": 19
+    }
+  },
+
+  "KeyManagement": {
+    "__comment": "REQUIRED FOR REAL MAINNET FUNDS: paste your own TRON account xpub at m/44'/195'/0'/0 so deposit addresses derive from YOUR wallet (private + recoverable in a normal wallet). If left empty, addresses derive from a throwaway seed whose salt is PUBLIC in this repo — fine for in-memory/testnet, but do NOT send real funds to it.",
+    "DevMerchantXpub": ""
+  },
+
+  "Merchant": {
+    "DevSeed": {
+      "__comment": "The dev test merchant's callback points at the in-host dev sink so you can SEE the callback fire when a deposit is detected.",
+      "CallbackUrl": "http://localhost:51079/dev/callbacks"
+    }
+  }
+}

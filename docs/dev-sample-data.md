@@ -30,7 +30,22 @@ Two consequences follow directly from that choice, and neither is a defect:
   deposit appear is to actually send USDT. The seeder detects this and skips with a message.
 - **It is not instant.** It waits for the same workers a real deposit waits for — typically 30–60 seconds.
 
-It is **idempotent**: if `DEMOACME` already exists it stops immediately. To re-seed, drop the database.
+It is **idempotent**, and the guard is the merchant **name** `Acme Payments`, not a merchant code —
+codes are backend-minted (`ME00001`, `ME00002`, …), so the seeder cannot choose one to look for. If
+that merchant exists the seeder stops immediately. To re-seed, drop the database.
+
+> ⚠️ **A half-finished run still trips the guard.** The merchants are created first, so if the run
+> is interrupted — the host stopped mid-way, or a worker it depends on was failing — the merchants
+> survive and every later start silently skips seeding. You are then left with a portfolio that
+> looks populated but is missing whatever came after the interruption: unmatched invoices, no
+> credited deposits, and (because terms are applied last, §4) no frozen merchant and no T+N settlement
+> period. The fix is the same as re-seeding: drop the database and run it again. Note the scripted
+> chain blocks live only in the in-memory chain source, so they do **not** survive a restart —
+> resuming an interrupted run is not possible, only redoing it.
+>
+> The most likely cause of an interrupted run is a database that is behind the migrations, which
+> makes the deposit-confirmation and withdrawal workers fail on `Invalid column name '…'` while the
+> seeder waits for balances that will never arrive. See `db/README.md` §1 before re-seeding.
 
 ---
 
@@ -81,12 +96,17 @@ sqlcmd -S localhost,1433 -U sa -P "Cpe_Dev_Passw0rd!" -C -Q "ALTER DATABASE Cryp
 
 ### Merchants
 
-| Code | Terms | Why it exists |
+| Merchant | Terms | Why it exists |
 |---|---|---|
 | `DEVMERCHANT` | T+0, active | The pre-existing fixed-credential merchant for signed API round-trips |
-| `DEMOACME` | T+0, active, 1.00% deposit / 0.50% withdrawal | The healthy baseline |
-| `DEMOGLOBE` | **T+1**, active, 1.50% / 0.75%, 50% cash-out cap | Available ≠ settled balance; a capped cash-out |
-| `DEMOFROST` | T+2, **Frozen** | A non-Active tenant, *with* history |
+| `Acme Payments` | T+0, active, 1.00% deposit / 0.50% withdrawal | The healthy baseline |
+| `Globe Commerce` | **T+1**, active, 1.50% / 0.75%, 50% cash-out cap | Available ≠ settled balance; a capped cash-out |
+| `Frostbite Retail (frozen)` | T+2, **Frozen** | A non-Active tenant, *with* history |
+
+The three demo merchants are listed by **name** because their `merchantCode` is minted by the backend
+(`ME00001`, `ME00002`, `ME00003`) and depends on how many merchants the database has already issued —
+so do not hard-code those codes in a test or a fixture. `DEVMERCHANT` keeps its fixed code because it
+is seeded separately, by `Merchant:DevSeed`.
 
 **The frozen and T+N merchants exist on purpose.** A UI that has only ever rendered one healthy tenant tends
 to get the unhealthy ones wrong — a frozen merchant whose buttons all fail with no explanation, or a
@@ -134,8 +154,8 @@ three demo merchants with an **empty payout list**, which is a poor demo. Applyi
 merchant a full history *and* its term, which is also the more realistic shape: terms change on established
 merchants.
 
-**Nothing is faked by this.** Every gate is still live: a payout submitted against `DEMOGLOBE` from the portal
-right now is still correctly refused as `withdrawal.exceeds_settled_balance`, and `DEMOFROST` still refuses
+**Nothing is faked by this.** Every gate is still live: a payout submitted against `Globe Commerce` from the portal
+right now is still correctly refused as `withdrawal.exceeds_settled_balance`, and `Frostbite Retail (frozen)` still refuses
 everything. Only their past is populated.
 
 ---
@@ -149,9 +169,9 @@ everything. Only their past is populated.
 | Username | Merchant | Password |
 |---|---|---|
 | `merchant001` | `DEVMERCHANT` | `Merchant@2026` |
-| `acme001` | `DEMOACME` | `Merchant@2026` |
-| `globe001` | `DEMOGLOBE` | `Merchant@2026` |
-| `frost001` | `DEMOFROST` | `Merchant@2026` |
+| `acme001` | `Acme Payments` | `Merchant@2026` |
+| `globe001` | `Globe Commerce` | `Merchant@2026` |
+| `frost001` | `Frostbite Retail (frozen)` | `Merchant@2026` |
 
 **Sign in as more than one.** A single-tenant dev environment cannot show you a cross-tenant leak, and tenant
 isolation is the single most important property of the portal API.

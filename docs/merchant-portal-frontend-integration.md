@@ -192,7 +192,7 @@ silently losing a digit of someone's money is worse than an error message.
 
 ### `GET /api/v1/portal/profile`
 ```json
-{ "merchantId": "...", "merchantCode": "DEMOACME", "name": "Acme Payments",
+{ "merchantId": "...", "merchantCode": "ME00001", "name": "Acme Payments",
   "callbackUrl": "...", "canTransact": true, "settlementDelayDays": 0,
   "requiresPayoutApproval": false }
 ```
@@ -585,9 +585,9 @@ Portal logins seeded for those merchants (dev only, never real credentials):
 | Username | Merchant | Password |
 |---|---|---|
 | `merchant001` | `DEVMERCHANT` | `Merchant@2026` |
-| `acme001` | `DEMOACME` (T+0, active) | `Merchant@2026` |
-| `globe001` | `DEMOGLOBE` (T+1, 50% cash-out cap) | `Merchant@2026` |
-| `frost001` | `DEMOFROST` (**frozen**) | `Merchant@2026` |
+| `acme001` | `Acme Payments` (T+0, active) | `Merchant@2026` |
+| `globe001` | `Globe Commerce` (T+1, 50% cash-out cap) | `Merchant@2026` |
+| `frost001` | `Frostbite Retail` (**frozen**) | `Merchant@2026` |
 
 **Sign in as more than one.** A single-tenant dev environment cannot show you a cross-tenant leak, and tenant
 isolation is the one defect in this API that would matter most. `frost001` is the fastest way to check that

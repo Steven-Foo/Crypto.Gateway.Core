@@ -112,6 +112,51 @@ on regeneration. After regenerating that one file, re-append the block from git 
 > carrying a **filtered index** (`UX_PaymentIntent_LiveWallet`, `IX_Deposit_Chain_Status`,
 > `IX_HdWallet_MerchantId_Chain_Purpose`). Re-add it after regenerating.
 
+### Your own database drifting behind the migrations (a different trap)
+
+The drift above is *scripts vs migrations*. This one is *your database vs migrations*, and it bites
+after a `git pull` or a merge that brings in someone else's migration: the code is current, `db/sql`
+is current, the migration file is sitting on disk — and your local database simply never had it
+applied. The app then dies at runtime on `Invalid column name '…'`, exactly like the script drift,
+which is why it is easy to misdiagnose as the other problem.
+
+**`dotnet ef migrations has-pending-model-changes` does NOT catch this.** It compares the *model* to
+the *snapshot*; it never opens the database. A repository can report "No changes" for every context
+while your database is several migrations behind. The only authority is the
+`__EFMigrationsHistory` table in each module's schema.
+
+This has already happened once: `AddDepositFeeMinimumSnapshot` and `AddWithdrawalFeeMinimumSnapshot`
+arrived in a merge, went unapplied locally, and every deposit-confirmation and withdrawal pass then
+failed on `Invalid column name 'FeeBps'`. The workers logged the error and retried forever, so the
+back-office simply showed stale data rather than an error — the symptom was a screen that would not
+fill in, not a crash.
+
+Compare disk against the database directly:
+
+```bash
+# every migration on disk, across all modules
+find src -path '*Migrations/*.cs' ! -name '*.Designer.cs' ! -name '*DbContextModelSnapshot.cs' \
+  -exec basename {} .cs \; | grep -E '^[0-9]{14}_' | sort -u > /tmp/disk.txt
+
+# every migration this database has actually applied, across all module schemas
+sqlcmd -S "(localdb)\MSSQLLocalDB" -d CryptoPaymentEngine -h -1 -W -Q "SET NOCOUNT ON;
+  DECLARE @s NVARCHAR(MAX)=N'';
+  SELECT @s=@s+N'SELECT MigrationId FROM ['+s.name+N'].[__EFMigrationsHistory] UNION ALL '
+  FROM sys.tables t JOIN sys.schemas s ON s.schema_id=t.schema_id
+  WHERE t.name='__EFMigrationsHistory';
+  SET @s=LEFT(@s,LEN(@s)-10); EXEC sp_executesql @s;" \
+  | grep -E '^[0-9]{14}_' | sort -u > /tmp/db.txt
+
+comm -23 /tmp/disk.txt /tmp/db.txt   # on disk but NOT applied — run Setup-LocalEnv.ps1
+```
+
+> ⚠️ Filter migration filenames on `Designer` and `DbContextModelSnapshot`, **not** on `Snapshot`.
+> A migration may legitimately have "Snapshot" in its own name (`AddDepositFeeMinimumSnapshot`), and
+> a `*Snapshot*` glob silently drops it from the comparison — producing a clean "no drift" result
+> that is wrong in exactly the case you are checking for.
+
+Re-running `tools/dev/Setup-LocalEnv.ps1` applies whatever is outstanding, for every module.
+
 ### Step 3 — lock down the ledger (after the ledger migration exists)
 
 The ledger is append-only. Enforce it in the database, not just the app — see the commented
