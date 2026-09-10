@@ -49,5 +49,6 @@ public sealed class MerchantDirectory(MerchantDbContext context) : IMerchantDire
             m.Name,
             m.CallbackUrl,
             m.Status == MerchantStatus.Active,
-            m.SettlementDelayDays));
+            m.SettlementDelayDays,
+            m.RequiresPayoutApproval));
 }

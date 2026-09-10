@@ -40,6 +40,20 @@ public static class PortalPermissions
         public const string Approve = "portal.payouts.approve";
     }
 
+    public static class Activity
+    {
+        /// <summary>
+        /// Read this merchant's own administrative activity log — who changed roles, created or disabled
+        /// accounts, rotated the API credential, edited the IP allowlist, or approved a payout.
+        ///
+        /// <para>Its own code because the log is itself sensitive: it names every account and shows when
+        /// security controls were changed, which is reconnaissance for anyone who should not have it. It reads
+        /// ONLY this tenant's entries — platform-staff actions and other merchants' are excluded structurally,
+        /// not by filter (see <c>AuditScope</c>).</para>
+        /// </summary>
+        public const string View = "portal.activity.view";
+    }
+
     public static class CashOut
     {
         /// <summary>Initiate a merchant earnings cash-out. Lower risk than a payout: the destination is the
@@ -93,6 +107,7 @@ public static class PortalPermissions
         ApiCredentials.View, ApiCredentials.Manage,
         Accounts.View, Accounts.Manage,
         Roles.View, Roles.Manage,
+        Activity.View,
     ];
 
     /// <summary>True if every supplied code is either the wildcard or a known portal code. The wildcard is

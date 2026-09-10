@@ -128,3 +128,32 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [audit].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260903055356_AddAuditMerchantTenant'
+)
+BEGIN
+    ALTER TABLE [audit].[AuditEntry] ADD [MerchantId] uniqueidentifier NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [audit].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260903055356_AddAuditMerchantTenant'
+)
+BEGIN
+    CREATE INDEX [IX_AuditEntry_MerchantId_CreatedAt] ON [audit].[AuditEntry] ([MerchantId], [CreatedAt]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [audit].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260903055356_AddAuditMerchantTenant'
+)
+BEGIN
+    INSERT INTO [audit].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260903055356_AddAuditMerchantTenant', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

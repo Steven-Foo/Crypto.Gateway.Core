@@ -49,12 +49,22 @@ public static class OpsMerchantFeeEndpoints
                 withdrawalFeeMinimum = AmountConversion.ToDisplay(BigInteger.Parse(p.MinimumWithdrawalFee), decimals),
                 topUpFeeFixed = AmountConversion.ToDisplay(BigInteger.Parse(p.TopUpFeeFixed), decimals),
                 topUpFeePercent = OpsPercent.ToPercent(p.TopUpFeeBps),
+
+                // The policies the deposit-limits / withdrawal-limits / withdrawal-cap / approval-threshold
+                // PUTs write. They were write-only until now: staff could set them and then had no screen
+                // anywhere showing what a merchant's limits actually are, so every save was a blind overwrite
+                // of an invisible value.
+                //
+                // NULL IS NOT ZERO here, and the distinction is load-bearing: null means "not configured, so
+                // the platform config default applies", while 0 is a real configured value (a 0 threshold
+                // means everything needs approval). Do not coalesce it.
                 minimumDeposit = p.MinimumDeposit is { } minDep ? AmountConversion.ToDisplay(BigInteger.Parse(minDep), decimals) : (decimal?)null,
                 maximumDeposit = p.MaximumDeposit is { } maxDep ? AmountConversion.ToDisplay(BigInteger.Parse(maxDep), decimals) : (decimal?)null,
                 minimumWithdrawal = p.MinimumWithdrawal is { } minWd ? AmountConversion.ToDisplay(BigInteger.Parse(minWd), decimals) : (decimal?)null,
                 maximumWithdrawal = p.MaximumWithdrawal is { } maxWd ? AmountConversion.ToDisplay(BigInteger.Parse(maxWd), decimals) : (decimal?)null,
                 merchantWithdrawalCapFlat = p.MerchantWithdrawalFlatCap is { } capFlat ? AmountConversion.ToDisplay(BigInteger.Parse(capFlat), decimals) : (decimal?)null,
                 merchantWithdrawalCapPercent = OpsPercent.ToPercent(p.MerchantWithdrawalPercentBps),
+                approvalThreshold = p.ApprovalThreshold is { } thr ? AmountConversion.ToDisplay(BigInteger.Parse(thr), decimals) : (decimal?)null,
             });
         }
 
@@ -72,6 +82,9 @@ public static class OpsMerchantFeeEndpoints
         if (asset is null)
             return Bad(OpsErrorCodes.InvalidAsset, $"Unknown coin '{request.Coin}' on {chain}.");
 
+        // null stays null all the way to the service, where it means "leave the stored value alone" — see
+        // SetMerchantFeeRequest. Only a supplied value is converted and validated; percent → bps happens here
+        // and nowhere else, so bps never appears above this boundary.
         if (!OpsPercent.TryToBps(request.DepositFeePercent, out var depositBps))
             return Bad(OpsErrorCodes.InvalidAmount, "depositFeePercent must be non-negative, at most 100%, and at most 2 decimal places.");
         if (!OpsPercent.TryToBps(request.WithdrawalFeePercent, out var withdrawalBps))
@@ -101,23 +114,54 @@ public static class OpsMerchantFeeEndpoints
         var actor = AuditActor.From(http);
         await audit.LogAsync(new LogAuditEntryCommand(
             actor.StaffUserId, actor.Username, "merchant.fee_updated", "Merchant", id.ToString(),
-            $"{asset.Symbol}: deposit={request.DepositFeeFixed}+{request.DepositFeePercent}%(min {request.DepositFeeMinimum}), " +
-            $"withdrawal={request.WithdrawalFeeFixed}+{request.WithdrawalFeePercent}%(min {request.WithdrawalFeeMinimum}), " +
-            $"topup={request.TopUpFeeFixed}+{request.TopUpFeePercent}%",
+            // "unchanged" for an omitted component, so the trail records what the operator actually asked for
+            // rather than implying they set a zero they never sent.
+            $"{asset.Symbol}: deposit={Describe(request.DepositFeeFixed, request.DepositFeePercent, request.DepositFeeMinimum)}, "
+            + $"withdrawal={Describe(request.WithdrawalFeeFixed, request.WithdrawalFeePercent, request.WithdrawalFeeMinimum)}, "
+            + $"topup={Describe(request.TopUpFeeFixed, request.TopUpFeePercent, minimum: null)}",
             actor.IpAddress), http.RequestAborted);
+
+        // One read back, serving two purposes: the disproportionate-minimum warning below, and returning the
+        // RESULTING pricing rather than an echo of the asset that was addressed. A save that changed something
+        // the caller did not intend used to be invisible in the response; now the state after the write comes
+        // back, so a client can see exactly what it left behind (§10.1 — the screen is a view of authoritative
+        // state, not of what it hoped it sent).
+        var after = await policies.ListAsync(id, http.RequestAborted);
+        var saved = after.IsSuccess ? after.Value.SingleOrDefault(p => p.AssetId == asset.AssetId) : null;
 
         // Soft warning only — never blocks the save. Flags a minimum fee that looks disproportionate next to
         // this merchant's OWN configured minimum transaction amount (best-effort: doesn't chase the platform
         // config fallback when the merchant hasn't set one, since that's a per-chain, not per-merchant, number).
-        var policy = (await policies.ListAsync(id, http.RequestAborted)).Value.SingleOrDefault(p => p.AssetId == asset.AssetId);
+        // Compared against the STORED minimums, so an omitted ("unchanged") minimum is still evaluated.
         var warnings = new List<string>();
-        AddMinimumFeeWarning(warnings, "deposit", policy?.MinimumDeposit, depositMinimum, asset.Decimals);
-        AddMinimumFeeWarning(warnings, "withdrawal", policy?.MinimumWithdrawal, withdrawalMinimum, asset.Decimals);
+        if (saved is not null)
+        {
+            AddMinimumFeeWarning(warnings, "deposit", saved.MinimumDeposit, ParseBase(saved.MinimumDepositFee), asset.Decimals);
+            AddMinimumFeeWarning(warnings, "withdrawal", saved.MinimumWithdrawal, ParseBase(saved.MinimumWithdrawalFee), asset.Decimals);
+        }
 
         return Results.Ok(new
         {
             isSuccess = true,
-            data = new { merchantId = id, assetId = asset.AssetId, coin = asset.Symbol, network = chain.ToString() },
+            data = new
+            {
+                merchantId = id,
+                assetId = asset.AssetId,
+                coin = asset.Symbol,
+                network = chain.ToString(),
+                // Percent on the wire, never bps (§ the host's standardization rule).
+                fees = saved is null ? null : new
+                {
+                    depositFeeFixed = AmountConversion.ToDisplay(BigInteger.Parse(saved.DepositFeeFixed), asset.Decimals),
+                    depositFeePercent = OpsPercent.ToPercent(saved.DepositFeeBps),
+                    depositFeeMinimum = AmountConversion.ToDisplay(BigInteger.Parse(saved.MinimumDepositFee), asset.Decimals),
+                    withdrawalFeeFixed = AmountConversion.ToDisplay(BigInteger.Parse(saved.WithdrawalFee), asset.Decimals),
+                    withdrawalFeePercent = OpsPercent.ToPercent(saved.WithdrawalFeeBps),
+                    withdrawalFeeMinimum = AmountConversion.ToDisplay(BigInteger.Parse(saved.MinimumWithdrawalFee), asset.Decimals),
+                    topUpFeeFixed = AmountConversion.ToDisplay(BigInteger.Parse(saved.TopUpFeeFixed), asset.Decimals),
+                    topUpFeePercent = OpsPercent.ToPercent(saved.TopUpFeeBps),
+                },
+            },
             warnings,
             error = (string?)null, errorCode = (string?)null,
         });
@@ -146,17 +190,50 @@ public static class OpsMerchantFeeEndpoints
         }
     }
 
-    /// <summary>The fee fixed component: like <c>AmountConversion.TryToBaseUnits</c> but a zero is valid
-    /// (a pure-percentage fee). Still refuses negatives and over-precision — never truncates money (§14).</summary>
-    private static bool TryFeeToBase(decimal display, int decimals, out BigInteger baseUnits)
+    /// <summary>Renders one requested schedule for the audit trail, distinguishing an omitted component
+    /// ("unchanged") from a supplied zero. Percent, not bps — the trail should read the way the operator
+    /// typed it. <paramref name="minimum"/> is null for top-up, which has no minimum-fee concept.</summary>
+    private static string Describe(decimal? fixedFee, decimal? percent, decimal? minimum)
     {
+        if (fixedFee is null && percent is null && minimum is null)
+            return "unchanged";
+
+        var rendered = $"{Part(fixedFee)}+{Part(percent)}%";
+        return minimum is null ? rendered : $"{rendered}(min {Part(minimum)})";
+
+        static string Part(decimal? value) => value?.ToString(CultureInfo.InvariantCulture) ?? "unchanged";
+    }
+
+    /// <summary>An exact base-unit integer string from the policy view → <see cref="BigInteger"/>. The view's
+    /// fee components are non-null strings, so an unparseable value means corrupt state, not "unset" — it
+    /// yields zero, which only suppresses a soft warning and can never alter money.</summary>
+    private static BigInteger ParseBase(string baseUnits) =>
+        BigInteger.TryParse(baseUnits, NumberStyles.Integer, CultureInfo.InvariantCulture, out var value)
+            ? value
+            : BigInteger.Zero;
+
+    /// <summary>The fee fixed component: like <c>AmountConversion.TryToBaseUnits</c> but a zero is valid
+    /// (a pure-percentage fee). Still refuses negatives and over-precision — never truncates money (§14).
+    /// <para>A null input yields a null result and succeeds: the caller omitted the field, which means
+    /// "unchanged", not "zero". Collapsing the two here would reintroduce the destructive-omission bug this
+    /// signature exists to prevent.</para></summary>
+    private static bool TryFeeToBase(decimal? display, int decimals, out BigInteger? baseUnits)
+    {
+        if (display is null)
+        {
+            baseUnits = null;
+            return true;
+        }
+
         if (display == 0m)
         {
             baseUnits = BigInteger.Zero;
             return true;
         }
 
-        return AmountConversion.TryToBaseUnits(display, decimals, out baseUnits);
+        var ok = AmountConversion.TryToBaseUnits(display.Value, decimals, out var converted);
+        baseUnits = ok ? converted : null;
+        return ok;
     }
 
     private static IResult Bad(string errorCode, string message) => OpsResults.Bad(errorCode, message);

@@ -9,6 +9,7 @@ using CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure;
+using CryptoPaymentEngine.Gateway.Core.Platform.Audit.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Infrastructure;
 using CryptoPaymentEngine.Infrastructure.Locking;
 using Microsoft.OpenApi;
@@ -57,6 +58,11 @@ builder.Services.AddSwaggerGen(o =>
 // The in-memory chain/signer below exist only to satisfy Withdrawal's HotWalletAllocator DI graph: this host
 // never signs or broadcasts (the money host's workers do).
 builder.Services.AddMerchantIdentityModule(config, dbConnection);
+
+// Merchant-admin action logging. The SAME store the Back Office writes to — entries are separated by the
+// tenant stamped on each row, not by living in different tables, so one query vocabulary covers both
+// audiences and a merchant can never read a staff entry (see AuditScope).
+builder.Services.AddAuditModule(dbConnection);
 builder.Services.AddMerchantModule(config, dbConnection);
 builder.Services.AddKeyManagementModule(dbConnection);
 builder.Services.AddBlockchainAddressEncoding();
@@ -110,5 +116,6 @@ app.MapPortalAccountApi();
 app.MapPortalCredentialApi();
 app.MapPortalMoneyOutApi();
 app.MapPortalTopUpApi();
+app.MapPortalActivityApi();
 
 app.Run();

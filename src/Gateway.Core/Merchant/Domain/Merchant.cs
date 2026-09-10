@@ -35,6 +35,7 @@ public sealed partial class Merchant : Entity<Guid>
         SettlementMode = settlementMode;
         Status = MerchantStatus.Active;
         SettlementDelayDays = 0;
+        RequiresPayoutApproval = false;
         CreatedAt = createdAt;
         UpdatedAt = createdAt;
         Configuration = MerchantConfiguration.CreateDefault(id, createdAt);
@@ -65,6 +66,22 @@ public sealed partial class Merchant : Entity<Guid>
     /// merchant's earnings cash-out and the user payouts it sends — only settled funds may leave. The
     /// maturity math lives in the Ledger's settled-balance query; this is just the admin-set policy value.</summary>
     public int SettlementDelayDays { get; private set; }
+
+    /// <summary>
+    /// Whether this merchant's user payouts must be signed off by the merchant's OWN approver before the
+    /// platform evaluates them (two-party approval). <b>Defaults to false</b>, which is what keeps every
+    /// existing HMAC integration working — turning it on for everyone would freeze payouts awaiting an
+    /// approval nobody knows to give.
+    ///
+    /// <para>This is merchant POLICY, not a property of how the request arrived. The same decision used to be
+    /// encoded by which host was called — the portal hardcoded "yes", the HMAC API "no" — so a merchant
+    /// integrating server-to-server could never reach the approval queue at all, whatever it wanted, and that
+    /// queue was structurally empty rather than merely sparse.</para>
+    ///
+    /// <para>It cannot be used to escape the PLATFORM approval threshold: that is re-resolved server-side at
+    /// merchant-approval time, so a merchant still cannot approve its way past a payout needing staff.</para>
+    /// </summary>
+    public bool RequiresPayoutApproval { get; private set; }
 
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
@@ -158,6 +175,19 @@ public sealed partial class Merchant : Entity<Guid>
             return Result.Failure(MerchantErrors.SettlementDelayInvalid);
 
         SettlementDelayDays = days;
+        UpdatedAt = now;
+        return Result.Success();
+    }
+
+    /// <summary>Turns the merchant's own payout approval stage on or off. Enabling it changes where a
+    /// merchant's money stops — payouts then wait for their approver instead of going straight to the
+    /// platform gate — so a caller should confirm the impact before setting it.</summary>
+    public Result SetRequiresPayoutApproval(bool required, DateTimeOffset now)
+    {
+        if (Status == MerchantStatus.Closed)
+            return Result.Failure(MerchantErrors.Closed);
+
+        RequiresPayoutApproval = required;
         UpdatedAt = now;
         return Result.Success();
     }

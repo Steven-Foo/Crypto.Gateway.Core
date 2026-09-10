@@ -596,8 +596,14 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
 
     private sealed class FakeMerchants : IMerchantDirectory
     {
+        /// <summary>Whether the seeded merchant requires its own payout approval. Set by the test before
+        /// requesting, so the two-party path is exercised through the real policy rather than a caller flag.</summary>
+        public static bool RequiresPayoutApproval;
+
         public Task<MerchantSummary?> FindByIdAsync(Guid merchantId, CancellationToken cancellationToken = default) =>
-            Task.FromResult<MerchantSummary?>(new MerchantSummary(merchantId, "ACME", "Acme", null, CanTransact: true));
+            Task.FromResult<MerchantSummary?>(new MerchantSummary(
+                merchantId, "ACME", "Acme", null, CanTransact: true,
+                SettlementDelayDays: 0, RequiresPayoutApproval: RequiresPayoutApproval));
 
         public Task<MerchantSummary?> FindByCodeAsync(string merchantCode, CancellationToken cancellationToken = default) =>
             Task.FromResult<MerchantSummary?>(null);
@@ -668,16 +674,30 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
         }
     }
 
-    /// <summary>A PORTAL-initiated payout — the flag that sends it through the merchant's own approval first.</summary>
+    /// <summary>
+    /// A payout raised by a merchant whose POLICY requires its own approval first. The request itself is
+    /// identical to any other — that is the point: the two-party stage is now driven by the merchant's stored
+    /// setting, not by which host or caller submitted it, so an HMAC-API payout reaches this path too.
+    /// </summary>
     private async Task<Result<WithdrawalResult>> RequestFromPortalAsync(BigInteger amount, string merchantTransactionId)
     {
-        await using var scope = _provider.CreateAsyncScope();
-        return await scope.ServiceProvider.GetRequiredService<IWithdrawalRequestService>()
-            .RequestAsync(
-                new RequestWithdrawalCommand(
-                    Merchant, Asset, Chain.Tron, "TDestination", amount, merchantTransactionId,
-                    CallbackUrl: null, RequiresMerchantApproval: true),
-                Ct);
+        FakeMerchants.RequiresPayoutApproval = true;
+        try
+        {
+            await using var scope = _provider.CreateAsyncScope();
+            return await scope.ServiceProvider.GetRequiredService<IWithdrawalRequestService>()
+                .RequestAsync(
+                    new RequestWithdrawalCommand(
+                        Merchant, Asset, Chain.Tron, "TDestination", amount, merchantTransactionId,
+                        CallbackUrl: null),
+                    Ct);
+        }
+        finally
+        {
+            // Reset, so a shared-host test that requests afterwards is not silently switched into the
+            // approval flow by a previous test's policy.
+            FakeMerchants.RequiresPayoutApproval = false;
+        }
     }
 
     private async Task<Result<WithdrawalResult>> MerchantApproveAsync(Guid id, Guid? asMerchant = null)
@@ -783,10 +803,44 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
     [Fact]
     public async Task An_api_payout_never_waits_for_merchant_approval()
     {
-        // The frozen HMAC contract is unchanged: the merchant's server already authorised it by signing.
+        // The frozen HMAC contract is unchanged for a merchant that has NOT opted in: the merchant's server
+        // already authorised it by signing, so it goes straight to the platform threshold decision.
         await SeedMerchantBalanceAsync(BigInteger.Parse("10000000"));
 
         var request = await RequestAsync(BigInteger.Parse("3000000"), "api-unchanged");
         request.Value.Status.ShouldBe(nameof(WithdrawalStatus.Approved));
+    }
+
+    /// <summary>
+    /// REQ-22, the property the whole change exists for: the merchant-approval stage is driven by the
+    /// MERCHANT'S POLICY, not by which host or caller submitted the payout. Before this, the flag was
+    /// hardcoded per host — the portal passed true, the HMAC API passed false — so a merchant integrating
+    /// server-to-server could never reach PendingMerchantApproval at all, and an approval queue built against
+    /// it would have been structurally empty rather than merely sparse.
+    ///
+    /// <para>Both requests below go through the identical API-path call; only the merchant's stored setting
+    /// differs, and that alone decides where the payout stops.</para>
+    /// </summary>
+    [Fact]
+    public async Task The_merchants_policy_not_the_caller_decides_whether_a_payout_waits_for_merchant_approval()
+    {
+        await SeedMerchantBalanceAsync(BigInteger.Parse("20000000"));
+
+        // Policy OFF (the default) — straight to the platform decision.
+        FakeMerchants.RequiresPayoutApproval = false;
+        var withoutPolicy = await RequestAsync(BigInteger.Parse("3000000"), "policy-off");
+        withoutPolicy.Value.Status.ShouldBe(nameof(WithdrawalStatus.Approved));
+
+        // Policy ON, same call site, same kind of caller — now it waits for the merchant's own approver.
+        FakeMerchants.RequiresPayoutApproval = true;
+        try
+        {
+            var withPolicy = await RequestAsync(BigInteger.Parse("3000000"), "policy-on");
+            withPolicy.Value.Status.ShouldBe(nameof(WithdrawalStatus.PendingMerchantApproval));
+        }
+        finally
+        {
+            FakeMerchants.RequiresPayoutApproval = false;
+        }
     }
 }

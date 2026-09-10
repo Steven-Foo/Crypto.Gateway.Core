@@ -30,7 +30,11 @@ public static class OpsAuditEndpoints
         if (pageSize > 200) pageSize = 200;
 
         var filter = new AuditSearchFilter(staffUserId, action, entityType, entityId, fromDate, toDate);
-        var (items, total) = await audit.SearchAsync(filter, page, pageSize, http.RequestAborted);
+
+        // Platform scope: staff see every entry, including merchants' own portal actions (which carry a tenant
+        // id). The merchant portal passes AuditScope.Merchant instead and is narrowed to its own rows.
+        var (items, total) = await audit.SearchAsync(
+            new AuditScope.Platform(), filter, page, pageSize, http.RequestAborted);
 
         return Results.Ok(new
         {

@@ -59,6 +59,7 @@ public static class PortalFundsEndpoints
             isSuccess = true,
             data = new { settlementDelayDays, items = rows },
             error = (string?)null,
+            errorCode = (string?)null,
         });
     }
 }

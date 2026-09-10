@@ -22,6 +22,10 @@ public sealed class MerchantMap : IEntityTypeConfiguration<Domain.Merchant>
         builder.Property(m => m.SettlementMode).HasConversion<string>().HasMaxLength(16).IsRequired().HasDefaultValueSql("'Manual'");
         builder.Property(m => m.Status).HasConversion<string>().HasMaxLength(16).IsRequired();
         builder.Property(m => m.SettlementDelayDays).HasDefaultValue(0).IsRequired();
+
+        // Defaults to false so every existing merchant keeps today's behaviour: payouts go straight to the
+        // platform gate, exactly as the HMAC contract has always described.
+        builder.Property(m => m.RequiresPayoutApproval).HasDefaultValue(false).IsRequired();
         builder.Property<byte[]>("RowVersion").IsRowVersion();
 
         builder.Ignore(m => m.CanTransact);

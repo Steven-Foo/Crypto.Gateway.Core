@@ -131,7 +131,8 @@ public sealed class PaymentIntentDirectory(PaymentIntentDbContext context, TimeP
         intent.ExpectedAmount.ToString(CultureInfo.InvariantCulture),
         EffectiveStatus(intent),
         intent.MatchedDepositId,
-        intent.CreatedAt);
+        intent.CreatedAt,
+        intent.Kind.ToString());
 
     /// <summary>"pending" | "confirmed" | "expired" | "failed" — a lapsed-but-not-yet-swept invoice already
     /// reads as expired, matching what a payer/merchant/Ops should all see.</summary>

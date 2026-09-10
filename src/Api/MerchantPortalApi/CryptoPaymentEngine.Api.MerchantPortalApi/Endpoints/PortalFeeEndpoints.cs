@@ -36,6 +36,12 @@ public static class PortalFeeEndpoints
                 depositFeeBps = p.DepositFeeBps,
                 withdrawalFeeFixed = Display(p.WithdrawalFee, decimals),
                 withdrawalFeeBps = p.WithdrawalFeeBps,
+                // The merchant funding its own balance (POST /portal/top-ups) is priced on its own schedule,
+                // which defaults to zero and never inherits the platform default deposit fee. Surfaced here so
+                // a merchant can see what a top-up costs before sending — it was previously chargeable but
+                // invisible on this screen.
+                topUpFeeFixed = Display(p.TopUpFeeFixed, decimals),
+                topUpFeeBps = p.TopUpFeeBps,
                 merchantWithdrawalFlatCap = Display(p.MerchantWithdrawalFlatCap, decimals),
                 merchantWithdrawalPercentBps = p.MerchantWithdrawalPercentBps,
                 minimumWithdrawal = Display(p.MinimumWithdrawal, decimals),
@@ -44,7 +50,7 @@ public static class PortalFeeEndpoints
             });
         }
 
-        return Results.Ok(new { isSuccess = true, data = new { items = rows }, error = (string?)null });
+        return Results.Ok(new { isSuccess = true, data = new { items = rows }, error = (string?)null, errorCode = (string?)null });
     }
 
     private static decimal? Display(string? baseUnits, int decimals) =>

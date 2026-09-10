@@ -1,3 +1,4 @@
+using CryptoPaymentEngine.Gateway.Core.Platform.Audit.Application;
 using CryptoPaymentEngine.Api.MerchantPortalApi.Models;
 using CryptoPaymentEngine.Api.MerchantPortalApi.Security;
 using CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Application;
@@ -47,61 +48,108 @@ public static class PortalAccountEndpoints
     }
 
     private static async Task<IResult> CreateAccountAsync(
-        CreatePortalAccountRequest request, IMerchantAccountService accounts, HttpContext http)
+        CreatePortalAccountRequest request, IMerchantAccountService accounts, IAuditLogger audit, HttpContext http)
     {
         var result = await accounts.CreateAsync(
             PortalTenant.MerchantId(http), request.Username, request.DisplayName ?? "", request.RoleId, http.RequestAborted);
 
-        return result.IsFailure
-            ? Fail(result.Error!)
-            : Ok(new
-            {
-                merchantUserId = result.Value.MerchantUserId,
-                username = result.Value.Username,
-                // Shown ONCE. The UI must present this as copy-now-never-again (§20).
-                temporaryPassword = result.Value.TemporaryPassword,
-            });
+        if (result.IsFailure)
+            return Fail(result.Error!);
+
+        // The username and assigned role are recorded; the generated password NEVER is (§10 — a credential
+        // must not be recoverable from an audit trail, which is read by more people than issued it).
+        await audit.LogAsync(
+            PortalAuditActor.From(http).Entry(
+                PortalAuditActions.AccountCreated, PortalAuditActions.EntityAccount,
+                result.Value.MerchantUserId.ToString(),
+                $"username={result.Value.Username}; roleId={request.RoleId?.ToString() ?? "none"}"),
+            http.RequestAborted);
+
+        return Ok(new
+        {
+            merchantUserId = result.Value.MerchantUserId,
+            username = result.Value.Username,
+            // Shown ONCE. The UI must present this as copy-now-never-again (§20).
+            temporaryPassword = result.Value.TemporaryPassword,
+        });
     }
 
     private static async Task<IResult> SetAccountStatusAsync(
-        Guid id, SetPortalAccountStatusRequest request, IMerchantAccountService accounts, HttpContext http)
+        Guid id, SetPortalAccountStatusRequest request, IMerchantAccountService accounts, IAuditLogger audit, HttpContext http)
     {
         var principal = PortalTenant.Principal(http);
         var result = await accounts.SetStatusAsync(
             principal.MerchantId, id, principal.MerchantUserId, request.Active, http.RequestAborted);
 
-        return result.IsFailure ? Fail(result.Error!) : Ok(new { merchantUserId = id, active = request.Active });
+        if (result.IsFailure)
+            return Fail(result.Error!);
+
+        await audit.LogAsync(
+            PortalAuditActor.From(http).Entry(
+                PortalAuditActions.AccountStatusChanged, PortalAuditActions.EntityAccount, id.ToString(),
+                request.Active ? "enabled" : "disabled"),
+            http.RequestAborted);
+
+        return Ok(new { merchantUserId = id, active = request.Active });
     }
 
     private static async Task<IResult> AssignAccountRoleAsync(
-        Guid id, AssignPortalRoleRequest request, IMerchantAccountService accounts, HttpContext http)
+        Guid id, AssignPortalRoleRequest request, IMerchantAccountService accounts, IAuditLogger audit, HttpContext http)
     {
         var result = await accounts.AssignRoleAsync(PortalTenant.MerchantId(http), id, request.RoleId, http.RequestAborted);
-        return result.IsFailure ? Fail(result.Error!) : Ok(new { merchantUserId = id, roleId = request.RoleId });
+
+        if (result.IsFailure)
+            return Fail(result.Error!);
+
+        await audit.LogAsync(
+            PortalAuditActor.From(http).Entry(
+                PortalAuditActions.AccountRoleChanged, PortalAuditActions.EntityAccount, id.ToString(),
+                $"roleId={request.RoleId?.ToString() ?? "none"}"),
+            http.RequestAborted);
+
+        return Ok(new { merchantUserId = id, roleId = request.RoleId });
     }
 
     private static async Task<IResult> ResetAccountPasswordAsync(
-        Guid id, IMerchantAccountService accounts, HttpContext http)
+        Guid id, IMerchantAccountService accounts, IAuditLogger audit, HttpContext http)
     {
         var result = await accounts.ResetPasswordAsync(PortalTenant.MerchantId(http), id, http.RequestAborted);
-        return result.IsFailure
-            ? Fail(result.Error!)
-            : Ok(new
-            {
-                merchantUserId = result.Value.MerchantUserId,
-                username = result.Value.Username,
-                temporaryPassword = result.Value.TemporaryPassword, // shown once
-            });
+
+        if (result.IsFailure)
+            return Fail(result.Error!);
+
+        // That a reset happened, and by whom — never the issued password itself.
+        await audit.LogAsync(
+            PortalAuditActor.From(http).Entry(
+                PortalAuditActions.AccountPasswordReset, PortalAuditActions.EntityAccount, id.ToString(),
+                $"username={result.Value.Username}"),
+            http.RequestAborted);
+
+        return Ok(new
+        {
+            merchantUserId = result.Value.MerchantUserId,
+            username = result.Value.Username,
+            temporaryPassword = result.Value.TemporaryPassword, // shown once
+        });
     }
 
     private static async Task<IResult> ChangeOwnPasswordAsync(
-        ChangeOwnPasswordRequest request, IMerchantAccountService accounts, HttpContext http)
+        ChangeOwnPasswordRequest request, IMerchantAccountService accounts, IAuditLogger audit, HttpContext http)
     {
         var principal = PortalTenant.Principal(http);
         var result = await accounts.ChangeOwnPasswordAsync(
             principal.MerchantId, principal.MerchantUserId, request.CurrentPassword, request.NewPassword, http.RequestAborted);
 
-        return result.IsFailure ? Fail(result.Error!) : Ok(new { changed = true });
+        if (result.IsFailure)
+            return Fail(result.Error!);
+
+        await audit.LogAsync(
+            PortalAuditActor.From(http).Entry(
+                PortalAuditActions.OwnPasswordChanged, PortalAuditActions.EntityAccount,
+                principal.MerchantUserId.ToString()),
+            http.RequestAborted);
+
+        return Ok(new { changed = true });
     }
 
     // ── roles ──
@@ -113,60 +161,94 @@ public static class PortalAccountEndpoints
     }
 
     private static async Task<IResult> CreateRoleAsync(
-        CreatePortalRoleRequest request, IMerchantRoleService roles, HttpContext http)
+        CreatePortalRoleRequest request, IMerchantRoleService roles, IAuditLogger audit, HttpContext http)
     {
         if (!PortalPermissions.AreAllKnown(request.PermissionCodes, out var unknown))
-            return Bad($"Unknown permission code '{unknown}'.");
+            return Bad(PortalErrorCodes.InvalidPermissionCode, $"Unknown permission code '{unknown}'.");
 
         var result = await roles.CreateAsync(
             PortalTenant.MerchantId(http), request.Name, request.Description, request.PermissionCodes, http.RequestAborted);
 
-        return result.IsFailure ? Fail(result.Error!) : Ok(result.Value);
+        if (result.IsFailure)
+            return Fail(result.Error!);
+
+        // Audited only on success — a rejected attempt is not an action, and recording one would make the
+        // trail unusable as evidence of what actually changed. The granted codes are the point of the entry,
+        // so they go in the reason rather than being left to a "compare adjacent rows" reconstruction.
+        await audit.LogAsync(
+            PortalAuditActor.From(http).Entry(
+                PortalAuditActions.RoleCreated, PortalAuditActions.EntityRole, result.Value.RoleId.ToString(),
+                $"name={request.Name}; permissions=[{string.Join(' ', request.PermissionCodes)}]"),
+            http.RequestAborted);
+
+        return Ok(result.Value);
     }
 
     private static async Task<IResult> UpdateRoleAsync(
-        Guid id, UpdatePortalRoleRequest request, IMerchantRoleService roles, HttpContext http)
+        Guid id, UpdatePortalRoleRequest request, IMerchantRoleService roles, IAuditLogger audit, HttpContext http)
     {
         var result = await roles.UpdateAsync(
             PortalTenant.MerchantId(http), id, request.Name, request.Description, http.RequestAborted);
-        return result.IsFailure ? Fail(result.Error!) : Ok(result.Value);
+
+        if (result.IsFailure)
+            return Fail(result.Error!);
+
+        await audit.LogAsync(
+            PortalAuditActor.From(http).Entry(
+                PortalAuditActions.RoleUpdated, PortalAuditActions.EntityRole, id.ToString(),
+                $"name={request.Name}"),
+            http.RequestAborted);
+
+        return Ok(result.Value);
     }
 
     private static async Task<IResult> SetRolePermissionsAsync(
-        Guid id, SetPortalRolePermissionsRequest request, IMerchantRoleService roles, HttpContext http)
+        Guid id, SetPortalRolePermissionsRequest request, IMerchantRoleService roles, IAuditLogger audit, HttpContext http)
     {
         // Validated against the portal catalog at the edge, so a tenant can never store a code the portal does
         // not define — including a platform ops.* code (§ PortalPermissions).
         if (!PortalPermissions.AreAllKnown(request.PermissionCodes, out var unknown))
-            return Bad($"Unknown permission code '{unknown}'.");
+            return Bad(PortalErrorCodes.InvalidPermissionCode, $"Unknown permission code '{unknown}'.");
 
         var result = await roles.SetPermissionsAsync(
             PortalTenant.MerchantId(http), id, request.PermissionCodes, http.RequestAborted);
-        return result.IsFailure ? Fail(result.Error!) : Ok(result.Value);
+
+        if (result.IsFailure)
+            return Fail(result.Error!);
+
+        // The highest-value entry in this log: a permission change is how a portal user gains the ability to
+        // move money, so the resulting code set is recorded verbatim.
+        await audit.LogAsync(
+            PortalAuditActor.From(http).Entry(
+                PortalAuditActions.RolePermissionsChanged, PortalAuditActions.EntityRole, id.ToString(),
+                $"permissions=[{string.Join(' ', request.PermissionCodes)}]"),
+            http.RequestAborted);
+
+        return Ok(result.Value);
     }
 
-    private static async Task<IResult> DeleteRoleAsync(Guid id, IMerchantRoleService roles, HttpContext http)
+    private static async Task<IResult> DeleteRoleAsync(
+        Guid id, IMerchantRoleService roles, IAuditLogger audit, HttpContext http)
     {
         var result = await roles.DeleteAsync(PortalTenant.MerchantId(http), id, http.RequestAborted);
-        return result.IsFailure ? Fail(result.Error!) : Ok(new { roleId = id, deleted = true });
+
+        if (result.IsFailure)
+            return Fail(result.Error!);
+
+        await audit.LogAsync(
+            PortalAuditActor.From(http).Entry(
+                PortalAuditActions.RoleDeleted, PortalAuditActions.EntityRole, id.ToString()),
+            http.RequestAborted);
+
+        return Ok(new { roleId = id, deleted = true });
     }
 
     // ── helpers ──
 
-    private static IResult Ok(object data) =>
-        Results.Ok(new { isSuccess = true, data, error = (string?)null });
+    // Thin delegations to the host-wide mapper (§7.1), so every response on this host carries an errorCode.
+    private static IResult Ok(object data) => PortalResults.Ok(data);
 
-    private static IResult Fail(Error error) =>
-        Results.Json(
-            new { isSuccess = false, error = error.Message },
-            statusCode: error.Type switch
-            {
-                ErrorType.NotFound => StatusCodes.Status404NotFound,
-                ErrorType.Conflict => StatusCodes.Status409Conflict,
-                ErrorType.Unauthorized => StatusCodes.Status401Unauthorized,
-                _ => StatusCodes.Status400BadRequest,
-            });
+    private static IResult Fail(Error error) => PortalResults.Fail(error);
 
-    private static IResult Bad(string message) =>
-        Results.Json(new { isSuccess = false, error = message }, statusCode: StatusCodes.Status400BadRequest);
+    private static IResult Bad(string errorCode, string message) => PortalResults.Bad(errorCode, message);
 }

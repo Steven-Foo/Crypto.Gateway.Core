@@ -12,9 +12,15 @@ public sealed class AuditEntryRepository(AuditDbContext context) : IAuditEntryRe
     public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) => context.SaveChangesAsync(cancellationToken);
 
     public async Task<(IReadOnlyList<AuditEntry> Items, int TotalCount)> SearchAsync(
-        AuditSearchFilter filter, int page, int pageSize, CancellationToken cancellationToken = default)
+        AuditSearchFilter filter, Guid? merchantId, int page, int pageSize, CancellationToken cancellationToken = default)
     {
         var query = context.AuditEntries.AsNoTracking().AsQueryable();
+
+        // Tenant narrowing FIRST, and unconditionally when a tenant is given — a merchant sees only its own
+        // entries, never a staff entry (MerchantId null) and never another merchant's. Applied before the
+        // optional filters so no filter combination can widen it.
+        if (merchantId is { } tenant)
+            query = query.Where(e => e.MerchantId == tenant);
 
         if (filter.StaffUserId is { } staffUserId)
             query = query.Where(e => e.StaffUserId == staffUserId);

@@ -9,13 +9,15 @@ using WithdrawalEntity = CryptoPaymentEngine.Gateway.Core.PaymentProcessing.With
 
 namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application;
 
+/// <remarks>
+/// There is deliberately no "requires merchant approval" flag here. Whether a payout waits for the merchant's
+/// own approver is that merchant's stored policy (<c>MerchantSummary.RequiresPayoutApproval</c>), resolved
+/// inside the service, so the two entry points cannot disagree. A caller-supplied flag is exactly how that
+/// decision came to mean "which host received the request" instead of "what the merchant wants".
+/// </remarks>
 public sealed record RequestWithdrawalCommand(
     Guid MerchantId, Guid AssetId, Chain Chain, string DestinationAddress, BigInteger Amount, string MerchantTransactionId,
-    string? CallbackUrl = null,
-    /// <summary>True only for a payout submitted by a human in the merchant portal, which must clear the
-    /// MERCHANT's own approval first. The HMAC API passes false (its request was already signed by the
-    /// merchant's server), so that contract is unchanged.</summary>
-    bool RequiresMerchantApproval = false);
+    string? CallbackUrl = null);
 
 public sealed record WithdrawalResult(Guid WithdrawalId, string Status);
 
@@ -137,7 +139,20 @@ public sealed class WithdrawalRequestService(
             // threshold enters PendingApproval, else Approved. Unset ⇒ the platform config threshold.
             var merchantThreshold = await merchantApprovalThreshold.GetAsync(withdrawal.MerchantId, withdrawal.AssetId, cancellationToken);
             var requiresApproval = withdrawal.Amount > (merchantThreshold ?? policy.ApprovalThreshold);
-            withdrawal.ConfirmReserved(requiresApproval, timeProvider.GetUtcNow(), command.RequiresMerchantApproval);
+
+            // Whether this payout first waits for the MERCHANT's own approver is the merchant's policy, read
+            // here rather than taken from the caller. Deciding it in the service (not in a host) is what makes
+            // the two entry points agree: previously the portal hardcoded "yes" and the HMAC API "no", so the
+            // flag recorded which host was called instead of what the merchant wanted — and a merchant
+            // integrating server-to-server could never reach the approval queue at all.
+            //
+            // Resolved at the decision point rather than in the create block above, so the crash-resume path
+            // (which re-enters here without having re-read the merchant) applies the identical policy.
+            // Absent merchant ⇒ false: never strand a payout awaiting an approval nobody was asked for.
+            var merchantPolicy = await merchants.FindByIdAsync(withdrawal.MerchantId, cancellationToken);
+            var requiresMerchantApproval = merchantPolicy?.RequiresPayoutApproval ?? false;
+
+            withdrawal.ConfirmReserved(requiresApproval, timeProvider.GetUtcNow(), requiresMerchantApproval);
             await repository.SaveChangesAsync(cancellationToken);
         }
 

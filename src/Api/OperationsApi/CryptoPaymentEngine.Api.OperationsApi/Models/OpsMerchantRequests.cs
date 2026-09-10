@@ -65,30 +65,39 @@ public sealed class FailPaymentIntentRequest
 /// <see cref="DepositFeeMinimum"/>/<see cref="WithdrawalFeeMinimum"/> are the 最低手续费 floor:
 /// <c>max(fixed + amount×percent, minimum)</c>.
 /// </summary>
+/// <remarks>
+/// <b>Every fee field is nullable, and null means "leave this one alone".</b> That is deliberate and
+/// load-bearing: these fields were once non-nullable, so a body omitting a schedule bound the default
+/// <c>0</c> and the save silently zeroed pricing the caller never mentioned — returning 200, and echoing
+/// back only the asset, so nothing in the response revealed the loss. A fee form that sent two schedules of
+/// three wiped merchants' top-up pricing on every edit because of exactly this.
+/// <para>Send a field to set it (an explicit <c>0</c> really does mean zero — pure-percentage pricing);
+/// omit it to keep the stored value. The two intents are now distinguishable on the wire.</para>
+/// </remarks>
 public sealed class SetMerchantFeeRequest
 {
     [Required, MaxLength(16)] public string Chain { get; init; } = null!;
     [Required, MaxLength(16)] public string Coin { get; init; } = null!;
-    public decimal DepositFeeFixed { get; init; }
+    public decimal? DepositFeeFixed { get; init; }
 
     /// <summary>Plain percent, e.g. <c>2</c> = 2%. At most 2 decimal places (finer values are rejected, never
     /// rounded — same "never truncate money" rule as an amount).</summary>
-    public decimal DepositFeePercent { get; init; }
+    public decimal? DepositFeePercent { get; init; }
 
     /// <summary>最低手续费 — the deposit fee never charges less than this, even if fixed+percent comes out lower.</summary>
-    public decimal DepositFeeMinimum { get; init; }
+    public decimal? DepositFeeMinimum { get; init; }
 
-    public decimal WithdrawalFeeFixed { get; init; }
-    public decimal WithdrawalFeePercent { get; init; }
+    public decimal? WithdrawalFeeFixed { get; init; }
+    public decimal? WithdrawalFeePercent { get; init; }
 
     /// <summary>最低手续费 — the withdrawal fee never charges less than this.</summary>
-    public decimal WithdrawalFeeMinimum { get; init; }
+    public decimal? WithdrawalFeeMinimum { get; init; }
 
-    /// <summary>Fee on a merchant top-up (the merchant funding its own balance). Defaults to zero, and
+    /// <summary>Fee on a merchant top-up (the merchant funding its own balance). Unset means zero, and
     /// deliberately never inherits the platform default fee — a merchant is not charged to fund its own
     /// float unless staff price it. Bounded [0, 100%] (it is deducted, not grossed up). No minimum-fee concept.</summary>
-    public decimal TopUpFeeFixed { get; init; }
-    public decimal TopUpFeePercent { get; init; }
+    public decimal? TopUpFeeFixed { get; init; }
+    public decimal? TopUpFeePercent { get; init; }
 }
 
 /// <summary>Sets a merchant's settlement period (T+N) in whole days (0 = T+0). Gates the withdrawable balance
@@ -178,4 +187,11 @@ public sealed class AdjustMerchantBalanceRequest
     public decimal Amount { get; init; }
     [Required, MaxLength(512)] public string Reason { get; init; } = null!;
     public Guid? AdjustmentId { get; init; }
+}
+
+/// <summary>Turns the merchant's own payout-approval stage on or off. Merchant policy, not a property of the
+/// caller: it applies to payouts arriving over the HMAC API and the portal alike.</summary>
+public sealed class SetPayoutApprovalRequest
+{
+    public bool Required { get; init; }
 }

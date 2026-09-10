@@ -11,7 +11,10 @@ public sealed record MerchantSummary(
     string Name,
     string? CallbackUrl,
     bool CanTransact,
-    int SettlementDelayDays = 0);
+    int SettlementDelayDays = 0,
+    /// <summary>Whether this merchant's user payouts wait for the merchant's own approver before the platform
+    /// evaluates them. False (the default) is the long-standing behaviour every HMAC integration expects.</summary>
+    bool RequiresPayoutApproval = false);
 
 public interface IMerchantDirectory
 {

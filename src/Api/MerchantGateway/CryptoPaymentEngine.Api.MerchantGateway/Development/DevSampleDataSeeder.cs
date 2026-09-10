@@ -313,13 +313,19 @@ public sealed class DevSampleDataSeeder(
             var cashOuts = scope.ServiceProvider.GetRequiredService<IMerchantWithdrawalService>();
 
             // Below the approval threshold (1,000 USDT): clears automatically and settles.
-            await RequestPayoutAsync(payouts, merchant, assetId, 50m, "PAYOUT-SMALL", requiresMerchantApproval: false, ct);
+            await RequestPayoutAsync(payouts, merchant, assetId, 50m, "PAYOUT-SMALL", ct);
 
             // Above the threshold: parks in PendingApproval for platform staff — the Ops approval queue.
-            await RequestPayoutAsync(payouts, merchant, assetId, 2_500m, "PAYOUT-LARGE", requiresMerchantApproval: false, ct);
+            await RequestPayoutAsync(payouts, merchant, assetId, 2_500m, "PAYOUT-LARGE", ct);
 
-            // Portal-initiated: waits for the MERCHANT own approver first — the portal approval queue.
-            await RequestPayoutAsync(payouts, merchant, assetId, 120m, "PAYOUT-PORTAL", requiresMerchantApproval: true, ct);
+            // A payout that waits for the MERCHANT's own approver — the portal approval queue. This is now
+            // driven by the merchant's stored policy rather than by the caller, so the seeder turns the policy
+            // on, raises the payout, and turns it back off. That ordering keeps the other demo payouts on the
+            // straight-through path while still producing one row in PendingMerchantApproval.
+            var approvalRegistrar = scope.ServiceProvider.GetRequiredService<IMerchantRegistrar>();
+            await approvalRegistrar.SetRequiresPayoutApprovalAsync(merchant.MerchantId, true, ct);
+            await RequestPayoutAsync(payouts, merchant, assetId, 120m, "PAYOUT-PORTAL", ct);
+            await approvalRegistrar.SetRequiresPayoutApprovalAsync(merchant.MerchantId, false, ct);
 
             // The merchant cashing out its own earnings — a different kind, same pipeline.
             var cashOut = await cashOuts.RequestAsync(new MerchantWithdrawalCommand(
@@ -366,15 +372,14 @@ public sealed class DevSampleDataSeeder(
 
     private async Task RequestPayoutAsync(
         IWithdrawalRequestService payouts, DemoMerchant merchant, Guid assetId, decimal amount,
-        string reference, bool requiresMerchantApproval, CancellationToken ct)
+        string reference, CancellationToken ct)
     {
         var result = await payouts.RequestAsync(new RequestWithdrawalCommand(
             merchant.MerchantId, assetId, Chain.Tron,
             DestinationAddress: "TDemoPayoutDestinationAddress0001",
             ToBaseUnits(amount),
             $"{merchant.Code}-{reference}",
-            _options.CallbackUrl,
-            requiresMerchantApproval), ct);
+            _options.CallbackUrl), ct);
 
         LogWithdrawal(merchant, reference, result);
     }

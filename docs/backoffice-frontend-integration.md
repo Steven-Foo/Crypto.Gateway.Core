@@ -675,10 +675,29 @@ half of this merchant's own configured minimum transaction amount (set via the l
 sign that small transactions could be taxed disproportionately. The save still succeeds; surface the warning
 to staff but don't block on it.
 
-**This is a full replacement, not a patch.** Every fee field is written on each call, and an omitted field
-deserialises to `0` rather than being left alone — so posting only `depositFee*` silently sets the
-withdrawal and top-up fees (and their minimums) to zero. **A UI that edits one fee must GET the record first
-and post all of them back.** There is no partial-update endpoint.
+**Omitted fields mean "unchanged", not "zero".** Every fee field is nullable: send one to set it, omit it to
+leave the stored value alone. Posting only `depositFeePercent` changes the deposit rate and leaves the
+withdrawal and top-up schedules — and every `*FeeMinimum` — exactly as they were.
+
+An explicit `0` still genuinely means zero (pure-percentage pricing, or no fee) — the two intents are
+distinguishable on the wire, which they previously were not.
+
+> **This closes a destructive bug.** These fields used to be non-nullable, so an omitted schedule bound the
+> default `0`: posting only `depositFee*` silently zeroed the withdrawal and top-up fees, returned 200, and
+> echoed back only the asset, so nothing in the response revealed the loss. A fee form sending two schedules
+> of three wiped merchants' top-up pricing on every edit.
+
+**The response returns the resulting pricing**, not an echo of the asset — so a client can see exactly what
+it left behind rather than having to re-GET and hope:
+
+```json
+{ "isSuccess": true, "errorCode": null,
+  "data": { "merchantId": "...", "assetId": "...", "coin": "USDT", "network": "Tron",
+            "fees": { "depositFeeFixed": 0, "depositFeePercent": 2.5, "depositFeeMinimum": 1.0,
+                      "withdrawalFeeFixed": 0, "withdrawalFeePercent": 0.5, "withdrawalFeeMinimum": 0,
+                      "topUpFeeFixed": 0, "topUpFeePercent": 3 } },
+  "warnings": [] }
+```
 
 ### `PUT /api/v1/ops/merchants/{id}/deposit-limits` — `ops.fees.manage`
 Mirrors `PUT .../withdrawal-limits` (§ below) for the **payin** side — new, previously no such concept
@@ -839,6 +858,7 @@ Row:
   "fee": 1.0,
   "confirms": 20,
   "type": "deposit",
+  "kind": "Customer",
   "createdAt": "...",
   "status": "pending",
   "callback": "Pending",
@@ -846,10 +866,16 @@ Row:
   "callbackNextAttemptAt": "..."
 }
 ```
-`status` ∈ `pending | confirmed | expired | failed` (lowercase). `userId` and `payerAddress` are **always
-null today** — not implemented yet, don't build UI that assumes real values will ever show up in the
-current build. `receivedAmount`/`fee`/`txHash`/`confirms` are all `null` until a deposit has actually
-matched the invoice.
+`status` ∈ `pending | confirmed | expired | failed` (lowercase).
+`receivedAmount`/`fee`/`txHash`/`confirms` are all `null` until a deposit has actually matched the invoice.
+
+`kind` ∈ `Customer | MerchantTopUp`. `type` is always `"deposit"` and cannot tell them apart, so use `kind`
+when investigating a merchant's balance: a **top-up** is the merchant funding its own float (portal §8.4) —
+priced on a separate zero-default schedule and **exempt from that merchant's T+N settlement hold**, so it
+explains a withdrawable balance that a settlement period would otherwise appear to contradict.
+
+(`userId` and `payerAddress` were removed — they were hardcoded `null` on every row. If real payer
+attribution is wanted, it will be added deliberately as a populated field.)
 
 ### `GET /api/v1/ops/transactions/withdrawals` — `ops.withdrawals.view`
 
@@ -991,7 +1017,8 @@ No body. Response: `{ "type": "deposit", "referenceId": "guid" }`. Resends the *
 payload** — never re-signs, never re-builds. 400 if `type` isn't one of the two literals. 409/404 via the
 same envelope if the reference doesn't exist or has nothing to resend.
 
-`callback` status you'll see embedded on transaction rows: `Pending | Notified | Abandoned`
+`callback` status you'll see embedded on transaction rows: `PendingNotification | Notified | Abandoned`
+(**`PendingNotification`**, not `Pending` — the API deliberately renames the domain enum at the edge)
 (PascalCase — again, differs from the lowercase transaction-status vocab).
 
 ---
@@ -1100,7 +1127,7 @@ rows as raw base units — do **not** fall back to a guessed 6.
 | Deposit (payment intent) | `status` | `pending`, `confirmed`, `expired`, `failed` | lowercase |
 | Withdrawal (user payout) | `status` | `pending`, `pending_merchant_approval`, `pending_approval`, `insufficient_balance`, `awaiting_release`, `confirmed`, `failed` | lowercase-snake |
 | Withdrawal (merchant settlement) | `status` | additionally `pending_admin_audit`, `pending_finance_transfer`, `finance_settled` — see §19b | lowercase-snake |
-| Callback | `status` | `Pending`, `Notified`, `Abandoned` | PascalCase |
+| Callback | `status` | `PendingNotification`, `Notified`, `Abandoned` | PascalCase — note the first is **`PendingNotification`**, NOT `Pending` |
 | Wallet | `status` | `Active`, `Disabled`, `Suspended` | PascalCase |
 | Staff account | `status` | `Active`, `Disabled` | PascalCase |
 | Merchant | `status` | `Active`, `Frozen`, `Closed` | PascalCase |
@@ -1121,6 +1148,26 @@ Five setters on top of §10's fees. All are **display decimals** on the way in, 
 | `PUT /ops/merchants/{id}/deposit-limits` | `ops.fees.manage` | `{ "chain", "coin", "minimum": 1.0, "maximum": null }` |
 | `PUT /ops/merchants/{id}/approval-threshold` | `ops.fees.manage` | `{ "chain", "coin", "threshold": 1000.0 }` |
 | `PUT /ops/merchants/{id}/profile` | `ops.merchants.manage` | `{ "contactEmail", "settlementMode", "remark" }` — all optional, write-only |
+| `PUT /ops/merchants/{id}/payout-approval` | `ops.merchants.manage` | `{ "required": true }` |
+
+### `payout-approval` — two-party payout approval, per merchant
+
+Turns on the merchant's **own** approval stage. With it on, that merchant's user payouts stop at
+`pending_merchant_approval` for their approver before the platform evaluates them — **on both the HMAC API
+and the merchant portal**, because this is merchant policy, not a property of the caller. It previously
+depended on which host received the request, which meant a merchant integrating server-to-server could never
+use the feature at all.
+
+**Defaults to `false`**, so no existing integration changed behaviour. This is a §16 confirmation flow —
+enabling it changes where that merchant's money stops:
+
+- Turning it **on** for a merchant with no approver in place leaves payouts waiting indefinitely.
+- Turning it **off** releases nothing already waiting — those still need approving or rejecting.
+
+It can never weaken the platform gate: the approval threshold is re-resolved server-side when the merchant
+approves, so a merchant cannot approve its way past a payout that needs staff review.
+
+Read it back on `GET /ops/merchants/{id}` as `requiresPayoutApproval`.
 
 **`null` vs `0` is a real distinction on every optional amount, not a formality:**
 
@@ -1129,8 +1176,19 @@ Five setters on top of §10's fees. All are **display decimals** on the way in, 
 
 Sending `0` where you meant "clear it" changes behaviour. A limits form must be able to submit `null`.
 
-**Read them back** on `GET /ops/merchants/{id}/fees` (limits, cap, threshold) and
-`GET /ops/merchants/{id}` (`settlementDelayDays`, `settlementWallets`).
+**Read them back** on `GET /ops/merchants/{id}/fees` and `GET /ops/merchants/{id}`. None of these are
+write-only any more, so **seed every form from the server** rather than warning the operator that the current
+value cannot be shown:
+
+| Value | Read from |
+|---|---|
+| `merchantWithdrawalFlatCap`, `merchantWithdrawalPercentBps` | `GET .../fees` |
+| `minimumWithdrawal`, `maximumWithdrawal` | `GET .../fees` |
+| `approvalThreshold` | `GET .../fees` |
+| `settlementDelayDays`, `settlementWallets`, `requiresPayoutApproval` | `GET /ops/merchants/{id}` |
+
+The fees read preserves `null` as `null` — it never coalesces an unset policy to `0`, so an empty form field
+and a configured zero stay distinguishable, which is the whole reason the distinction above matters.
 
 **The settlement wallet is staff-only, permanently.** A merchant cannot set its own cash-out destination from
 the portal — that is the control preventing a compromised merchant credential from redirecting earnings (§10).

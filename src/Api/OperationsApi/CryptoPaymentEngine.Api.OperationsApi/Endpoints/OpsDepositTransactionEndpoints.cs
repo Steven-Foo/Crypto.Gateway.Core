@@ -230,6 +230,11 @@ public static class OpsDepositTransactionEndpoints
                 decimals,
                 confirms = matched?.Confirmations,
                 type = "deposit",
+                // "Customer" | "MerchantTopUp". Both are real on-chain deposits handled by the same pipeline,
+                // but a top-up is the merchant funding its own float — priced on a separate zero-default
+                // schedule and exempt from the T+N settlement hold. Staff investigating a balance need to tell
+                // them apart; `type` alone cannot, since it is always "deposit".
+                kind = intent.Kind,
                 createdAt = intent.CreatedAt,
                 status = intent.Status,
                 callback = callback?.Status,

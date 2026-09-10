@@ -260,4 +260,58 @@ public sealed class WithdrawalDomainTests
         Approved(requiresApproval: false).ReleaseForSend("ops", Now).Error!.Code.ShouldBe(WithdrawalErrors.InvalidStateTransition.Code);
         Approved(requiresApproval: false).Cancel("ops", "x", Now).Error!.Code.ShouldBe(WithdrawalErrors.InvalidStateTransition.Code);
     }
+
+    // ── the merchant-approval notification event ──
+
+    /// <summary>
+    /// A portal-submitted payout raises the event that tells the merchant their approver is needed. Without it
+    /// a payout can sit unapproved indefinitely because nobody thought to open the portal.
+    /// </summary>
+    [Fact]
+    public void A_portal_payout_awaiting_the_merchant_raises_the_approval_notification()
+    {
+        var w = Reserving("https://merchant.example/callback");
+        w.ConfirmReserved(requiresApproval: false, Now, requiresMerchantApproval: true);
+
+        w.Status.ShouldBe(WithdrawalStatus.PendingMerchantApproval);
+
+        var raised = w.DomainEvents.OfType<WithdrawalPendingMerchantApproval>().ShouldHaveSingleItem();
+        raised.WithdrawalId.ShouldBe(w.Id);
+        raised.MerchantId.ShouldBe(Merchant);
+        raised.ReceivingAddress.ShouldBe("TDest");
+        raised.CallbackUrl.ShouldBe("https://merchant.example/callback");
+        // Base units, exact — the notification must not introduce a rounded amount (§14).
+        raised.AmountBaseUnits.ShouldBe(Amount.ToString());
+        raised.FeeBaseUnits.ShouldBe(Fee.ToString());
+    }
+
+    /// <summary>
+    /// The frozen HMAC-API path is untouched: the merchant's own server already authorised that payout by
+    /// signing the request, so it never enters merchant-approval and must never fire this callback. This is
+    /// the regression guard on "we did not start notifying existing API integrations about their own payouts".
+    /// </summary>
+    [Theory]
+    [InlineData(false)] // straight to Approved
+    [InlineData(true)]  // above the platform threshold, so PendingApproval
+    public void An_api_payout_never_raises_the_merchant_approval_notification(bool requiresApproval)
+    {
+        var w = Reserving("https://merchant.example/callback");
+        w.ConfirmReserved(requiresApproval, Now); // requiresMerchantApproval defaults to false
+
+        w.Status.ShouldNotBe(WithdrawalStatus.PendingMerchantApproval);
+        w.DomainEvents.OfType<WithdrawalPendingMerchantApproval>().ShouldBeEmpty();
+    }
+
+    /// <summary>A merchant that registered no callback URL still transitions correctly — the notification is
+    /// raised and the handler simply has nowhere to send it, rather than the state machine branching.</summary>
+    [Fact]
+    public void A_payout_without_a_callback_url_still_reaches_the_approval_state()
+    {
+        var w = Reserving();
+        w.ConfirmReserved(requiresApproval: false, Now, requiresMerchantApproval: true);
+
+        w.Status.ShouldBe(WithdrawalStatus.PendingMerchantApproval);
+        w.DomainEvents.OfType<WithdrawalPendingMerchantApproval>().ShouldHaveSingleItem()
+            .CallbackUrl.ShouldBeNull();
+    }
 }

@@ -39,6 +39,8 @@
     <ProjectReference Include="../../../Gateway.Core/Financial/Ledger/Application/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Application.csproj" />
     <ProjectReference Include="../../../Gateway.Core/Financial/Ledger/Contracts/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Contracts.csproj" />
     <ProjectReference Include="../../../Gateway.Core/Financial/Ledger/Infrastructure/CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\Gateway.Core\Platform\Audit\Application\CryptoPaymentEngine.Gateway.Core.Platform.Audit.Application.csproj" />
+    <ProjectReference Include="..\..\..\Gateway.Core\Platform\Audit\Infrastructure\CryptoPaymentEngine.Gateway.Core.Platform.Audit.Infrastructure.csproj" />
   </ItemGroup>
 
   <ItemGroup>

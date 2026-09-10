@@ -1,3 +1,4 @@
+using CryptoPaymentEngine.Gateway.Core.Platform.Audit.Application;
 using CryptoPaymentEngine.Api.MerchantPortalApi.Models;
 using CryptoPaymentEngine.Api.MerchantPortalApi.Security;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
@@ -39,46 +40,55 @@ public static class PortalMoneyOutEndpoints
     /// above it, it moves to <c>PendingApproval</c> and waits for platform staff (§10).
     /// </summary>
     private static async Task<IResult> ApprovePayoutAsync(
-        Guid id, IMerchantPayoutApprovalService approvals, HttpContext http)
+        Guid id, IMerchantPayoutApprovalService approvals, IAuditLogger audit, HttpContext http)
     {
         var principal = PortalTenant.Principal(http);
         var result = await approvals.ApproveAsync(principal.MerchantId, id, principal.Username, http.RequestAborted);
 
-        return result.IsFailure
-            ? FailApproval(result.Error!)
-            : Ok(new
-            {
-                systemOrderNumber = result.Value.WithdrawalId,
-                status = result.Value.Status,
-                // True when the platform still has to approve it — the UI should say "sent for platform approval"
-                // rather than implying the payout is on its way.
-                awaitingPlatformApproval = result.Value.Status == "PendingApproval",
-            });
+        if (result.IsFailure)
+            return FailApproval(result.Error!);
+
+        // A money-moving decision: who signed off, and where it went next (cleared to send, or escalated to
+        // platform staff). The withdrawal itself also records the approver, but only the current value —
+        // the audit trail is what survives a later status change.
+        await audit.LogAsync(
+            PortalAuditActor.From(http).Entry(
+                PortalAuditActions.PayoutApproved, PortalAuditActions.EntityWithdrawal, id.ToString(),
+                $"status={result.Value.Status}"),
+            http.RequestAborted);
+
+        return Ok(new
+        {
+            systemOrderNumber = result.Value.WithdrawalId,
+            status = result.Value.Status,
+            // True when the platform still has to approve it — the UI should say "sent for platform approval"
+            // rather than implying the payout is on its way.
+            awaitingPlatformApproval = result.Value.Status == "PendingApproval",
+        });
     }
 
     private static async Task<IResult> RejectPayoutAsync(
-        Guid id, RejectPortalPayoutRequest request, IMerchantPayoutApprovalService approvals, HttpContext http)
+        Guid id, RejectPortalPayoutRequest request, IMerchantPayoutApprovalService approvals,
+        IAuditLogger audit, HttpContext http)
     {
         var principal = PortalTenant.Principal(http);
         var reason = string.IsNullOrWhiteSpace(request.Reason) ? "Rejected by merchant approver." : request.Reason.Trim();
 
         var result = await approvals.RejectAsync(principal.MerchantId, id, principal.Username, reason, http.RequestAborted);
-        return result.IsFailure
-            ? FailApproval(result.Error!)
-            : Ok(new { systemOrderNumber = result.Value.WithdrawalId, status = result.Value.Status });
+        if (result.IsFailure)
+            return FailApproval(result.Error!);
+
+        await audit.LogAsync(
+            PortalAuditActor.From(http).Entry(
+                PortalAuditActions.PayoutRejected, PortalAuditActions.EntityWithdrawal, id.ToString(), reason),
+            http.RequestAborted);
+
+        return Ok(new { systemOrderNumber = result.Value.WithdrawalId, status = result.Value.Status });
     }
 
     /// <summary>A withdrawal belonging to another tenant, or one no longer awaiting merchant approval, is a 404
-    /// / 409 respectively — never a silent no-op.</summary>
-    private static IResult FailApproval(Error error) =>
-        Results.Json(
-            new { isSuccess = false, error = error.Message },
-            statusCode: error.Type switch
-            {
-                ErrorType.NotFound => StatusCodes.Status404NotFound,
-                ErrorType.Conflict => StatusCodes.Status409Conflict,
-                _ => StatusCodes.Status400BadRequest,
-            });
+    /// / 409 respectively — never a silent no-op. The domain's own error code reaches the client unchanged.</summary>
+    private static IResult FailApproval(Error error) => PortalResults.Fail(error);
 
     private static async Task<IResult> CreatePayoutAsync(
         CreatePortalPayoutRequest request, IAssetCatalog assets, IWithdrawalRequestService withdrawals, HttpContext http)
@@ -88,14 +98,16 @@ public static class PortalMoneyOutEndpoints
             return error;
 
         if (string.IsNullOrWhiteSpace(request.ReceivingAddress))
-            return Bad("receivingAddress is required.");
+            return Bad(PortalErrorCodes.AddressRequired, "receivingAddress is required.");
 
-        // RequiresMerchantApproval: a human submitted this in the portal, so it waits for the merchant's OWN
-        // approver before the platform evaluates it (the two-party rule). The HMAC API passes false.
+        // Whether this waits for the merchant's own approver is the merchant's stored policy, applied by the
+        // service — not something this host decides. It used to hardcode "yes" here while the HMAC API
+        // hardcoded "no", which made the flag mean "which host was called" and left server-to-server merchants
+        // unable to use the approval queue at all.
         var result = await withdrawals.RequestAsync(
             new RequestWithdrawalCommand(
                 PortalTenant.MerchantId(http), asset!.AssetId, asset.Chain, request.ReceivingAddress.Trim(), amount,
-                request.MerchantOrderNumber.Trim(), CallbackUrl: null, RequiresMerchantApproval: true),
+                request.MerchantOrderNumber.Trim(), CallbackUrl: null),
             http.RequestAborted);
 
         return result.IsFailure
@@ -144,30 +156,39 @@ public static class PortalMoneyOutEndpoints
         IAssetCatalog assets, string network, string coin, decimal displayAmount, HttpContext http)
     {
         if (!Enum.TryParse<Chain>(network, ignoreCase: true, out var chain))
-            return (null, default, Bad($"Unknown network '{network}'."));
+            return (null, default, Bad(PortalErrorCodes.InvalidChain, $"Unknown network '{network}'."));
 
         var asset = await assets.FindAsync(chain, coin.Trim().ToUpperInvariant(), http.RequestAborted);
         if (asset is null)
-            return (null, default, Bad($"Unknown coin '{coin}' on {chain}."));
+            return (null, default, Bad(PortalErrorCodes.InvalidAsset, $"Unknown coin '{coin}' on {chain}."));
 
         if (!AmountConversion.TryToBaseUnits(displayAmount, asset.Decimals, out var amount))
-            return (null, default, Bad("amount must be positive and within this asset's precision."));
+            return (null, default, Bad(PortalErrorCodes.InvalidAmount, "amount must be positive and within this asset's precision."));
 
         return (asset, amount, null);
     }
 
-    /// <summary>A duplicate merchant reference is a 409 (a resubmitted request must never create a second
-    /// payout); every other business failure is a 400 — mirroring the MerchantGateway contract.</summary>
+    /// <summary>
+    /// A duplicate merchant reference is a 409 (a resubmitted request must never create a second payout);
+    /// every other business failure is a 400 — mirroring the MerchantGateway contract.
+    ///
+    /// <para><b>This deliberately does NOT use the host-wide <see cref="PortalResults.Fail"/> status
+    /// mapping.</b> Several money-out rejections are <c>Error.Conflict</c> internally
+    /// (<c>withdrawal.insufficient_balance</c>, <c>withdrawal.merchant_cannot_transact</c>,
+    /// <c>withdrawal.settlement_wallet_not_registered</c>), so routing them through that mapper would silently
+    /// change them from 400 to 409 for every client already handling them — a status change on a live money
+    /// screen, which is more than the additive fix intended here. The <c>errorCode</c> is what lets a caller
+    /// tell these apart, and that is added below without moving any status.</para>
+    /// </summary>
     private static IResult FailWithdrawal(Error error) =>
         Results.Json(
-            new { isSuccess = false, error = error.Message },
+            new { isSuccess = false, data = (object?)null, error = error.Message, errorCode = error.Code },
             statusCode: error.Code == "withdrawal.duplicate_reference"
                 ? StatusCodes.Status409Conflict
                 : StatusCodes.Status400BadRequest);
 
-    private static IResult Ok(object data) =>
-        Results.Ok(new { isSuccess = true, data, error = (string?)null });
+    // Thin delegations to the host-wide mapper (§7.1), so every response on this host carries an errorCode.
+    private static IResult Ok(object data) => PortalResults.Ok(data);
 
-    private static IResult Bad(string message) =>
-        Results.Json(new { isSuccess = false, error = message }, statusCode: StatusCodes.Status400BadRequest);
+    private static IResult Bad(string errorCode, string message) => PortalResults.Bad(errorCode, message);
 }

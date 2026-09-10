@@ -38,15 +38,15 @@ public static class PortalTopUpEndpoints
         HttpContext http)
     {
         if (!Enum.TryParse<Chain>(request.Network, ignoreCase: true, out var chain))
-            return Bad($"Unknown network '{request.Network}'.");
+            return Bad(PortalErrorCodes.InvalidChain, $"Unknown network '{request.Network}'.");
 
         var asset = await assets.FindAsync(chain, request.Coin.Trim().ToUpperInvariant(), http.RequestAborted);
         if (asset is null)
-            return Bad($"Unknown coin '{request.Coin}' on {chain}.");
+            return Bad(PortalErrorCodes.InvalidAsset, $"Unknown coin '{request.Coin}' on {chain}.");
 
         // Display → base units at the edge, refusing over-precision rather than truncating money (§14).
         if (!AmountConversion.TryToBaseUnits(request.Amount, asset.Decimals, out var amount))
-            return Bad("amount must be positive and within this asset's precision.");
+            return Bad(PortalErrorCodes.InvalidAmount, "amount must be positive and within this asset's precision.");
 
         var merchantId = PortalTenant.MerchantId(http);
 
@@ -81,6 +81,7 @@ public static class PortalTopUpEndpoints
                 createdAt = result.Value.CreatedAt,
             },
             error = (string?)null,
+            errorCode = (string?)null,
         });
     }
 
@@ -90,11 +91,10 @@ public static class PortalTopUpEndpoints
     /// downgrade a conflict to a 400.</summary>
     private static IResult Fail(Error error) =>
         Results.Json(
-            new { isSuccess = false, error = error.Message },
+            new { isSuccess = false, data = (object?)null, error = error.Message, errorCode = error.Code },
             statusCode: error.Type == ErrorType.Conflict
                 ? StatusCodes.Status409Conflict
                 : StatusCodes.Status400BadRequest);
 
-    private static IResult Bad(string message) =>
-        Results.Json(new { isSuccess = false, error = message }, statusCode: StatusCodes.Status400BadRequest);
+    private static IResult Bad(string errorCode, string message) => PortalResults.Bad(errorCode, message);
 }

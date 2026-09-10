@@ -46,6 +46,10 @@ public static class NotificationModuleExtensions
         services.AddScoped<IIntegrationEventHandler<PaymentIntentFailed>, PaymentIntentFailedCallbackHandler>();
         services.AddScoped<IIntegrationEventHandler<WithdrawalConfirmed>, WithdrawalConfirmedCallbackHandler>();
         services.AddScoped<IIntegrationEventHandler<WithdrawalFailed>, WithdrawalFailedCallbackHandler>();
+
+        // Tells the merchant a portal-submitted payout is waiting on their own approver. Notification-only —
+        // no ledger impact, and never raised for an HMAC-API payout (which skips that state entirely).
+        services.AddScoped<IIntegrationEventHandler<WithdrawalPendingMerchantApproval>, WithdrawalPendingMerchantApprovalCallbackHandler>();
         return services;
     }
 }

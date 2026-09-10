@@ -250,6 +250,14 @@ public sealed class DepositToLedgerTests : IAsyncLifetime
         public Task<WalletOwnership?> FindByIdAsync(Guid walletId, CancellationToken cancellationToken = default) =>
             Task.FromResult<WalletOwnership?>(null);
 
+        // Delegates to the unpaged list so the fake cannot disagree with itself about which wallets exist.
+        public async Task<(IReadOnlyList<AvailableWallet> Items, int TotalCount)> SearchAssignedWalletsAsync(
+            Guid merchantId, Chain chain, int page, int pageSize, CancellationToken cancellationToken = default)
+        {
+            var all = await ListAssignedWalletsAsync(merchantId, chain, cancellationToken);
+            return (all.Skip((page - 1) * pageSize).Take(pageSize).ToList(), all.Count);
+        }
+
         public Task<IReadOnlyList<AvailableWallet>> ListAssignedWalletsAsync(
             Guid merchantId, Chain chain, CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<AvailableWallet>>([]);

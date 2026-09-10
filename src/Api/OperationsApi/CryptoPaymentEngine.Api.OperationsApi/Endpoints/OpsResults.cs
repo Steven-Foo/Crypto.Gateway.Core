@@ -85,6 +85,25 @@ public static class OpsPercent
         return true;
     }
 
+    /// <summary>
+    /// Null-aware overload: a null percent yields a null bps and <b>succeeds</b>, because the caller omitted
+    /// the field — which means "leave the stored rate alone", not "set it to zero". Collapsing those two here
+    /// would reintroduce the destructive-omission bug the nullable request model exists to prevent (a fee form
+    /// sending two schedules of three once wiped the third on every save).
+    /// </summary>
+    public static bool TryToBps(decimal? percent, out int? bps)
+    {
+        if (percent is null)
+        {
+            bps = null;
+            return true;
+        }
+
+        var ok = TryToBps(percent.Value, out var value);
+        bps = ok ? value : null;
+        return ok;
+    }
+
     /// <summary>Basis points → plain percent, for a read-back response.</summary>
     public static decimal ToPercent(int bps) => bps / 100m;
 }

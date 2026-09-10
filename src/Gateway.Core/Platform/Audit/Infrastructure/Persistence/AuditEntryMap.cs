@@ -14,6 +14,8 @@ public sealed class AuditEntryMap : IEntityTypeConfiguration<AuditEntry>
         builder.HasKey(e => e.Id);
         builder.Property(e => e.Id).ValueGeneratedNever();
 
+        // Nullable: null = a platform-staff action, a value = the merchant-portal tenant that acted.
+        builder.Property(e => e.MerchantId);
         builder.Property(e => e.StaffUserId).IsRequired();
         builder.Property(e => e.StaffUsername).HasMaxLength(64).IsRequired();
         builder.Property(e => e.Action).HasMaxLength(128).IsRequired();
@@ -28,6 +30,9 @@ public sealed class AuditEntryMap : IEntityTypeConfiguration<AuditEntry>
         // rules) — every write is an insert, reads are always filtered/paged, never by PK alone.
         builder.HasSeqClusteredIndex();
 
+        // The merchant portal's activity log always reads (tenant, newest-first), so index the pair rather
+        // than MerchantId alone — the tenant filter is never optional on that path.
+        builder.HasIndex(e => new { e.MerchantId, e.CreatedAt });
         builder.HasIndex(e => e.StaffUserId);
         builder.HasIndex(e => e.Action);
         builder.HasIndex(e => new { e.EntityType, e.EntityId });

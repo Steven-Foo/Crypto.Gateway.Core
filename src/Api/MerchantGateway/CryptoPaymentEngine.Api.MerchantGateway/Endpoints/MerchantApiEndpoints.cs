@@ -163,7 +163,11 @@ public static class MerchantApiEndpoints
         if (kind is not null && !isUser && !isMerchant)
             return Fail(StatusCodes.Status400BadRequest, "kind must be 'user' or 'merchant' when provided.");
 
-        // Deposit has no kind — only auto-detected when the caller didn't ask for a specific withdrawal kind.
+        // The `kind` parameter here selects a WITHDRAWAL kind (user payout vs merchant cash-out), so a deposit
+        // is only auto-detected when the caller didn't name one. Note a deposit now has a kind of its own
+        // (Customer vs MerchantTopUp) which this frozen response deliberately does NOT expose: the shape is
+        // part of the merchant's contract, and a top-up is raised from the portal, not this API. The portal's
+        // /transactions/payin carries `kind` for merchants that need to tell them apart.
         if (kind is null)
         {
             var deposit = await intents.FindByMerchantReferenceAsync(merchantId, request.TransactionId, http.RequestAborted);

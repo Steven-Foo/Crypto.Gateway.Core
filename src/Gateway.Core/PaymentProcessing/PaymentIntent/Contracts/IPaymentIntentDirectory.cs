@@ -65,7 +65,14 @@ public sealed record PaymentIntentAdminRow(
     string ExpectedAmountBaseUnits,
     string Status,
     Guid? MatchedDepositId,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    /// <summary>"Customer" (a payment from the merchant's own customer) or "MerchantTopUp" (the merchant
+    /// funding its own balance). Carried as a string so Contracts stay Domain-free. Without this a top-up is
+    /// indistinguishable from a customer payment on every deposit list, even though the two are priced on
+    /// different fee schedules and settle differently (a top-up is exempt from the T+N hold) — so a merchant
+    /// reconciling its books cannot separate "money my customers paid me" from "money I paid in myself".
+    /// Defaulted so existing call sites are unaffected.</summary>
+    string Kind = "Customer");
 
 /// <summary>Aggregate totals across the ENTIRE filtered set — not the current page — behind the Ops
 /// deposit-transactions screen's summary row. <see cref="TotalExpectedAmountBaseUnits"/> sums every matching

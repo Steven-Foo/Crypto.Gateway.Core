@@ -28,7 +28,9 @@ public static class PortalAuthEndpoints
     {
         var result = await auth.LoginAsync(new MerchantLoginCommand(request.Username, request.Password), http.RequestAborted);
         if (result.IsFailure)
-            return Results.Json(new { isSuccess = false, error = result.Error!.Message }, statusCode: StatusCodes.Status401Unauthorized);
+            // The module's own code (e.g. merchantidentity.invalid_credentials) reaches the client, so a SPA can
+            // distinguish bad credentials from a disabled account without reading the message.
+            return PortalResults.Unauthorized(result.Error!.Code, result.Error!.Message);
 
         MerchantSessionCookie.Append(http, cookieOptions.Value, env.IsDevelopment(), result.Value.Token, result.Value.ExpiresAt);
 
@@ -48,6 +50,7 @@ public static class PortalAuthEndpoints
                 mustChangePassword = result.Value.MustChangePassword,
             },
             error = (string?)null,
+            errorCode = (string?)null,
         });
     }
 
@@ -58,7 +61,7 @@ public static class PortalAuthEndpoints
 
         await auth.LogoutAsync(token, http.RequestAborted);
         MerchantSessionCookie.Delete(http, cookieOptions.Value, env.IsDevelopment());
-        return Results.Ok(new { isSuccess = true, data = new { loggedOut = true }, error = (string?)null });
+        return Results.Ok(new { isSuccess = true, data = new { loggedOut = true }, error = (string?)null, errorCode = (string?)null });
     }
 
     /// <summary>What the portal renders nav/identity from. Reads straight off the validated session; also
@@ -79,6 +82,7 @@ public static class PortalAuthEndpoints
                 csrfToken = principal.CsrfToken,
             },
             error = (string?)null,
+            errorCode = (string?)null,
         });
     }
 }

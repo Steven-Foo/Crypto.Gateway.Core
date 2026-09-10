@@ -19,9 +19,10 @@ public static class PortalAuthorization
                 CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Application.MerchantPrincipal;
 
             if (principal is null || !Grants(principal.Permissions, permissionCode))
-                return Results.Json(
-                    new { isSuccess = false, error = $"Missing permission '{permissionCode}'." },
-                    statusCode: StatusCodes.Status403Forbidden);
+                // A permission-denied 403 and a CSRF-failure 403 are otherwise indistinguishable to a SPA —
+                // one means "ask your admin for access", the other "re-read your CSRF token and retry".
+                return Endpoints.PortalResults.Forbidden(
+                    Endpoints.PortalErrorCodes.PermissionDenied, $"Missing permission '{permissionCode}'.");
 
             return await next(context);
         });

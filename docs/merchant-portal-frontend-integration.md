@@ -16,7 +16,7 @@ There is a third host, `Api/MerchantGateway`, which is the machine-to-machine **
 
 ## 1. Base URL and the one rule that matters
 
-Dev default: `http://localhost:51081` (see `Properties/launchSettings.json` for the exact ports on your
+Dev default: `http://localhost:52001` (see `Properties/launchSettings.json` for the exact ports on your
 machine). All routes are prefixed `/api/v1/portal/...`.
 
 **The tenant is never a request parameter.** The merchant id comes only from the validated session. No
@@ -33,11 +33,35 @@ need to.
 { "isSuccess": false, "data": null, "error": "human-readable message" }
 ```
 
-> **Known inconsistency with the Back Office — read this before writing error handling.**
-> The Ops host returns a machine-readable **`errorCode`** on every response (`wallet.not_found`,
-> `ops.invalid_amount`, …). **This host does not yet.** Portal failures carry only the human `error` string.
-> Until that is closed, branch on the **HTTP status code**, and treat `error` as display text only — do not
-> pattern-match it, it gets reworded and localised. Adding `errorCode` here is a filed gap (§10).
+Every response — success and failure — carries a machine-readable **`errorCode`** (null on success), matching
+the Back Office host:
+
+```json
+{ "isSuccess": true,  "data": { }, "error": null, "errorCode": null }
+{ "isSuccess": false, "data": null, "error": "human-readable message", "errorCode": "portal.invalid_amount" }
+```
+
+**Branch on `errorCode`, never on `error`.** The message is display prose — it gets reworded and localised, so
+code matching on it breaks silently on a copy edit.
+
+Codes come from two places:
+
+- **`portal.*`** — this host rejected the request before it reached a module: `portal.unauthenticated`,
+  `portal.invalid_credentials`, `portal.csrf_invalid`, `portal.permission_denied`, `portal.invalid_chain`,
+  `portal.invalid_asset`, `portal.invalid_amount`, `portal.invalid_status`, `portal.invalid_permission_code`,
+  `portal.invalid_ip_address`, `portal.network_required`, `portal.address_required`, `portal.not_found`.
+- **`<module>.*`** — a business rule refused it, passed through unchanged from where it was decided:
+  `withdrawal.insufficient_balance`, `withdrawal.exceeds_settled_balance`,
+  `withdrawal.duplicate_reference`, `withdrawal.merchant_cannot_transact`,
+  `withdrawal.settlement_wallet_not_registered`, `merchant.not_found`, …
+
+This is what lets a money screen tell "you don't have the balance" from "that asset isn't enabled" — both are
+400s that a merchant would act on completely differently.
+
+> **Money-out status codes are unchanged.** Several money-out rejections are conflicts internally, but
+> `POST /payouts` and `POST /cash-outs` still return **400** for every business refusal except a duplicate
+> reference (**409**), exactly as before. Use `errorCode` to tell them apart — do not switch existing
+> handling to 409.
 
 ### HTTP status codes
 
@@ -131,11 +155,12 @@ administrator has not assigned you a role" rather than as an error.
 | `portal.payouts.create` | **submit** an end-user payout to a request-supplied address |
 | `portal.payouts.approve` | **sign off** a payout someone else submitted |
 | `portal.cashout.create` | initiate an earnings cash-out to the whitelisted settlement wallet |
-| `portal.topup.create` | raise a merchant top-up invoice (§8.4) — adds **instantly withdrawable** balance, so grant deliberately |
+| `portal.topup.create` | raise a merchant top-up invoice (§8.5) — adds **instantly withdrawable** balance, so grant deliberately |
 | `portal.api.view` | read API-key metadata + allowed IPs (never a secret) |
 | `portal.api.manage` | rotate the API credential, update the IP allowlist |
 | `portal.accounts.view` / `.manage` | portal user accounts |
 | `portal.roles.view` / `.manage` | portal roles |
+| `portal.activity.view` | this merchant's own admin activity log (§9.5) — sensitive, grant deliberately |
 
 `GET /api/v1/portal/permissions` returns the catalog for the role editor.
 
@@ -168,8 +193,12 @@ silently losing a digit of someone's money is worse than an error message.
 ### `GET /api/v1/portal/profile`
 ```json
 { "merchantId": "...", "merchantCode": "DEMOACME", "name": "Acme Payments",
-  "callbackUrl": "...", "canTransact": true, "settlementDelayDays": 0 }
+  "callbackUrl": "...", "canTransact": true, "settlementDelayDays": 0,
+  "requiresPayoutApproval": false }
 ```
+
+`requiresPayoutApproval` tells you whether this merchant's payouts stop for its own approver — **read it to
+decide whether to show the approval queue at all** (§8.3). Staff-controlled; a merchant cannot change it.
 
 `canTransact: false` means the merchant is **frozen** by platform staff. Deposits still credit (freezing stops
 issuing and withdrawing, never recording), but address requests and all money-out are refused. Show this
@@ -189,9 +218,28 @@ matures at `00:00Z` on day *D+N*. With `settlementDelayDays: 0` they are equal. 
 on **`settled`**, or users will submit payouts that the backend correctly rejects.
 
 ### `GET /api/v1/portal/addresses`
+Query: `network` (optional), `page` (1-based), `pageSize` (default 50, max 200).
+
 ```json
-{ "items": [ { "walletId": "...", "network": "Tron", "address": "T..." } ] }
+{ "page": 1, "pageSize": 50, "totalCount": 2,
+  "networks": [
+    { "network": "Tron", "totalCount": 2,
+      "items": [ { "walletId": "...", "network": "Tron", "address": "T..." } ] }
+  ],
+  "items": [ { "walletId": "...", "network": "Tron", "address": "T..." } ] }
 ```
+
+**Paged**, because a merchant's address count grows with its deposit history — unlike accounts and roles,
+which are bounded by headcount and are returned in full.
+
+Page through **one network at a time** (`?network=Tron`). Paging is applied per chain, so with `network`
+omitted the page number is applied to each chain separately and `networks[]` carries each chain's own
+`totalCount` — there is no single ordering across chains that a page number could meaningfully address.
+Today only TRON is live, so the common case is one group. An unknown or unsupported `network` is a **400**.
+
+The flat top-level `items` is **retained for backward compatibility** and holds this page's rows across the
+groups above — it is no longer every address the merchant owns. Prefer `networks[]`. Top-level `totalCount`
+sums the groups in the response.
 
 ### `GET /api/v1/portal/fees`
 Per-asset pricing and limits, all as display decimals (`null` = unset ⇒ the platform default applies):
@@ -214,7 +262,7 @@ at 2% asked the payer for 102.04 so the merchant netted 100). That behaviour is 
 records should therefore reconcile against `expectedAmount` as the amount actually sent, with the fee shown
 separately as the difference between what arrived and what was credited.
 
-`topUpFee*` prices merchant top-ups (§8.4) and is a **separate schedule that defaults to zero** — it never
+`topUpFee*` prices merchant top-ups (§8.5) and is a **separate schedule that defaults to zero** — it never
 inherits the platform default deposit fee, so an unpriced merchant tops up free even when customer deposits
 are priced.
 
@@ -224,14 +272,33 @@ are priced.
 
 Three separate screens; they are genuinely different things, not one list with a filter.
 
-Common query params: `network`, `coin`, `fromDate`, `toDate`, `page` (1-based), `pageSize`.
+Common query params: `network`, `coin`, `fromDate`, `toDate`, `status`, `page` (1-based), `pageSize`.
+
+**`status` filters on the same effective status the rows report**, applied in SQL so `totalCount` reflects it.
+This matters for a queue: client-side filtering breaks on paging, because page 1 of all payouts may hold none
+of the status you are looking for, and the screen then renders empty while work waits several pages back.
+
+- payin: `pending` | `confirmed` | `expired` | `failed`
+- payout / cash-out: `pending` | `pending_merchant_approval` | `pending_approval` | `insufficient_balance` |
+  `awaiting_release` | `confirmed` | `failed` | `pending_admin_audit` | `pending_finance_transfer` |
+  `finance_settled`
+
+An unrecognised value is a **400** (`portal.invalid_status`) listing the accepted set — never a silently
+unfiltered page, which would read as "these are the matching ones".
+
+The approval queue is `GET /transactions/payout?status=pending_merchant_approval`.
 Response: `{ page, pageSize, totalCount, items }`.
 
 ### `GET /api/v1/portal/transactions/payin` — deposits (代收)
 Extra filters: `merchantOrderNumber`, `receivingAddress`.
 
 Row: `systemOrderNumber`, `merchantOrderNumber`, `network`, `coin`, `address`, `expectedAmount(+BaseUnits)`,
-`receivedAmount(+BaseUnits)`, `confirmations`, `txHash`, `status`, `createdAt`.
+`receivedAmount(+BaseUnits)`, `confirmations`, `txHash`, `status`, `kind`, `createdAt`.
+
+`kind` is `"Customer"` (a payment from the merchant's customer) or `"MerchantTopUp"` (the merchant funding
+its own balance, §8.5). Both are real on-chain deposits in the same list, but they are priced on different
+fee schedules and settle differently — a top-up is exempt from the T+N hold. **Surface or filter on this**,
+otherwise a merchant reconciling revenue cannot separate customer income from its own deposits.
 
 The `received*`, `confirmations` and `txHash` fields are **null until a payment actually arrives** — an unpaid
 invoice is a normal row, not a broken one.
@@ -304,6 +371,25 @@ strands funds in clearing.
 
 `404` = unknown id **or another tenant's payout**. `409` = no longer awaiting merchant approval.
 
+### When does a payout actually wait for merchant approval?
+
+**It is the merchant's stored policy, not the fact that you called the portal.** `GET /portal/profile`
+returns `requiresPayoutApproval`:
+
+- **`false` (the default)** — a payout goes straight to the platform threshold decision. `POST /payouts`
+  returns `status: "Approved"` (or `"PendingApproval"` above the platform threshold). **Nothing will ever
+  appear in the approval queue**, so hide it rather than showing an empty screen.
+- **`true`** — every payout this merchant raises stops at `PendingMerchantApproval` for its own approver
+  first, **whether it was submitted here or over the HMAC API**.
+
+That last point is the whole reason the setting exists. The flag used to be hardcoded per host — the portal
+always said yes, the HMAC API always no — so it recorded *which host was called* rather than what the merchant
+wanted, and a merchant integrating server-to-server could never reach the queue at all.
+
+Only platform staff can change it (`PUT /ops/merchants/{id}/payout-approval`); a merchant cannot switch off
+its own approval requirement. Turning it off releases nothing already waiting — those payouts still need
+approving or rejecting.
+
 ### Separation of duties — how it actually works
 
 Submit and approve are **different permission codes**, so a user granted only `create` cannot sign off their
@@ -313,7 +399,33 @@ control, that is achieved by not granting both codes to one role.
 
 ---
 
-## 8.4 Money **in** — merchant top-up — `portal.topup.create`
+### 8.4 Being told a payout needs approval — webhook
+
+When a portal user submits a payout, a callback fires to the merchant's registered URL so an approver learns
+about it without watching the portal. Same envelope and HMAC signing as the deposit and withdrawal callbacks.
+
+```json
+{ "transactionId": "<your reference>",
+  "data": { "transactionId": "<your reference>", "referenceNo": "<systemOrderNumber>",
+            "type": "withdraw", "status": "pending_merchant_approval",
+            "amount": "50000000", "fee": "250000",
+            "receivingAddress": "T...", "timestamp": "..." } }
+```
+
+- **`status` is a new value** outside the frozen `pending`/`confirmed`/`failed` vocabulary. An existing
+  integration that switches on status will ignore it rather than mistake a payout needing a human for one
+  already on its way — that is deliberate.
+- `amount` and `fee` are **base-unit strings**, matching the other withdrawal callbacks.
+- **Portal-submitted payouts only.** An HMAC-API payout never enters merchant approval (your server already
+  authorised it by signing), so no callback fires for one. Existing API behaviour is unchanged.
+- **It carries no approval link or token.** Approval happens in an authenticated portal session; a webhook
+  can never be the thing that authorises money movement.
+- No callback URL registered ⇒ nothing is sent, and the payout still waits normally. Delivery is
+  best-effort notification: a failed callback never changes the payout's state.
+
+---
+
+## 8.5 Money **in** — merchant top-up — `portal.topup.create`
 
 The merchant funding **its own** balance by sending crypto to an address we issue. Despite living next to the
 money-out actions, this is money *in*: it is a real on-chain deposit that goes through the same scanner,
@@ -400,16 +512,62 @@ assigned to an account **cannot be deleted** (409); reassign those users first.
 
 ---
 
+### 9.5 Activity log — `portal.activity.view`
+
+`GET /api/v1/portal/activity` — who did what in **your** portal, and when. Answers "who gave that user the
+ability to approve payouts?" and "when was our API credential rotated?".
+
+Query: `action`, `entityType`, `entityId`, `fromDate`, `toDate`, `page`, `pageSize` (default 50, max 200).
+Newest first.
+
+```json
+{ "page": 1, "pageSize": 50, "totalCount": 1,
+  "items": [ { "id": "...", "actor": "merchant001", "actorUserId": "...",
+               "action": "portal.role.permissions_changed", "entityType": "MerchantRole",
+               "entityId": "...", "detail": "permissions=[portal.overview.view]",
+               "ipAddress": "::1", "createdAt": "..." } ] }
+```
+
+**Scope is structural, not a filter.** The log returns only entries stamped with your merchant id. Platform
+staff actions and other merchants' entries are excluded by the same condition — there is no parameter that
+could widen it, and no `merchantId` query param exists (passing one is ignored). Filtering by a known
+platform action code returns zero rows, not staff history.
+
+`actor` is the username **as recorded at the time**, so renaming or deleting an account never rewrites
+history.
+
+Recorded actions:
+
+| `action` | `entityType` |
+|---|---|
+| `portal.role.created` / `.updated` / `.permissions_changed` / `.deleted` | `MerchantRole` |
+| `portal.account.created` / `.status_changed` / `.role_changed` / `.password_reset` / `.own_password_changed` | `MerchantUser` |
+| `portal.api_credential.rotated` | `MerchantApiCredential` |
+| `portal.allowed_ips.updated` | `Merchant` |
+| `portal.payout.approved` / `.rejected` | `Withdrawal` |
+
+**Only successful actions are recorded** — a rejected attempt is not an action, and logging failures would
+make the trail unusable as evidence of what actually changed. It is not an authentication log: failed logins
+are not here.
+
+**Secrets are never recorded.** A rotation entry says *that* the credential was rotated, never the key or
+secret; an account-create or password-reset entry never contains the generated password. Treat the log as
+readable by anyone with the permission.
+
+Read-only — nothing exposes a way to edit or delete an entry.
+
+---
+
 ## 10. Known gaps — do not build UI that assumes these work
 
 | Gap | Status |
 |---|---|
 | **2FA / OTP** | Not implemented anywhere in the backend. The login `otp` field is accepted and ignored. |
-| **`errorCode` on failures** | Ops has it, this host does not. Branch on HTTP status for now. |
+| **`errorCode` on failures** | **Done** — every response carries one, `portal.*` for host validation and `<module>.*` for business rules (§2). |
 | **Dashboard / aggregates** | No portal endpoint. The Ops dashboard is platform-wide and is not exposed here. |
-| **Paged history beyond these three lists** | Deferred; to be applied uniformly across every transaction endpoint at once. |
-| **Merchant notification when a payout awaits approval** | None — the portal must poll the payout list. |
-| **Portal audit log** | Merchant-admin actions are not recorded in a merchant-visible log. |
+| **Paging** | **Done.** Transaction history and `/addresses` are paged. Accounts and roles return in full — bounded by headcount, so paging them would add UI work for no benefit. |
+| **Merchant notification when a payout awaits approval** | **Done** — a `pending_merchant_approval` webhook fires for portal-submitted payouts (§8.4). Merchants with no registered callback URL still need to poll. |
+| **Portal audit log** | **Done** — `GET /portal/activity` (§9.5). |
 | **Revoking a disabled account's live sessions** | Refused at next login only. |
 | **Editing the settlement wallet** | Deliberately staff-only, permanently. Not a gap — a security control. |
 

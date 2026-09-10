@@ -1,3 +1,4 @@
+using CryptoPaymentEngine.Gateway.Core.Platform.Audit.Application;
 using System.Numerics;
 using CryptoPaymentEngine.Api.OperationsApi.Models;
 using CryptoPaymentEngine.Api.OperationsApi.Security;
@@ -21,10 +22,46 @@ public static class OpsMerchantSettlementEndpoints
     {
         app.MapPut("/api/v1/ops/merchants/{id:guid}/settlement-period", SetSettlementPeriodAsync).RequirePermission(OpsPermissions.Merchants.Manage);
         app.MapPut("/api/v1/ops/merchants/{id:guid}/settlement-wallet", SetSettlementWalletAsync).RequirePermission(OpsPermissions.Merchants.Manage);
+
+        // Turns the merchant's OWN payout-approval stage on/off. Merchants.Manage rather than Fees.Manage:
+        // it controls the merchant's process, not its pricing.
+        app.MapPut("/api/v1/ops/merchants/{id:guid}/payout-approval", SetPayoutApprovalAsync).RequirePermission(OpsPermissions.Merchants.Manage);
         app.MapPut("/api/v1/ops/merchants/{id:guid}/withdrawal-cap", SetWithdrawalCapAsync).RequirePermission(OpsPermissions.Fees.Manage);
         app.MapPut("/api/v1/ops/merchants/{id:guid}/withdrawal-limits", SetWithdrawalLimitsAsync).RequirePermission(OpsPermissions.Fees.Manage);
         app.MapPut("/api/v1/ops/merchants/{id:guid}/deposit-limits", SetDepositLimitsAsync).RequirePermission(OpsPermissions.Fees.Manage);
         app.MapPut("/api/v1/ops/merchants/{id:guid}/approval-threshold", SetApprovalThresholdAsync).RequirePermission(OpsPermissions.Fees.Manage);
+    }
+
+    /// <summary>
+    /// Enables or disables the merchant's own payout-approval stage. When on, that merchant's user payouts
+    /// stop in <c>PendingMerchantApproval</c> for its approver before the platform evaluates them — on BOTH
+    /// the HMAC API and the portal, because this is merchant policy rather than a property of the caller.
+    ///
+    /// <para><b>This changes where a merchant's money stops</b>, so a UI should confirm before calling.
+    /// Turning it ON for a merchant with no approver configured will leave payouts waiting indefinitely;
+    /// turning it OFF releases nothing already waiting — those still need approving or rejecting.</para>
+    ///
+    /// <para>It can never weaken the platform gate: the approval threshold is re-resolved server-side when the
+    /// merchant approves, so a merchant cannot approve its way past a payout that needs staff.</para>
+    /// </summary>
+    private static async Task<IResult> SetPayoutApprovalAsync(
+        Guid id, SetPayoutApprovalRequest request, IMerchantRegistrar registrar, IAuditLogger audit, HttpContext http)
+    {
+        var result = await registrar.SetRequiresPayoutApprovalAsync(id, request.Required, http.RequestAborted);
+        if (result.IsFailure)
+            return OpsResults.Fail(result.Error!);
+
+        var actor = AuditActor.From(http);
+        await audit.LogAsync(new LogAuditEntryCommand(
+            actor.StaffUserId, actor.Username, "merchant.payout_approval_changed", "Merchant", id.ToString(),
+            request.Required ? "enabled" : "disabled", actor.IpAddress), http.RequestAborted);
+
+        return Results.Ok(new
+        {
+            isSuccess = true,
+            data = new { merchantId = id, requiresPayoutApproval = request.Required },
+            error = (string?)null, errorCode = (string?)null,
+        });
     }
 
     private static async Task<IResult> SetSettlementPeriodAsync(

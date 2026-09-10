@@ -35,6 +35,7 @@ public static class PortalTransactionEndpoints
         string? coin = null,
         DateTimeOffset? fromDate = null,
         DateTimeOffset? toDate = null,
+        string? status = null,
         int page = 1,
         int pageSize = 50)
     {
@@ -44,10 +45,21 @@ public static class PortalTransactionEndpoints
         if (coinError is not null)
             return coinError;
 
+        // Same contract as the payout list: filter on the effective status the rows report, in SQL, and
+        // reject an unknown value rather than returning an unfiltered page under a filtered request.
+        string? normalisedStatus = null;
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            normalisedStatus = status.Trim().ToLowerInvariant();
+            if (!PaymentIntentEffectiveStatuses.IsKnown(normalisedStatus))
+                return Bad(PortalErrorCodes.InvalidStatus,
+                    $"Unknown status '{status}'. Expected one of: {string.Join(", ", PaymentIntentEffectiveStatuses.All)}.");
+        }
+
         // MerchantId is the SESSION's tenant — never a request value.
         var filter = new PaymentIntentAdminFilter(
             PortalTenant.MerchantId(http), SystemOrderNumber: null, merchantOrderNumber, receivingAddress, network, assetId,
-            fromDate, toDate);
+            fromDate, toDate, MerchantIds: null, Status: normalisedStatus);
         var (items, total) = await intents.SearchAsync(filter, page, pageSize, http.RequestAborted);
 
         var matchedIds = items.Where(i => i.MatchedDepositId is { } id && id != Guid.Empty)
@@ -77,6 +89,11 @@ public static class PortalTransactionEndpoints
                 confirmations = deposit?.Confirmations,
                 txHash = deposit?.TransactionHash,
                 status = i.Status,
+                // "Customer" | "MerchantTopUp" — a top-up is the merchant funding its own balance, priced on
+                // its own (zero-default) fee schedule and exempt from the T+N hold. Without this the two are
+                // indistinguishable here, and a merchant cannot reconcile customer revenue against its own
+                // deposits.
+                kind = i.Kind,
                 createdAt = i.CreatedAt,
             });
         }
@@ -87,19 +104,19 @@ public static class PortalTransactionEndpoints
     private static Task<IResult> PayoutAsync(
         IWithdrawalDirectory withdrawals, IAssetCatalog assets, HttpContext http,
         string? merchantOrderNumber = null, string? receivingAddress = null, Chain? network = null, string? coin = null,
-        DateTimeOffset? fromDate = null, DateTimeOffset? toDate = null, int page = 1, int pageSize = 50) =>
-        WithdrawalsAsync(withdrawals, assets, http, "User", "payout", merchantOrderNumber, receivingAddress, network, coin, fromDate, toDate, page, pageSize);
+        DateTimeOffset? fromDate = null, DateTimeOffset? toDate = null, string? status = null, int page = 1, int pageSize = 50) =>
+        WithdrawalsAsync(withdrawals, assets, http, "User", "payout", merchantOrderNumber, receivingAddress, network, coin, fromDate, toDate, status, page, pageSize);
 
     private static Task<IResult> CashOutAsync(
         IWithdrawalDirectory withdrawals, IAssetCatalog assets, HttpContext http,
         string? merchantOrderNumber = null, string? receivingAddress = null, Chain? network = null, string? coin = null,
-        DateTimeOffset? fromDate = null, DateTimeOffset? toDate = null, int page = 1, int pageSize = 50) =>
-        WithdrawalsAsync(withdrawals, assets, http, "Merchant", "cash_out", merchantOrderNumber, receivingAddress, network, coin, fromDate, toDate, page, pageSize);
+        DateTimeOffset? fromDate = null, DateTimeOffset? toDate = null, string? status = null, int page = 1, int pageSize = 50) =>
+        WithdrawalsAsync(withdrawals, assets, http, "Merchant", "cash_out", merchantOrderNumber, receivingAddress, network, coin, fromDate, toDate, status, page, pageSize);
 
     private static async Task<IResult> WithdrawalsAsync(
         IWithdrawalDirectory withdrawals, IAssetCatalog assets, HttpContext http, string kind, string type,
         string? merchantOrderNumber, string? receivingAddress, Chain? network, string? coin,
-        DateTimeOffset? fromDate, DateTimeOffset? toDate, int page, int pageSize)
+        DateTimeOffset? fromDate, DateTimeOffset? toDate, string? status, int page, int pageSize)
     {
         Clamp(ref page, ref pageSize);
 
@@ -107,9 +124,23 @@ public static class PortalTransactionEndpoints
         if (coinError is not null)
             return coinError;
 
+        // Filtering on the same effective status the rows report, pushed into SQL so totalCount reflects it.
+        // Client-side filtering cannot work here: page 1 of all payouts may hold none of the status being
+        // looked for, so an approval queue would render empty while work waits pages back — a queue that
+        // hides work is worse than no queue. An unrecognised value is a 400 rather than a silently unfiltered
+        // page, which would read to the caller as "these are the matching ones".
+        string? normalisedStatus = null;
+        if (!string.IsNullOrWhiteSpace(status))
+        {
+            normalisedStatus = status.Trim().ToLowerInvariant();
+            if (!WithdrawalEffectiveStatuses.IsKnown(normalisedStatus))
+                return Bad(PortalErrorCodes.InvalidStatus,
+                    $"Unknown status '{status}'. Expected one of: {string.Join(", ", WithdrawalEffectiveStatuses.All)}.");
+        }
+
         var filter = new WithdrawalAdminFilter(
             PortalTenant.MerchantId(http), SystemOrderNumber: null, merchantOrderNumber, receivingAddress, network, assetId,
-            fromDate, toDate, kind);
+            fromDate, toDate, kind, MerchantIds: null, Status: normalisedStatus);
         var (items, total) = await withdrawals.SearchAsync(filter, page, pageSize, http.RequestAborted);
 
         var decimalsByAsset = new Dictionary<Guid, int>();
@@ -155,7 +186,7 @@ public static class PortalTransactionEndpoints
         if (string.IsNullOrWhiteSpace(coin))
             return (null, null);
         if (network is null)
-            return (null, Bad("network is required when filtering by coin."));
+            return (null, Bad(PortalErrorCodes.NetworkRequired, "network is required when filtering by coin."));
 
         var asset = await assets.FindAsync(network.Value, coin.Trim().ToUpperInvariant(), http.RequestAborted);
         // Unknown coin ⇒ a filter that matches nothing; signal via a sentinel empty-guid so the search returns none.
@@ -179,8 +210,7 @@ public static class PortalTransactionEndpoints
         BigInteger.TryParse(baseUnits, out var v) ? AmountConversion.ToDisplay(v, decimals) : 0m;
 
     private static IResult Paged(int page, int pageSize, int total, IReadOnlyList<object> rows) =>
-        Results.Ok(new { isSuccess = true, data = new { page, pageSize, totalCount = total, items = rows }, error = (string?)null });
+        PortalResults.Ok(new { page, pageSize, totalCount = total, items = rows });
 
-    private static IResult Bad(string message) =>
-        Results.Json(new { isSuccess = false, error = message }, statusCode: StatusCodes.Status400BadRequest);
+    private static IResult Bad(string errorCode, string message) => PortalResults.Bad(errorCode, message);
 }

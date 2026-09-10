@@ -640,6 +640,27 @@ GO
 BEGIN TRANSACTION;
 IF NOT EXISTS (
     SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260904082735_AddMerchantPayoutApprovalPolicy'
+)
+BEGIN
+    ALTER TABLE [merchant].[Merchant] ADD [RequiresPayoutApproval] bit NOT NULL DEFAULT CAST(0 AS bit);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260904082735_AddMerchantPayoutApprovalPolicy'
+)
+BEGIN
+    INSERT INTO [merchant].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260904082735_AddMerchantPayoutApprovalPolicy', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
     WHERE [MigrationId] = N'20260909073340_AddMerchantFeeMinimumsAndProfile'
 )
 BEGIN

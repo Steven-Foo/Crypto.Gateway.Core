@@ -27,8 +27,12 @@ public static class PortalProfileEndpoints
                 callbackUrl = merchant.CallbackUrl,
                 canTransact = merchant.CanTransact,
                 settlementDelayDays = merchant.SettlementDelayDays,
+                // Whether this merchant's payouts wait for its own approver. The portal reads it to decide
+                // whether to show the approval queue at all — a queue no payout can reach is worse than none.
+                requiresPayoutApproval = merchant.RequiresPayoutApproval,
             },
             error = (string?)null,
+            errorCode = (string?)null,
         });
     }
 }

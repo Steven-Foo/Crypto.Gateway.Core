@@ -235,6 +235,17 @@ public sealed class Withdrawal : Entity<Guid>
                 ? WithdrawalStatus.PendingAdminAudit
                 : requiresApproval ? WithdrawalStatus.PendingApproval : WithdrawalStatus.Approved;
         UpdatedAt = now;
+
+        // Tell the merchant a payout is waiting on THEIR approver. Only for the portal path — an API payout
+        // never reaches this state, so the frozen API behaviour is untouched. No money moves here; the payout
+        // waits exactly as it did before, so a failed callback cannot affect correctness.
+        if (Status == WithdrawalStatus.PendingMerchantApproval)
+        {
+            Raise(new WithdrawalPendingMerchantApproval(
+                Guid.CreateVersion7(), now, Id, MerchantId, AssetId, ToBaseUnits(Amount), ToBaseUnits(Fee),
+                DestinationAddress, now, MerchantTransactionId, CallbackUrl));
+        }
+
         return Result.Success();
     }
 

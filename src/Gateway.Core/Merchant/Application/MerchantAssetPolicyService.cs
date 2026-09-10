@@ -48,20 +48,19 @@ public interface IMerchantAssetPolicyService
     /// Fails with the domain validation error if the schedule is invalid (negative, over-large, or a bps out
     /// of range), or if the merchant is absent/closed.
     ///
-    /// <para>The top-up pair is nullable and preserved when passed as null, so an in-process caller pricing
-    /// only deposits and withdrawals cannot reset a declared top-up rate. <b>Note this safeguard is not
-    /// reachable over HTTP:</b> the Ops request model declares the top-up fields non-nullable, so a JSON body
-    /// omitting them binds 0 and the PUT behaves as a full replacement. Any partial-update endpoint added
-    /// later must pass null here rather than a bound default, or it will silently zero the top-up fee
-    /// (verified against the running host).</para>
+    /// <para><b>Every component is null-means-unchanged.</b> Pricing one schedule can never zero another: an
+    /// omitted value falls back to what is already stored, and reaches zero only when no policy exists yet.
+    /// Passing an explicit <c>0</c> genuinely sets zero — the two intents are distinguishable, which is the
+    /// point of the nullable signature. This is enforced end-to-end: the Ops request model's fields are
+    /// nullable too, so a JSON body that omits a field sends null rather than binding a default 0.</para>
     /// </summary>
     Task<Result> SetFeesAsync(
         Guid merchantId,
         Guid assetId,
-        BigInteger depositFeeFixed,
-        int depositFeeBps,
-        BigInteger withdrawalFee,
-        int withdrawalFeeBps,
+        BigInteger? depositFeeFixed,
+        int? depositFeeBps,
+        BigInteger? withdrawalFee,
+        int? withdrawalFeeBps,
         BigInteger? topUpFeeFixed = null,
         int? topUpFeeBps = null,
         BigInteger? minimumDepositFee = null,
@@ -114,10 +113,10 @@ public sealed class MerchantAssetPolicyService(IMerchantRepository repository, T
     public async Task<Result> SetFeesAsync(
         Guid merchantId,
         Guid assetId,
-        BigInteger depositFeeFixed,
-        int depositFeeBps,
-        BigInteger withdrawalFee,
-        int withdrawalFeeBps,
+        BigInteger? depositFeeFixed,
+        int? depositFeeBps,
+        BigInteger? withdrawalFee,
+        int? withdrawalFeeBps,
         BigInteger? topUpFeeFixed = null,
         int? topUpFeeBps = null,
         BigInteger? minimumDepositFee = null,
@@ -133,11 +132,19 @@ public sealed class MerchantAssetPolicyService(IMerchantRepository repository, T
         // config default).
         var existing = merchant.AssetPolicies.SingleOrDefault(p => p.AssetId == assetId);
 
-        // Validate pricing in the domain (bps bounds, non-negative, deposit bps < 100%) before touching state.
-        // An omitted top-up/minimum component keeps whatever was already declared, so pricing deposits/
-        // withdrawals never silently zeroes a rate someone set deliberately.
+        // Validate pricing in the domain (bps bounds, non-negative) before touching state.
+        //
+        // EVERY component is null-means-unchanged — the three fee schedules AND the two minimum-fee floors.
+        // This is the whole point of the nullable signature: a caller pricing only deposits must not silently
+        // zero the withdrawal, top-up or minimum-fee values someone set deliberately. That exact bug shipped —
+        // a fee form sending two of three schedules wiped top-up pricing on every save, returned 200, and
+        // echoed back only the asset, so nothing revealed the loss. An omitted field therefore falls back to
+        // the stored value, and only to zero when no policy exists yet.
         var fees = FeeSchedule.Create(
-            depositFeeFixed, depositFeeBps, withdrawalFee, withdrawalFeeBps,
+            depositFeeFixed ?? existing?.DepositFeeFixed ?? BigInteger.Zero,
+            depositFeeBps ?? existing?.DepositFeeBps ?? 0,
+            withdrawalFee ?? existing?.WithdrawalFee ?? BigInteger.Zero,
+            withdrawalFeeBps ?? existing?.WithdrawalFeeBps ?? 0,
             topUpFeeFixed ?? existing?.TopUpFeeFixed ?? BigInteger.Zero,
             topUpFeeBps ?? existing?.TopUpFeeBps ?? 0,
             minimumDepositFee ?? existing?.MinimumDepositFee ?? BigInteger.Zero,

@@ -55,16 +55,20 @@ public static class OpsSweepEndpoints
         var (items, total) = await sweeps.SearchAsync(filter, page, pageSize, http.RequestAborted);
         var summary = await sweeps.GetStatusCountsAsync(chainFilter, http.RequestAborted);
 
-        var decimalsByAsset = new Dictionary<Guid, int>();
+        // Caches the ASSET rather than just its precision: the row needs the symbol too, and a
+        // second lookup per row to fetch it would undo the point of caching at all. Same shape as
+        // the deposit endpoint's `assetCache`.
+        var assetCache = new Dictionary<Guid, AssetDto?>();
         var rows = new List<object>(items.Count);
         foreach (var s in items)
         {
-            if (!decimalsByAsset.TryGetValue(s.AssetId, out var decimals))
+            if (!assetCache.TryGetValue(s.AssetId, out var asset))
             {
-                var asset = await assets.FindByIdAsync(s.AssetId, http.RequestAborted);
-                decimals = asset?.Decimals ?? 6;
-                decimalsByAsset[s.AssetId] = decimals;
+                asset = await assets.FindByIdAsync(s.AssetId, http.RequestAborted);
+                assetCache[s.AssetId] = asset;
             }
+
+            var decimals = asset?.Decimals ?? 6;
 
             rows.Add(new
             {
@@ -72,6 +76,16 @@ public static class OpsSweepEndpoints
                 walletId = s.WalletId,
                 chain = s.Chain,
                 assetId = s.AssetId,
+                // REQ-25. Both were already resolved here to convert the amount below, and neither
+                // was sent — leaving a consumer with a bare GUID and no way to put asset context on
+                // a figure. The same gap REQ-12 closed on the ledger rows.
+                //
+                // `coin` is null when the catalog cannot resolve the asset, exactly as deposit rows
+                // behave. A null symbol is honest; a guessed one is not.
+                coin = asset?.Symbol,
+                // The precision ACTUALLY used for the conversion below, fallback included — so
+                // `amount` and `amountBaseUnits` stay reconcilable by the caller.
+                decimals,
                 fromAddress = s.FromAddress,
                 toAddress = s.ToAddress,
                 amount = AmountConversion.ToDisplay(BigInteger.Parse(s.AmountBaseUnits), decimals),

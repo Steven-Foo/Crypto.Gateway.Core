@@ -1,3 +1,4 @@
+using CryptoPaymentEngine.Gateway.Core.Platform.Audit.Application;
 using System.Net;
 using CryptoPaymentEngine.Api.MerchantPortalApi.Models;
 using CryptoPaymentEngine.Api.MerchantPortalApi.Security;
@@ -44,11 +45,20 @@ public static class PortalCredentialEndpoints
     /// (§20). This is a genuine self-service lockout risk — rotating invalidates the secret the merchant's own
     /// servers are signing with — so the portal should confirm the impact before calling (§16).
     /// </summary>
-    private static async Task<IResult> RotateAsync(IMerchantRegistrar registrar, HttpContext http)
+    private static async Task<IResult> RotateAsync(
+        IMerchantRegistrar registrar, IAuditLogger audit, HttpContext http)
     {
         var result = await registrar.RotateCredentialAsync(PortalTenant.MerchantId(http), http.RequestAborted);
         if (result.IsFailure)
             return Fail(result.Error!);
+
+        // Records THAT the credential was rotated and by whom — never the key, secret, or signing secret
+        // (§10: secrets never reach a log). This is the entry that explains a sudden wave of 401s from the
+        // merchant's own servers, so the timestamp and actor are the whole value.
+        await audit.LogAsync(
+            PortalAuditActor.From(http).Entry(
+                PortalAuditActions.ApiCredentialRotated, PortalAuditActions.EntityCredential, null),
+            http.RequestAborted);
 
         return Ok(new
         {
@@ -59,7 +69,7 @@ public static class PortalCredentialEndpoints
     }
 
     private static async Task<IResult> UpdateAllowedIpsAsync(
-        UpdateAllowedIpsRequest request, IMerchantRegistrar registrar, HttpContext http)
+        UpdateAllowedIpsRequest request, IMerchantRegistrar registrar, IAuditLogger audit, HttpContext http)
     {
         // IP format validation is the host edge's job (the module only persists and diffs). Reject malformed
         // input rather than storing an entry that would silently never match.
@@ -67,11 +77,22 @@ public static class PortalCredentialEndpoints
         foreach (var entry in entries)
         {
             if (!IsValidIpOrCidr(entry))
-                return Bad($"'{entry}' is not a valid IP address or CIDR range.");
+                return Bad(PortalErrorCodes.InvalidIpAddress, $"'{entry}' is not a valid IP address or CIDR range.");
         }
 
         var result = await registrar.UpdateAllowedIpsAsync(PortalTenant.MerchantId(http), entries, http.RequestAborted);
-        return result.IsFailure ? Fail(result.Error!) : Ok(new { allowedIps = entries });
+        if (result.IsFailure)
+            return Fail(result.Error!);
+
+        // The resulting allowlist is recorded in full: this is a security control, and "who opened it up, and
+        // to what" is the question the trail exists to answer. An empty list means the allowlist was cleared.
+        await audit.LogAsync(
+            PortalAuditActor.From(http).Entry(
+                PortalAuditActions.AllowedIpsUpdated, PortalAuditActions.EntityMerchant, null,
+                entries.Count == 0 ? "cleared" : $"allowedIps=[{string.Join(' ', entries)}]"),
+            http.RequestAborted);
+
+        return Ok(new { allowedIps = entries });
     }
 
     /// <summary>Accepts a bare IP or a CIDR range. Deliberately permissive about which form the merchant uses,
@@ -91,19 +112,10 @@ public static class PortalCredentialEndpoints
         return bits >= 0 && bits <= maxBits;
     }
 
-    private static IResult Ok(object data) =>
-        Results.Ok(new { isSuccess = true, data, error = (string?)null });
+    // Thin delegations to the host-wide mapper (§7.1), so every response on this host carries an errorCode.
+    private static IResult Ok(object data) => PortalResults.Ok(data);
 
-    private static IResult Fail(Error error) =>
-        Results.Json(
-            new { isSuccess = false, error = error.Message },
-            statusCode: error.Type switch
-            {
-                ErrorType.NotFound => StatusCodes.Status404NotFound,
-                ErrorType.Conflict => StatusCodes.Status409Conflict,
-                _ => StatusCodes.Status400BadRequest,
-            });
+    private static IResult Fail(Error error) => PortalResults.Fail(error);
 
-    private static IResult Bad(string message) =>
-        Results.Json(new { isSuccess = false, error = message }, statusCode: StatusCodes.Status400BadRequest);
+    private static IResult Bad(string errorCode, string message) => PortalResults.Bad(errorCode, message);
 }

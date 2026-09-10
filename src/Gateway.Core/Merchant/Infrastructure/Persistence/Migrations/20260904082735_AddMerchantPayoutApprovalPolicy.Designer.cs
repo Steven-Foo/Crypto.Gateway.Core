@@ -5,6 +5,7 @@ using CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -12,9 +13,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.Migrations
 {
     [DbContext(typeof(MerchantDbContext))]
-    partial class MerchantDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260904082735_AddMerchantPayoutApprovalPolicy")]
+    partial class AddMerchantPayoutApprovalPolicy
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder
@@ -33,10 +36,6 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
                         .HasMaxLength(512)
                         .HasColumnType("nvarchar(512)");
 
-                    b.Property<string>("ContactEmail")
-                        .HasMaxLength(256)
-                        .HasColumnType("nvarchar(256)");
-
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("datetimeoffset");
 
@@ -50,10 +49,6 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
                         .IsRequired()
                         .HasMaxLength(256)
                         .HasColumnType("nvarchar(256)");
-
-                    b.Property<string>("Remark")
-                        .HasMaxLength(1024)
-                        .HasColumnType("nvarchar(1024)");
 
                     b.Property<bool>("RequiresPayoutApproval")
                         .ValueGeneratedOnAdd()
@@ -69,13 +64,6 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
                         .ValueGeneratedOnAdd()
                         .HasColumnType("int")
                         .HasDefaultValue(0);
-
-                    b.Property<string>("SettlementMode")
-                        .IsRequired()
-                        .ValueGeneratedOnAdd()
-                        .HasMaxLength(16)
-                        .HasColumnType("nvarchar(16)")
-                        .HasDefaultValueSql("'Manual'");
 
                     b.Property<string>("Status")
                         .IsRequired()
@@ -167,9 +155,6 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
                         .HasColumnType("decimal(38,0)")
                         .HasDefaultValueSql("0");
 
-                    b.Property<BigInteger?>("MaximumDeposit")
-                        .HasColumnType("decimal(38,0)");
-
                     b.Property<BigInteger?>("MaximumWithdrawal")
                         .HasColumnType("decimal(38,0)");
 
@@ -184,21 +169,8 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
                         .HasColumnType("int")
                         .HasDefaultValue(0);
 
-                    b.Property<BigInteger?>("MinimumDeposit")
-                        .HasColumnType("decimal(38,0)");
-
-                    b.Property<BigInteger>("MinimumDepositFee")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("decimal(38,0)")
-                        .HasDefaultValueSql("0");
-
                     b.Property<BigInteger?>("MinimumWithdrawal")
                         .HasColumnType("decimal(38,0)");
-
-                    b.Property<BigInteger>("MinimumWithdrawalFee")
-                        .ValueGeneratedOnAdd()
-                        .HasColumnType("decimal(38,0)")
-                        .HasDefaultValueSql("0");
 
                     b.Property<byte[]>("RowVersion")
                         .IsConcurrencyToken()
@@ -238,13 +210,11 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
                         {
                             t.HasCheckConstraint("CK_MerchantAssetPolicy_ApprovalThreshold", "[ApprovalThreshold] IS NULL OR [ApprovalThreshold] >= 0");
 
-                            t.HasCheckConstraint("CK_MerchantAssetPolicy_DepositRange", "[MaximumDeposit] IS NULL OR [MinimumDeposit] IS NULL OR [MaximumDeposit] >= [MinimumDeposit]");
-
                             t.HasCheckConstraint("CK_MerchantAssetPolicy_FeeBps", "[DepositFeeBps] >= 0 AND [DepositFeeBps] <= 10000 AND [WithdrawalFeeBps] >= 0 AND [WithdrawalFeeBps] <= 10000 AND [TopUpFeeBps] >= 0 AND [TopUpFeeBps] <= 10000");
 
                             t.HasCheckConstraint("CK_MerchantAssetPolicy_MerchantWithdrawalCap", "[MerchantWithdrawalPercentBps] >= 0 AND [MerchantWithdrawalPercentBps] <= 10000 AND ([MerchantWithdrawalFlatCap] IS NULL OR [MerchantWithdrawalFlatCap] >= 0)");
 
-                            t.HasCheckConstraint("CK_MerchantAssetPolicy_NonNegative", "[SweepThreshold] >= 0 AND [WithdrawalFee] >= 0 AND [DepositFeeFixed] >= 0 AND [TopUpFeeFixed] >= 0 AND [MinimumDepositFee] >= 0 AND [MinimumWithdrawalFee] >= 0 AND ([MinimumWithdrawal] IS NULL OR [MinimumWithdrawal] >= 0) AND ([MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= 0) AND ([MinimumDeposit] IS NULL OR [MinimumDeposit] >= 0) AND ([MaximumDeposit] IS NULL OR [MaximumDeposit] >= 0)");
+                            t.HasCheckConstraint("CK_MerchantAssetPolicy_NonNegative", "[SweepThreshold] >= 0 AND [WithdrawalFee] >= 0 AND [DepositFeeFixed] >= 0 AND [TopUpFeeFixed] >= 0 AND ([MinimumWithdrawal] IS NULL OR [MinimumWithdrawal] >= 0) AND ([MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= 0)");
 
                             t.HasCheckConstraint("CK_MerchantAssetPolicy_WithdrawalRange", "[MaximumWithdrawal] IS NULL OR [MinimumWithdrawal] IS NULL OR [MaximumWithdrawal] >= [MinimumWithdrawal]");
                         });

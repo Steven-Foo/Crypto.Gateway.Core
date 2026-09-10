@@ -12,7 +12,7 @@ public sealed class AuditEntry : Entity<Guid>
 {
     private AuditEntry(
         Guid id, Guid staffUserId, string staffUsername, string action, string entityType, string? entityId,
-        string? reason, string? ipAddress, DateTimeOffset createdAt) : base(id)
+        string? reason, string? ipAddress, DateTimeOffset createdAt, Guid? merchantId) : base(id)
     {
         StaffUserId = staffUserId;
         StaffUsername = staffUsername;
@@ -22,12 +22,25 @@ public sealed class AuditEntry : Entity<Guid>
         Reason = reason;
         IpAddress = ipAddress;
         CreatedAt = createdAt;
+        MerchantId = merchantId;
     }
 
     private AuditEntry() : base(Guid.Empty)
     {
     }
 
+    /// <summary>
+    /// The tenant whose portal the action was performed in, or <c>null</c> for a platform-staff action in the
+    /// Back Office. This is what separates the two audiences sharing this table: a merchant may only ever read
+    /// entries carrying its OWN id, so a staff entry (null) can never leak into a merchant's log, and one
+    /// merchant can never see another's. Enforced in <c>AuditService.SearchAsync</c>, which requires an
+    /// explicit actor scope rather than trusting a caller-supplied filter.
+    /// </summary>
+    public Guid? MerchantId { get; private set; }
+
+    /// <summary>The acting user's id — a staff user when <see cref="MerchantId"/> is null, otherwise the
+    /// merchant-portal user. Kept as one column because "who acted" means the same thing to both audiences and
+    /// splitting it would make every read a two-column coalesce for no gain.</summary>
     public Guid StaffUserId { get; private set; }
 
     /// <summary>Snapshotted at write time (from the acting session), not a live lookup — history reads
@@ -44,8 +57,10 @@ public sealed class AuditEntry : Entity<Guid>
     public string? IpAddress { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
 
+    /// <summary>Records a platform-staff action (no tenant). <paramref name="merchantId"/> is defaulted so
+    /// every existing Ops call site is unchanged; the merchant portal passes its session's tenant.</summary>
     public static AuditEntry Record(
         Guid staffUserId, string staffUsername, string action, string entityType, string? entityId,
-        string? reason, string? ipAddress, DateTimeOffset now) =>
-        new(Guid.CreateVersion7(), staffUserId, staffUsername, action, entityType, entityId, reason, ipAddress, now);
+        string? reason, string? ipAddress, DateTimeOffset now, Guid? merchantId = null) =>
+        new(Guid.CreateVersion7(), staffUserId, staffUsername, action, entityType, entityId, reason, ipAddress, now, merchantId);
 }

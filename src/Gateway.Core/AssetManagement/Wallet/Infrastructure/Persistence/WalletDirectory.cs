@@ -28,6 +28,28 @@ public sealed class WalletDirectory(WalletDbContext context) : IWalletDirectory
             .Select(w => new AvailableWallet(w.Id, w.Address))
             .ToListAsync(cancellationToken);
 
+    public async Task<(IReadOnlyList<AvailableWallet> Items, int TotalCount)> SearchAssignedWalletsAsync(
+        Guid merchantId, Chain chain, int page, int pageSize, CancellationToken cancellationToken = default)
+    {
+        // Same predicate and ordering as ListAssignedWalletsAsync, so the paged view and the selection view
+        // can never disagree about which wallets a merchant has or what order they come in.
+        var query = context.Wallets.AsNoTracking()
+            .Where(w => w.MerchantId == merchantId && w.Chain == chain
+                        && w.WalletType == WalletType.Deposit && w.Status == WalletStatus.Active);
+
+        var total = await query.CountAsync(cancellationToken);
+
+        var items = await query
+            .OrderByDescending(w => w.DepositsReceivedCount)
+            .ThenBy(w => w.CreatedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Select(w => new AvailableWallet(w.Id, w.Address))
+            .ToListAsync(cancellationToken);
+
+        return (items, total);
+    }
+
     public async Task<IReadOnlyList<ReceivingDepositAddress>> ListReceivingDepositAddressesAsync(
         Chain chain, CancellationToken cancellationToken = default) =>
         await context.Wallets.AsNoTracking()

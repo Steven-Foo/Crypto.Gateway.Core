@@ -34,6 +34,20 @@ public interface IWalletDirectory
     /// <summary>All of a merchant's active Deposit wallets on a chain, ordered by deposit activity
     /// descending (see <see cref="AvailableWallet"/>). Includes wallets that have never had a PaymentIntent
     /// created against them yet — e.g. a freshly pre-provisioned pool.</summary>
+    /// <summary>
+    /// One page of a merchant's active Deposit wallets on a chain, plus the total across the whole filtered
+    /// set — the read behind the portal's address list. A separate method from
+    /// <see cref="ListAssignedWalletsAsync"/> on purpose: that one feeds wallet SELECTION on the payment path,
+    /// which genuinely wants every candidate, so giving it a page size would risk silently narrowing the pool
+    /// a deposit can be routed to. This one is display-only.
+    ///
+    /// <para>Paging is applied in SQL, not by slicing an already-materialised list — a merchant's address
+    /// count grows with its deposit history, so loading them all to show fifty is the exact cost this is
+    /// meant to avoid.</para>
+    /// </summary>
+    Task<(IReadOnlyList<AvailableWallet> Items, int TotalCount)> SearchAssignedWalletsAsync(
+        Guid merchantId, Chain chain, int page, int pageSize, CancellationToken cancellationToken = default);
+
     Task<IReadOnlyList<AvailableWallet>> ListAssignedWalletsAsync(
         Guid merchantId, Chain chain, CancellationToken cancellationToken = default);
 

@@ -44,7 +44,7 @@ public sealed class AuditServiceTests : IAsyncLifetime
             staffId, "admin", "merchant.created", "Merchant", "merchant-123", "code=ACME", "127.0.0.1"), Ct);
 
         await using var read = Context();
-        var (items, total) = await Service(read).SearchAsync(new AuditSearchFilter(null, null, null, null, null, null), 1, 50, Ct);
+        var (items, total) = await Service(read).SearchAsync(new AuditScope.Platform(), new AuditSearchFilter(null, null, null, null, null, null), 1, 50, Ct);
 
         total.ShouldBe(1);
         items[0].StaffUsername.ShouldBe("admin");
@@ -65,7 +65,7 @@ public sealed class AuditServiceTests : IAsyncLifetime
         await service.LogAsync(new LogAuditEntryCommand(bob, "bob", "role.created", "Role", "r2", null, null), Ct);
 
         await using var read = Context();
-        var (items, total) = await Service(read).SearchAsync(new AuditSearchFilter(alice, null, null, null, null, null), 1, 50, Ct);
+        var (items, total) = await Service(read).SearchAsync(new AuditScope.Platform(), new AuditSearchFilter(alice, null, null, null, null, null), 1, 50, Ct);
 
         total.ShouldBe(1);
         items[0].StaffUsername.ShouldBe("alice");
@@ -84,6 +84,7 @@ public sealed class AuditServiceTests : IAsyncLifetime
 
         await using var read = Context();
         var (items, total) = await Service(read).SearchAsync(
+            new AuditScope.Platform(),
             new AuditSearchFilter(null, "withdrawal.approved", "Withdrawal", null, null, null), 1, 50, Ct);
 
         total.ShouldBe(1);
@@ -106,10 +107,83 @@ public sealed class AuditServiceTests : IAsyncLifetime
             new LogAuditEntryCommand(staffId, "admin", "action.two", "Entity", "2", null, null), Ct);
 
         await using var read = Context();
-        var (items, _) = await Service(read).SearchAsync(new AuditSearchFilter(null, null, null, null, null, null), 1, 50, Ct);
+        var (items, _) = await Service(read).SearchAsync(new AuditScope.Platform(), new AuditSearchFilter(null, null, null, null, null, null), 1, 50, Ct);
 
         items[0].EntityId.ShouldBe("2");
         items[1].EntityId.ShouldBe("1");
+    }
+
+    // ── tenant isolation: the merchant activity log must never leak across tenants ──
+
+    private static AuditSearchFilter Empty => new(null, null, null, null, null, null);
+
+    /// <summary>
+    /// The load-bearing test for the merchant-facing activity log. Three entries exist — one for merchant A,
+    /// one for merchant B, and one platform-staff entry with no tenant — and merchant A must see exactly its
+    /// own. A regression here would expose one merchant's administrative history (account names, when security
+    /// controls were changed) to another, or leak staff activity into a customer-facing screen.
+    /// </summary>
+    [Fact]
+    public async Task A_merchant_scope_sees_only_its_own_entries_never_another_tenants_nor_staff()
+    {
+        var merchantA = Guid.CreateVersion7();
+        var merchantB = Guid.CreateVersion7();
+
+        await using var write = Context();
+        var service = Service(write);
+        await service.LogAsync(new LogAuditEntryCommand(
+            Guid.CreateVersion7(), "alice", "portal.role.created", "MerchantRole", "role-a", null, null, merchantA), Ct);
+        await service.LogAsync(new LogAuditEntryCommand(
+            Guid.CreateVersion7(), "bob", "portal.role.created", "MerchantRole", "role-b", null, null, merchantB), Ct);
+        await service.LogAsync(new LogAuditEntryCommand(
+            Guid.CreateVersion7(), "staff", "merchant.fee_updated", "Merchant", "m-1", null, null), Ct);
+
+        await using var read = Context();
+        var (items, total) = await Service(read).SearchAsync(new AuditScope.Merchant(merchantA), Empty, 1, 50, Ct);
+
+        total.ShouldBe(1);
+        items[0].EntityId.ShouldBe("role-a");
+        items[0].MerchantId.ShouldBe(merchantA);
+    }
+
+    /// <summary>Platform staff see everything — both merchants' portal actions and staff's own.</summary>
+    [Fact]
+    public async Task A_platform_scope_sees_staff_and_every_merchants_entries()
+    {
+        var merchantA = Guid.CreateVersion7();
+
+        await using var write = Context();
+        var service = Service(write);
+        await service.LogAsync(new LogAuditEntryCommand(
+            Guid.CreateVersion7(), "alice", "portal.role.created", "MerchantRole", "role-a", null, null, merchantA), Ct);
+        await service.LogAsync(new LogAuditEntryCommand(
+            Guid.CreateVersion7(), "staff", "merchant.fee_updated", "Merchant", "m-1", null, null), Ct);
+
+        await using var read = Context();
+        var (_, total) = await Service(read).SearchAsync(new AuditScope.Platform(), Empty, 1, 50, Ct);
+
+        total.ShouldBe(2);
+    }
+
+    /// <summary>The optional search filters can never widen a merchant scope: asking for the exact entity id
+    /// of another tenant's row still returns nothing.</summary>
+    [Fact]
+    public async Task Filters_cannot_widen_a_merchant_scope_to_another_tenants_row()
+    {
+        var merchantA = Guid.CreateVersion7();
+        var merchantB = Guid.CreateVersion7();
+
+        await using var write = Context();
+        await Service(write).LogAsync(new LogAuditEntryCommand(
+            Guid.CreateVersion7(), "bob", "portal.role.deleted", "MerchantRole", "role-b", null, null, merchantB), Ct);
+
+        await using var read = Context();
+        var (items, total) = await Service(read).SearchAsync(
+            new AuditScope.Merchant(merchantA),
+            new AuditSearchFilter(null, "portal.role.deleted", "MerchantRole", "role-b", null, null), 1, 50, Ct);
+
+        total.ShouldBe(0);
+        items.ShouldBeEmpty();
     }
 
     private sealed class FakeTimeProvider(DateTimeOffset now) : TimeProvider

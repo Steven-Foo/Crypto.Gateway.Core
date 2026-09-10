@@ -21,6 +21,7 @@ public sealed record MerchantAdminView(
     string Name,
     string Status,
     int SettlementDelayDays,
+    bool RequiresPayoutApproval,
     DateTimeOffset CreatedAt,
     bool HasActiveCredential,
     IReadOnlyList<string> AllowedIps,
@@ -72,6 +73,17 @@ public interface IMerchantRegistrar
     /// <summary>Sets the merchant's settlement period (T+N) in whole days (0 = T+0). Gates the withdrawable
     /// balance for BOTH user payouts and the merchant cash-out. The domain validates the 0–30 range.</summary>
     Task<Result> SetSettlementDelayAsync(Guid merchantId, int days, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Turns the merchant's OWN payout-approval stage on or off. When on, a user payout this merchant raises
+    /// waits in <c>PendingMerchantApproval</c> for the merchant's approver before the platform evaluates it —
+    /// regardless of whether it arrived over the HMAC API or the portal, because this is merchant policy, not
+    /// a property of the caller.
+    ///
+    /// <para>Defaults to off, so no existing integration changes behaviour until staff switch it on. Enabling
+    /// it changes where that merchant's money stops, so a UI should confirm the impact first.</para>
+    /// </summary>
+    Task<Result> SetRequiresPayoutApprovalAsync(Guid merchantId, bool required, CancellationToken cancellationToken = default);
 
     /// <summary>Registers/updates the merchant's settlement (cash-out) wallet for a chain — the whitelisted
     /// destination of a Merchant Withdrawal, never client-supplied (§10). One per chain.</summary>
@@ -239,6 +251,20 @@ public sealed class MerchantRegistrar(
         return Result.Success();
     }
 
+    public async Task<Result> SetRequiresPayoutApprovalAsync(Guid merchantId, bool required, CancellationToken cancellationToken = default)
+    {
+        var merchant = await repository.GetByIdAsync(merchantId, cancellationToken);
+        if (merchant is null)
+            return Result.Failure(MerchantErrors.NotFound);
+
+        var result = merchant.SetRequiresPayoutApproval(required, timeProvider.GetUtcNow());
+        if (result.IsFailure)
+            return result;
+
+        await repository.SaveChangesAsync(cancellationToken);
+        return Result.Success();
+    }
+
     public async Task<Result> SetSettlementDelayAsync(Guid merchantId, int days, CancellationToken cancellationToken = default)
     {
         var merchant = await repository.GetByIdAsync(merchantId, cancellationToken);
@@ -336,6 +362,7 @@ public sealed class MerchantRegistrar(
         merchant.Name,
         merchant.Status.ToString(),
         merchant.SettlementDelayDays,
+        merchant.RequiresPayoutApproval,
         merchant.CreatedAt,
         merchant.Credentials.Any(c => c.IsActive),
         merchant.Configuration.AllowedIps,
