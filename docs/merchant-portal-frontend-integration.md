@@ -255,9 +255,15 @@ sums the groups in the response.
 
 ### `GET /api/v1/portal/fees`
 Per-asset pricing and limits, all as display decimals (`null` = unset ⇒ the platform default applies):
-`depositFeeFixed`, `depositFeeBps`, `withdrawalFeeFixed`, `withdrawalFeeBps`, `topUpFeeFixed`, `topUpFeeBps`,
-`merchantWithdrawalFlatCap`, `merchantWithdrawalPercentBps`, `minimumWithdrawal`, `maximumWithdrawal`,
-`approvalThreshold`.
+`depositFeeFixed`, `depositFeePercent`, `withdrawalFeeFixed`, `withdrawalFeePercent`, `topUpFeeFixed`,
+`topUpFeePercent`, `merchantWithdrawalFlatCap`, `merchantWithdrawalCapPercent`, `minimumWithdrawal`,
+`maximumWithdrawal`, `approvalThreshold`.
+
+**Percent, not basis points** — every `*Percent` field is a plain percent (`2` = 2%), matching the standard
+used everywhere else on this API's wire format; the domain/DB store basis points, but nothing crossing this
+endpoint ever does. (This field was named `*Bps` in an earlier version of this endpoint — if any client code
+still reads `depositFeeBps`/`withdrawalFeeBps`/`topUpFeeBps`/`merchantWithdrawalPercentBps`, update it to the
+`*Percent` names above.)
 
 **Read-only here.** Fees are set by platform staff in the Back Office — a merchant cannot price itself.
 
