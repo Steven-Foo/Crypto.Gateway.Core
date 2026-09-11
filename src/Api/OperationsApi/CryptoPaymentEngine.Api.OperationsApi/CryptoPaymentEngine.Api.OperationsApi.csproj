@@ -68,6 +68,8 @@
     <ProjectReference Include="..\..\..\Gateway.Core\AssetManagement\Energy\Application\CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Application.csproj" />
     <ProjectReference Include="..\..\..\Gateway.Core\AssetManagement\Energy\Contracts\CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Contracts.csproj" />
     <ProjectReference Include="..\..\..\Gateway.Core\AssetManagement\Energy\Infrastructure\CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\Gateway.Core\Platform\MerchantIdentity\Application\CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Application.csproj" />
+    <ProjectReference Include="..\..\..\Gateway.Core\Platform\MerchantIdentity\Infrastructure\CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Infrastructure.csproj" />
   </ItemGroup>
 
   <ItemGroup>

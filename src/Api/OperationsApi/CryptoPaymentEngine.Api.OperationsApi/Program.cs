@@ -16,6 +16,7 @@ using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infrastru
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Reconciliation.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Platform.Identity.Infrastructure;
+using CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Infrastructure;
 using CryptoPaymentEngine.Infrastructure.Locking;
 using Microsoft.OpenApi;
@@ -97,6 +98,12 @@ builder.Services.AddNotificationModule(dbConnection);          // read-only use 
 builder.Services.AddLedgerModule(dbConnection); // read-only use here: ILedgerQuery for /transactions
 builder.Services.AddIdentityModule(config, dbConnection); // staff login/logout/session validation
 builder.Services.AddAuditModule(dbConnection); // staff-action logging, called directly by mutating Ops endpoints
+
+// MerchantIdentity: this host never issues portal sessions (that's MerchantPortalApi's job) — it composes
+// IMerchantAccountService/IMerchantRoleService ONLY, to let staff provision a merchant's first portal login
+// (a bootstrap gap: the portal's own self-service account creation needs a session, which a brand-new
+// merchant does not have yet). Same physical DB, its own schema.
+builder.Services.AddMerchantIdentityModule(config, dbConnection);
 builder.Services.AddTreasuryModule(dbConnection); // cold-reload: hot-pool directory + cold registrar + reload service (composes Wallet/KeyManagement Contracts)
 
 // The cold-reload endpoints build an UNSIGNED treasury→hot transfer, so this host needs a transaction builder —
@@ -165,6 +172,7 @@ app.MapOpsMerchantApi();
 app.MapOpsMerchantFeeApi();
 app.MapOpsWalletApi();
 app.MapOpsMerchantSettlementApi();
+app.MapOpsMerchantPortalAccountApi();
 app.MapOpsMerchantBalanceApi();
 app.MapOpsPaymentIntentApi();
 app.MapOpsTransactionApi();

@@ -10,6 +10,7 @@ using CryptoPaymentEngine.Gateway.Core.Merchant.Application;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Domain;
 using CryptoPaymentEngine.Gateway.Core.Platform.Audit.Application;
+using CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Application;
 using CryptoPaymentEngine.SharedKernel;
 
 namespace CryptoPaymentEngine.Api.OperationsApi.Endpoints;
@@ -235,7 +236,9 @@ public static class OpsMerchantEndpoints
 
     private static async Task<IResult> CreateMerchantAsync(
         CreateMerchantRequest request, IMerchantRegistrar registrar, IDepositAddressProvisioner provisioner,
-        IMerchantAssetPolicyService policies, IAssetCatalog assets, IAuditLogger audit, ILogger<Program> logger, HttpContext http)
+        IMerchantAssetPolicyService policies, IAssetCatalog assets,
+        IMerchantAccountService portalAccounts, IMerchantRoleService portalRoles,
+        IAuditLogger audit, ILogger<Program> logger, HttpContext http)
     {
         if (!TryParseSettlementMode(request.SettlementMode, out var settlementMode))
             return OpsResults.Bad(OpsErrorCodes.InvalidAmount, $"Unknown settlementMode '{request.SettlementMode}'. Use 'auto' or 'manual'.");
@@ -307,6 +310,18 @@ public static class OpsMerchantEndpoints
             }
         }
 
+        // Same non-blocking philosophy as the seed wallet and initial fee above — a failure here does NOT roll
+        // back the merchant. Staff can always retry via POST .../portal-account afterward.
+        object? portalAccount = null;
+        var portalResult = await OpsMerchantPortalAccountEndpoints.ProvisionFirstPortalAccountAsync(
+            merchant.MerchantId, merchant.MerchantCode, request.Name, portalAccounts, portalRoles, http.RequestAborted);
+        if (portalResult.IsFailure)
+            logger.LogWarning(
+                "Portal account failed to provision for merchant {MerchantId}: {Error}. Staff can retry via " +
+                "POST .../portal-account.", merchant.MerchantId, portalResult.Error!.Code);
+        else
+            portalAccount = new { username = portalResult.Value.Username, temporaryPassword = portalResult.Value.TemporaryPassword };
+
         var actor = AuditActor.From(http);
         await audit.LogAsync(new LogAuditEntryCommand(
             actor.StaffUserId, actor.Username, "merchant.created", "Merchant", merchant.MerchantId.ToString(),
@@ -323,6 +338,7 @@ public static class OpsMerchantEndpoints
                 apiSecret = merchant.ApiSecret,
                 signingSecret = merchant.SigningSecret,
                 wallet,
+                portalAccount,
             },
             error = (string?)null, errorCode = (string?)null,
         });

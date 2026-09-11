@@ -128,6 +128,18 @@ it you get **403**.
 `mustChangePassword` is a **UX signal, not a security control** — the API does not block other calls while it
 is true. Show the change-password step, but do not treat it as enforcement.
 
+**How the temporary password actually behaves — read this before designing the change-password nudge:**
+- It is a **normal password**, not a single-use code — it works for every login until it is actually changed,
+  no matter how many times it is used in between.
+- It **never expires** on its own. There is no time limit today; it stays valid indefinitely if nobody acts
+  on `mustChangePassword`.
+- **"Reset" and "change" are different actions that produce the password differently:** any *reset* (staff via
+  `OperationsApi`, or another admin resetting a teammate via `POST /accounts/{id}/reset-password`) always
+  hands back a **system-generated** password — nobody ever chooses it, by design, precisely because it may
+  have passed through more hands than a real password should. The **only** way a user sets a password *they*
+  chose is `POST /account/change-password` on their own account, which requires their current password and
+  is the action that actually clears `mustChangePassword`.
+
 ### `POST /api/v1/portal/auth/logout`
 Revokes the session server-side and clears the cookie. Safe to call without a valid session.
 

@@ -447,19 +447,80 @@ Response 200:
     "apiKey": "string",
     "apiSecret": "string — shown once, never retrievable again",
     "signingSecret": "string — shown once, never retrievable again",
-    "wallet": { "chain": "Tron", "address": "T..." }
+    "wallet": { "chain": "Tron", "address": "T..." },
+    "portalAccount": { "username": "me00001", "temporaryPassword": "string — shown once, never retrievable again" }
   },
   "error": null
 }
 ```
-**Critical UI requirement:** `apiSecret` and `signingSecret` are shown exactly once, here, and can never be
-fetched again (not even via `GET /merchants/{id}`) — show them prominently with a copy button and an
-explicit "save this now" warning. `wallet` can be `null` if seed provisioning failed server-side (logged);
-this does not indicate a problem worth surfacing loudly — the merchant is still fully usable, the first
-deposit call just provisions a wallet synchronously instead.
+**Critical UI requirement:** `apiSecret`, `signingSecret`, and `portalAccount.temporaryPassword` are each shown
+**exactly once**, here, and can never be fetched again afterward (not even via `GET /merchants/{id}`) — show
+them prominently with a copy button and an explicit "save this now" warning, same treatment for all three.
+
+`wallet` can be `null` if seed provisioning failed server-side (logged); this does not indicate a problem
+worth surfacing loudly — the merchant is still fully usable, the first deposit call just provisions a wallet
+synchronously instead. **`portalAccount` can be `null` the same way** — if it is, the merchant has no way to
+log into its own portal yet; retry via `POST /ops/merchants/{id}/portal-account` (§9a below).
 
 400 on an invalid `settlementMode`, an invalid `fees` percent (negative, >100%, or finer than 2 decimals), or
 a negative/over-precise fixed/minimum amount.
+
+### `POST /api/v1/ops/merchants/{id}/portal-account` — `ops.merchants.manage`
+Bootstraps a merchant's **first** portal login — the piece the portal's own self-service account creation
+(`POST /api/v1/portal/accounts`, on `MerchantPortalApi`) cannot do, since that endpoint requires an
+already-authenticated portal session, and a brand-new merchant has none. Called automatically as part of
+`POST /ops/merchants` above; this endpoint exists for a merchant that doesn't have a portal account yet for
+any reason (that call failed, or the merchant predates this feature).
+
+No body. Response 200:
+```json
+{ "isSuccess": true, "data": { "merchantId": "guid", "username": "me00001", "temporaryPassword": "string — shown once" }, "error": null }
+```
+- **Username is always the merchant's own code, lowercased** (`ME00001` → `me00001`) — not configurable,
+  guaranteed unique since merchant codes already are.
+- The account is granted a **full-access "Admin" role**, auto-created for the tenant on first use (a
+  brand-new merchant has zero roles too, same bootstrap problem) — the merchant's own admin can create
+  narrower roles for teammates afterward, entirely self-service from there via `POST /portal/roles`.
+- **409** (`merchant.portal_account_exists`) if the merchant already has a portal account — this never
+  creates a second one; use the portal's own account management (or a password reset) instead. 404 if the
+  merchant doesn't exist.
+
+### `GET /api/v1/ops/merchants/{id}/portal-accounts` — `ops.merchants.manage`
+Lists this merchant's portal accounts — a merchant can have more than one (its own admin may have added
+teammates via the portal's self-service `POST /portal/accounts`), so staff need this before resetting one.
+
+Response 200:
+```json
+{
+  "isSuccess": true,
+  "data": {
+    "merchantId": "guid",
+    "accounts": [
+      { "merchantUserId": "guid", "username": "me00002", "displayName": "...", "roleId": "guid|null",
+        "roleName": "Admin|null", "status": "Active|Disabled", "mustChangePassword": true, "createdAt": "..." }
+    ]
+  },
+  "error": null
+}
+```
+
+### `POST /api/v1/ops/merchants/{id}/portal-accounts/{accountId}/reset-password` — `ops.merchants.manage`
+Staff-triggered password reset — for when a merchant's admin is locked out and has nobody else inside its own
+portal to reset it for them. No body. **Invalidates the old password immediately.**
+
+Response 200:
+```json
+{ "isSuccess": true, "data": { "merchantId": "guid", "merchantUserId": "guid", "username": "me00002", "temporaryPassword": "string — shown once" }, "error": null }
+```
+Same one-time-password treatment as everywhere else: shown exactly once, here, never recoverable afterward.
+404 if the account doesn't belong to this merchant.
+
+**What "temporary" actually means for this password** (same for the bootstrap `portal-account` create above):
+it is a normal password, not a single-use code — it keeps working for every login until the merchant actually
+changes it via the portal's own `POST /account/change-password`, and it does **not expire on its own**. The
+merchant portal's login response carries `mustChangePassword: true` as a nudge, but nothing on the backend
+enforces it — see `docs/merchant-portal-frontend-integration.md` §3 for the full behavior if the portal UI
+ever needs to act on it.
 
 ### `PUT /api/v1/ops/merchants/{id}/profile` — `ops.merchants.manage`
 Write-only — updates the staff-facing profile fields. Every field is optional; the caller sends only what
