@@ -11,4 +11,16 @@ public interface IMerchantSettlementDirectory
 {
     /// <summary>The registered settlement address for <paramref name="chain"/>, or null if none is registered.</summary>
     Task<string?> FindSettlementAddressAsync(Guid merchantId, Chain chain, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Every whitelisted settlement wallet on the platform, for the periodic re-screen.
+    ///
+    /// <para>Unpaged deliberately. This set is one row per merchant per chain — hundreds, not millions —
+    /// and the caller screens every one of them anyway, so paging would add a cursor to maintain and a
+    /// class of bug (a wallet skipped because it moved between pages) in exchange for nothing.</para>
+    /// </summary>
+    Task<IReadOnlyList<SettlementWalletRef>> ListAllAsync(CancellationToken cancellationToken = default);
 }
+
+/// <summary>One whitelisted cash-out destination, identified by the merchant that owns it.</summary>
+public sealed record SettlementWalletRef(Guid MerchantId, Chain Chain, string Address);

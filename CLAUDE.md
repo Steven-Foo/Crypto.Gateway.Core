@@ -1119,6 +1119,639 @@ because the system genuinely cannot distinguish an unrecorded top-up from unexpl
 validators updated **and re-applied + proven** alongside the document (the [[db-sql-scripts-drift-trap]] class);
 `db/sql/70-withdrawal.sql` regenerated; `docs/backoffice-frontend-integration.md` §19b/§20/§20b/§21 written.
 
+**`Platform/Compliance` — address screening, Phase 1 (2026-09-10) — BUILT, 17 tests green, host-boot verified.**
+The third-party risk-score seam [[wallet-rotation-health-design]] deferred. Screens an address against an AML
+provider and records what was decided and why. **Phase 1 touches NO money path** — the module, the vendor
+adapter, the evidence trail and the tests exist; wiring it into withdrawals is Phase 2 (T3, design first).
+**Its own module, not Blockchain** — a vendor's risk opinion is neither chain state nor a fact, and §8 forbids
+business logic there; not Withdrawal either, since settlement wallets and (later) deposit senders need the same
+answer and would otherwise cross a module boundary (§4.5). Schema `compliance`, migration `InitialCompliance`,
+`db/sql/150-compliance.sql`. **Ledger impact NONE** (reads a public address, stores an opinion, holds no key §10).
+**Two ports on purpose:** outward `IAddressScreeningService` (Contracts) is what Withdrawal/Merchant consume;
+inward `IAddressRiskProvider` (Application) is the vendor seam — `MistTrackAddressRiskProvider` (real) ↔
+`InMemoryAddressRiskProvider` (dev/test), chosen by DI exactly as the chain adapter is. Policy stays on OUR side:
+the provider returns a score + its own band name, but the Allow/Review/Block thresholds are ours, so a vendor swap
+cannot silently move our risk appetite. **Four outcomes, and `Unavailable` is deliberately its own** — folding it
+into Allow drops the control during a vendor outage, folding it into Block hands a third party the power to halt
+payouts; each caller must decide what an unknown means. **Sanctions indicators block regardless of score**
+(`AlwaysBlockIndicators`, checked first) — a designation is a legal fact, not a gradient, so no threshold tweak
+can let one through. **Evidence is append-only** (like the ledger): re-screening inserts a new row, and each row
+keeps the raw provider JSON, our decision, AND `PolicyDescription` (the thresholds then in force) — storing only
+the score would let a later threshold change rewrite history. A completed result is cached to `FreshUntil`
+(`CacheDays`, default 30); a FAILED one never is, else one outage pins an address to "unknown" for a month.
+**The binding constraint is the rate limit, not cost** — on the flat $689/mo Standard plan (10,000 calls/day,
+**1 call/sec**) marginal cost is zero until quota runs out, so threshold-gating and a cheap-labels-first pass were
+both dropped as pointless; the adapter paces itself, and that limiter is in-process, correct ONLY while screening
+is drained under a single-flight worker lock (concurrent instances ⇒ must become a Redis token bucket).
+`Compliance:Enabled` defaults **false** in code (screening is switched on deliberately, never off silently);
+Production always takes the real adapter (a fake would fabricate clean scores indistinguishable from real ones,
+§10); `MistTrack:BaseUrl` alone selects sandbox↔live so the SAME adapter code runs in both. Tests: policy +
+cache (in-memory provider) and response mapping against payloads copied verbatim from MistTrack's sandbox docs
+(fixtures, not live calls — a live test would spend daily quota and flake when the vendor is down). Smoke test:
+`tools/dev/Test-AddressScreening.ps1` (SINCE REWRITTEN — the sandbox host turned out to reject a production key, so
+its modes are now `-Mode Entitlement` / `-Mode Quota` / `-Mode Sandbox`; see the 2026-09-11 milestone below). Full write-up: `docs/address-screening.md`. **Deferred:** Phase 2 (gate the payout
+path — queue + worker + park on Review/Unavailable, reusing the funding-hold states; T3), Phase 3 (inbound deposit
+senders — needs `DetectedTransfer` to carry a From address, and an arrived deposit can only be flagged, never
+refused), an ops surface (list flagged addresses + override a false positive — Phase 2 needs this on day one), and
+per-merchant policy (thresholds are global config today).
+
+**Address screening Phase 2 — the user-payout gate (2026-09-11) — BUILT, full suite green, HTTP-verified.**
+Wires [[address-screening-vendor]]'s Phase-1 module into the money path: a USER payout's destination is
+screened before anything is signed. **Scope is user payouts only** — a merchant cash-out pays to the
+staff-whitelisted settlement wallet and already stops at `PendingAdminAudit` for a human, so screening
+belongs where that wallet is whitelisted, not on every cash-out. **New status `PendingScreening`** (string-
+stored, fits the existing `nvarchar(24)`) sits **after the merchant's sign-off and before the platform's**:
+a payout the merchant will decline never spends a provider call, and staff reviewing one always have its
+verdict in front of them, while a blocked payout never reaches staff at all. Entered from
+`ConfirmReserved` (API payout) or `MerchantApprove` (portal payout), both gated on
+`Withdrawal:Screening:Enabled`. **Outcomes:** Allow → threshold **re-resolved at that moment** (not carried
+from request time, matching the merchant-approval path) → `Approved`/`PendingApproval`; Review or
+Unavailable → `PendingApproval` **reusing the existing staff queue** rather than a second review state, so
+the existing approve/reject IS the override (the row records WHICH of the two, since "risky" and "we could
+not tell" call for different judgement); Block → `Rejected` **releasing the reserve** through the same event
+path a staff rejection uses (a refusal must never strand merchant funds in clearing — asserted on balances).
+**Worker, not request path:** the provider allows ~1 call/sec, so inline screening would serialise into the
+API request and time out, and a timed-out screening is a payout with NO verdict — the one outcome worth
+avoiding. `WithdrawalScreeningWorker` drains the queue instead; its **single-flight lock is load-bearing**,
+because the adapter's rate limiter is in-process and two instances would each pace correctly yet breach the
+limit together (remove that lock ⇒ the limiter must become a Redis token bucket). The worker is registered
+**unconditionally** — gating registration on config would strand any payout already queued when the flag was
+turned off, and those hold a live ledger reserve. **Config `Withdrawal:Screening:{Enabled, OnUnavailable}`
+is deliberately SEPARATE from `Compliance:*`**: Compliance answers "how risky is this address", the payout
+flow answers "what do I do about it", so a second consumer can answer differently without renegotiating a
+shared policy. `OnUnavailable` defaults **Hold** (a vendor outage grows a staff queue, which a human can
+clear) and never Allow (which trades an unscreened payout for continuity — the exact exposure screening
+prevents). **Schema:** migration `AddWithdrawalScreening` — three nullable columns `ScreeningId`/
+`ScreeningDecision`/`ScreeningScore`; `ScreeningId` is an opaque cross-module reference into
+`compliance.AddressScreening`, deliberately NOT an FK (§4.5). The verdict is **snapshotted** onto the payout
+rather than re-read, because the evidence is append-only and a later re-screen of the same address must never
+appear to change what THIS payout was judged on. `70-withdrawal.sql` regenerated (BOM + QUOTED_IDENTIFIER
+header re-added). **NO ledger impact** — screening decides whether a payout proceeds, never what is posted.
+**Ops:** `WithdrawalAdminRow` gained `screeningDecision`/`screeningScore`/`screeningId` (staff see WHY on the
+same screen, not in a lookup they might skip) and the effective-status vocabulary gained `pending_screening`
+as **its own bucket**, not folded into `pending` — a queue waiting on a third party and one waiting on us
+call for different responses. The existing drift-guard test caught the new status immediately, as designed.
+Tests: 7 new pipeline tests on real SQL Server (clean-below-threshold sends; clean-above-threshold still
+needs staff; block rejects AND releases; flagged holds with reason and reserve intact; unavailable holds by
+default; unavailable passes only when configured; **screening-off never calls the provider** — the opt-in
+regression guard). **HTTP-proven on a booted host** over the signed HMAC API: a clean destination cleared and
+reached Broadcast; an unconfigured provider returned Unavailable and **held for review rather than allowing**
+(the fail-safe, observed by accident before the host had `Compliance` config); screening off routed straight
+to Approved having never called the provider. **Deferred:** settlement-wallet screening at whitelist time
+(the cheapest high-value call — one per merchant per chain; the `ScreeningPurpose.SettlementWallet` seam
+exists but the Ops setter does not call it), inbound deposit-sender screening (needs `DetectedTransfer` to
+carry a From address; an arrived deposit can only be flagged, never refused), a dedicated ops screen (flagged
+payouts surface on the approval queue, but there is no screened-address list or on-demand re-screen), and
+per-merchant thresholds (global config today).
+
+**Settlement-wallet screening + a pre-existing settlement-wallet defect fixed (2026-09-11) — BUILT, full suite
+green, HTTP-verified.** The highest value-per-call use of the AML provider: ONE call per merchant per chain,
+protecting the destination every one of that merchant's earnings is paid to. `MerchantRegistrar.SetSettlementWalletAsync`
+now screens the address before whitelisting it. **Deliberately asymmetric with the payout gate, and the
+asymmetry is the design:** (1) **synchronous, not queued** — whitelisting is a rare deliberate staff act with
+no burst to pace, so there is no reason to make an operator wait on a worker; payouts need the queue only
+because they arrive in bursts against the ~1 call/sec limit; (2) **only a Block refuses** — a payout runs
+unattended so anything short of clean parks it, but this runs WITH a human exercising judgement who may hold
+context the provider lacks, so Review/Unavailable are **accepted and surfaced as warnings** rather than
+overriding them. A Block is the exception because a sanctions hit is a legal fact, not a risk appetite.
+**Screened BEFORE mutating**, so a refused address leaves any existing whitelist untouched — losing a good
+settlement wallet to a failed replacement would halt that merchant's cash-outs for a reason unrelated to the
+wallet on file. **Return type changed** `Task<Result>` → `Task<Result<SettlementWalletResult>>` carrying the
+decision + score + warnings; the Ops endpoint emits `screeningDecision`/`screeningScore` plus a `warnings`
+array (empty for clean/unscreened, so the normal case stays silent — a UI must not read a 200 as silence).
+`screeningDecision: null` means "not screened", deliberately distinct from `"Unavailable"` (asked, no answer).
+**Third config section `Merchant:Screening:ScreenSettlementWallets`** (default false) alongside `Compliance:*`
+and `Withdrawal:Screening:*` — same split throughout: Compliance says how risky, each consumer says what to do,
+and they must be switchable independently precisely because they answer differently. **The provider is an
+OPTIONAL dependency** — `MerchantRegistrar` resolves `IAddressScreeningService` via `GetService` (hand-built
+registration, not convention), so a host that never whitelists a settlement wallet (the merchant portal, which
+composes Merchant but not Compliance) is not forced to compose Compliance just to boot (§15.10); enabled-but-
+not-composed **fails loudly** rather than silently skipping the check, since a wallet that looks screened but
+isn't is worse than an error. Portal-boot verified. **Real pre-existing defect found and fixed:**
+`MerchantRepository.GetByIdAsync` never `.Include`d `SettlementWallets`, so `Merchant.SetSettlementWallet`
+could not see an existing wallet, treated a REPLACEMENT as a first insert, and died on the
+`(MerchantId, Chain)` unique index with a `DbUpdateException` — a 500. **Replacing a merchant's settlement
+wallet had therefore never worked**; it went unnoticed because the dev seeder sets it once on a fresh DB and
+nothing exercised the update path. Found by exercising the endpoint over HTTP, not by the type system. Fixed +
+regression-tested (set, then replace, assert one row with the new address). Tests: 6 new in
+`MerchantPersistenceTests` (block refuses AND persists nothing; review accepted with warning; unavailable
+accepted with warning; clean is silent; **screening-off never calls the provider** — proven by a stub that
+throws if reached, so passing is evidence rather than absence of it; and the replacement regression).
+**HTTP-proven** on a booted Ops host: whitelisting returned `screeningDecision: "Allow"` with empty warnings,
+the replacement path worked (it 500'd before the fix), and the evidence row recorded
+`Purpose=SettlementWallet`. Docs: `docs/address-screening.md` §9. **Deferred:** periodic re-screening of
+wallets already on file (a cached verdict expires, but nothing re-checks a stored wallet — an address clean
+when whitelisted can be designated later), a dedicated ops screen, and per-merchant thresholds.
+
+**Address screening — live entitlement confirmed, a false-positive defect fixed, and the ops screen built
+(2026-09-11) — BUILT, 885 tests green (1 known pre-existing Merchant failure), HTTP-verified against the
+REAL vendor API.** Three things, in the order they mattered.
+**(1) The blocking question is answered: `/v3/risk_score` IS included in the Standard plan** — a live call
+returned HTTP 200 with a fully scored response, so nothing in [[address-screening-vendor]] needs revisiting
+on entitlement grounds. Two side findings: the **sandbox host returns HTTP 400 with an empty body for this
+key** while the live host succeeds (so the smoke script's sandbox mode is unusable and a dev host holding a
+key but the committed sandbox base URL reads `Unavailable` for everything — use the in-memory provider
+locally, or point at live and accept the quota); and `tools/dev/*.ps1` **needed a UTF-8 BOM** — Windows
+PowerShell 5.1 decodes a BOM-less file as ANSI, turning each em dash into a smart quote it accepts as a
+STRING DELIMITER, so the script failed to parse. Same silent-encoding class as the db/sql header rule.
+**(2) A real policy inversion, found only because the live response was read.** `AlwaysBlockIndicators`
+(checked first, independent of score) was matched against the adapter's full indicator list, which folded in
+**every** `risk_detail[].risk_type` — including INDIRECT exposure. Live proof: a widely used TRX address the
+vendor scores **3/100, "Low"** carries `risk_type: sanctioned_entity` at `exposure_type: "indirect"`,
+`hop_num: 3`, 2.7% of volume, through htx. Our policy would have **Blocked** it. Indirect sanctions exposure
+is near-universal for any address with exchange history, so screening as written would have refused a large
+share of legitimate payout destinations — the opposite of the design intent, since "a designation is a legal
+fact, not a gradient" describes a DIRECT hit only. Fixed structurally: `AddressRiskReport` gained
+**`Designations`** (the `exposure_type: direct` subset; a MISSING exposure type counts as direct, so an
+unfamiliar shape over-refers rather than under-detects) alongside `Indicators` (everything, kept as evidence
+and shown to reviewers); `Decide()` matches **Designations only**. Indirect exposure is not discarded — the
+vendor already prices it into the score the thresholds judge, so a row may legitimately read `Allow` while
+listing `sanctioned_entity`. Also found: **.NET config array binding APPENDS to the code default**, so
+`AlwaysBlockIndicators` was duplicated in every stored policy string; de-duplicated at the point of use, and
+the additive behaviour kept deliberately (a sanctions rule should not be deletable by editing a settings
+file) and documented. Evidence rows now stamp `always_block_direct_only=…`. Tests: the live payload is a
+verbatim fixture asserting indirect ⇒ evidence-only, direct ⇒ designation, missing-type ⇒ direct, plus a
+policy-level test that indirect exposure at a low score Allows and is still recorded.
+**(3) The ops screen** (the day-one gap Phase 2 named). `GET /api/v1/ops/compliance/screenings` (paged,
+newest first, filters chain/decision/purpose/address/date, unknown value ⇒ 400 with a specific code),
+`GET .../{id}` (adds the provider's verbatim payload — omitted from the list so fifty rows do not drag fifty
+JSON blobs to render a table that shows none of them), and `POST .../re-screen` (ignores the cache, appends
+a row). **No migration** — the table already carried the decision+screened-at index, added for exactly this
+read. New Compliance Contract `IAddressScreeningDirectory` + `AddressScreeningDirectory` (§4.5, registered
+in core since it reads stored rows and never contacts a vendor). New `IAddressScreeningService.ReScreenAsync`
+— deliberately a separate method from `ScreenAsync`, because a per-payout cache bypass is exactly what the
+~1 call/sec limit cannot absorb, so forcing a fresh call stays a human act; the three money-path test stubs
+now THROW on it, making that a guard rather than a convention. Two new permission codes,
+**`ops.compliance.view` and `ops.compliance.manage`** split precisely because re-screening SPENDS QUOTA and
+a read-only analyst must not be able to exhaust the budget the payout queue depends on. **The counters count
+distinct ADDRESSES at their latest verdict, not rows** — an address re-screened weekly would otherwise
+dominate a "blocked" count and make it look like a workload; the list stays full history, so a row can appear
+under an `Unavailable` filter while counting as `Allow` (verified live). An unreachable provider is **200
+with `Unavailable`**, never a 5xx — the request worked, the answer is "we could not tell". **HTTP-proven on
+a booted Ops host**, including a live re-screen returning `Allow` score 3 with `sanctioned_entity` in its
+reasons: the designation split working end-to-end on real vendor data, on the exact response that would have
+been Blocked before. **Quota accounting:** there is NO way to read consumption from the API — no rate-limit or quota headers, and
+no usage endpoint (`v1/quota`, `v1/usage`, `v1/user_info`, `v1/account`, `v1/api_quota`, `v1/remaining_quota`,
+`v1/balance` all answer `PageNotFound`), so the dashboard is the only source. The smoke script was rewritten
+around that: `-Mode Entitlement` / `-Mode Quota` (one metered call with an explicit before-and-after, turning
+the drop into a screenings-per-day figure) / `-Mode Sandbox` (now a diagnosis, since the sandbox rejects a
+production key). Capacity is documented against the measured weight: at 1 unit/call the plan gives 10,000
+screenings/day, at 10 units 1,000 — and a ~170/day workload (5,000 payouts/month, ignoring the 30-day cache)
+fits with 6x headroom even on the worst assumption, so the weight matters for planning, not for whether to
+enable screening. **The measured number is still unrecorded** — `docs/address-screening.md` §5 has the slot.
+**Frontend linkage:** `SettlementWalletResult` gained `ScreeningId` (the Ops settlement-wallet response now
+emits `screeningId`), because the withdrawal row already carried one and without it an operator seeing a
+warning had no route to the indicators behind it — both screens now deep-link to
+`GET /ops/compliance/screenings/{id}`, so one place renders the evidence and the two cannot disagree.
+Docs: `docs/address-screening.md` §3/§5/§7/§10, `docs/backoffice-frontend-integration.md` §18 (vocabulary now
+carries `pending_screening` + the screening enums), §22b, §24. **Still deferred:** whether the daily quota is flat or weighted per endpoint (needs a dashboard reading
+taken around a known call count); periodic re-screening of wallets on file (staff can now force one, nothing
+does it on a schedule); a hop/percentage threshold for indirect exposure (visible on the evidence, tune once
+there are real hit-rate numbers); Phase 3 inbound deposit senders; per-merchant thresholds.
+
+**Settlement-wallet re-screening + a process-wide rate limiter + the sibling of an already-fixed defect
+(2026-09-11) — BUILT, 904 tests green (1 known pre-existing Merchant failure), both hosts boot-verified.**
+Three things.
+**(1) The rate limiter was per-instance, and the provider is TRANSIENT.** `AddHttpClient<TClient,TImpl>`
+registers the implementation as transient, so the pacing gate held as a field on `MistTrackAddressRiskProvider`
+was recreated on every DI scope with `_nextAllowedCall` back at `MinValue`. Pacing therefore held INSIDE one
+worker pass and imposed no constraint between passes, between a worker and an HTTP request, or between two
+workers in one process — each caller pacing itself perfectly while the process breached the plan limit by the
+number of concurrent callers. Found while adding the second screening caller below, which would have doubled
+the real rate. Not cosmetic: a breach answers 429, a 429 is a screening with NO verdict, and the payout gate
+holds a no-verdict payout for staff, so an unpaced burst converts straight into a queue of held payouts. Fixed
+by extracting **`MistTrackRateLimiter`** as a SINGLETON injected into the (still transient) provider. Tests
+assert two scopes share one gate, that the provider is transient (documenting WHY the gate cannot live on it),
+that a real composition resolves MistTrack and not the fake (§10), and that a zero rate does not divide by zero.
+Still only correct within one process — the single-flight lock on every screening path is what makes an
+in-process limiter sufficient; remove it and this must become a Redis token bucket.
+**(2) Periodic settlement-wallet re-screening** (the deferred item from the settlement-screening milestone).
+Whitelisting screens an address ONCE; a verdict is a snapshot, so an address clean on approval day can be
+designated months later while every one of that merchant's earnings keeps being paid to it. New
+`SettlementWalletScreeningService` + `SettlementWalletScreeningWorker` in **`Merchant/Workers`** — the
+module's first file in that layer since the 2026-08-13 prune (§4.3: create a layer when its first real file
+lands). **It FLAGS ONLY and never revokes**, which is the design: revoking would let a vendor opinion (or its
+outage) halt a merchant's earnings with nobody in the loop, and a human is already in the loop because every
+cash-out stops at `PendingAdminAudit`; a revocation is also destructive and needs re-approval to undo, while a
+flag costs nothing either way. **`Unavailable` is deliberately NOT on the worsening scale** (Allow<Review<Block)
+— a provider outage is not news about the address, and alarming on it is how a real alert gets ignored; a
+first-ever verdict is flagged only if itself bad. **It costs almost nothing to run often**: the pass goes
+through `ScreenAsync`, so a still-fresh verdict is served from cache — `Compliance:CacheDays` drives quota, not
+the interval, and the pass reports how many wallets actually cost a call. New Contract
+`IMerchantSettlementDirectory.ListAllAsync` (unpaged on purpose: one row per merchant per chain, and the caller
+screens all of them anyway, so paging would add a cursor and a skipped-wallet bug class for nothing). Config
+`Merchant:Screening:{RescreenSettlementWallets (default OFF), RescreenIntervalHours (12)}` — kept SEPARATE from
+`ScreenSettlementWallets` because whitelisting is a handful of calls a month while this is one per merchant per
+chain per cycle forever. Worker registered unconditionally and gated inside, so enabling it is a config change
+not a redeploy. Provider resolved SOFTLY like the registrar, so the portal host still boots; enabled-but-not-
+composed logs an error rather than silently checking nothing. **Surface:** `MerchantSettlementWalletView` gained
+`ScreeningDecision`/`ScreeningScore`/`ScreeningId`/`ScreenedAt`, read from STORED evidence only (no provider
+call, so opening a merchant spends no quota and a vendor outage cannot break it) and only on the per-merchant
+read — `GetPagedAsync` does not even load settlement wallets, so annotating the list would add a per-row cost
+to a screen that shows none of it. `screenedAt` matters as much as the decision: an old verdict on a high-value
+destination is itself worth seeing. HTTP-verified returning `Allow`/score 0/id/timestamp.
+**(3) The sibling of the settlement-wallet loading defect, found by reading the boot log.**
+`MerchantRepository.GetByIdAsync` was fixed when replacing a wallet was found to 500; **`GetByCodeAsync` had
+the identical omission and was missed**, so `DevMerchantSeeder` — which resolves by code then calls
+`SetSettlementWallet` — failed `IX_MerchantSettlementWallet_MerchantId_Chain` on EVERY boot of an already-
+seeded database. The rule, now written beside the code since it has been missed twice: **a read that hands
+back the aggregate to be MUTATED must load the whole aggregate**; partial loading is only safe for a read-only
+projection, and those go through `MerchantDirectory`. Fixed + regression-tested at the seeder's exact shape
+(load by code, replace, assert one row); boot-verified from one such failure per boot to zero. Docs:
+`docs/address-screening.md` §5/§11, `docs/backoffice-frontend-integration.md` §22b.
+
+**Inbound screening (Phase 3) — watching OUR OWN deposit addresses, + a config-binding bug that doubled the
+bill (2026-09-11) — BUILT, 915 tests green (1 known pre-existing Merchant failure), HTTP-verified.** The user
+set the shape: an inbound transfer cannot be checked while it is moving, so the best available control is to
+check our own deposit wallets, manually and on a schedule. That is exactly right, and it is why sender
+screening was never the design — there is nothing to screen until the transfer lands, and once it lands it
+CANNOT be refused (an arrived deposit is credited, and a frozen merchant's deposits still credit the ledger,
+§14). The available signal is the other side of the same graph: a provider scores an address from its
+history, so tainted inflow raises the score of OUR receiving address.
+**It RECORDS AND FLAGS ONLY** — no deposit reversed, no credit withheld, no wallet disabled. The restraint is
+firmer than the settlement pass because by flag time the money has already reached a merchant's balance, so
+any automatic reaction would mean clawing funds back on a vendor's say-so.
+New `ScreeningPurpose.DepositAddress` (string-stored ⇒ NO migration), deliberately distinct from
+`DepositSource` (a counterparty). New `DepositAddressScreeningService` + `DepositAddressScreeningWorker` in
+**`AssetManagement/Wallet/{Application,Workers}`** — Wallet owns deposit addresses, so it owns this, by the
+same logic that put the settlement pass in Merchant; Workers is that module's first file in the layer since
+the 2026-08-13 prune. **Scheduled and manual are separate on purpose:** the manual sweep
+(`POST /ops/compliance/deposit-addresses/screen`, `ops.compliance.manage`) bypasses the ENABLED switch so
+staff can check on demand without a standing spend, but NOT the per-pass cap — a manual run costs what a
+scheduled one costs. Composition mirrors that split: `AddDepositAddressScreening` registers the service in
+both hosts, the worker ONLY in the money host (§4.7 — the ops host runs no background work).
+**The per-pass cap is the load-bearing control.** Deposit addresses are the one candidate set that grows
+without bound, and this shares a quota with the payout gate — the control that actually holds money — so an
+uncapped sweep could spend a day's budget and leave payouts unscreenable. `MaxAddressesPerPass` (100) bounds
+a pass BEFORE it starts; the remainder is picked up next pass, and `candidates` vs `screened` (plus a log
+line) says plainly when the cap is biting. Only FUNDED addresses are candidates (an unused address has no
+graph). Candidate selection is ONE indexed query, not one round trip per address: new Contract
+`IAddressScreeningService.FindAddressesNeedingScreeningAsync` returns the subset lacking a fresh verdict,
+capped at the budget (and returns nothing at all when screening is disabled, rather than sending a caller off
+to write an Unavailable row per address). Config `Wallet:Screening:{Enabled (default OFF), MaxAddressesPerPass,
+IntervalHours, Chains}`.
+**The bug this found, live and costing real quota: .NET binds a configuration array by ADDING to the code
+default.** `"Chains": ["Tron"]` against a default of `[Chain.Tron]` bound to `[Tron, Tron]`, so the sweep
+looped twice over the same chain and screened every address TWICE — observed as `candidates: 2` for a single
+address, then `candidates: 1` after the fix. The same binding behaviour was found earlier on
+`AlwaysBlockIndicators`, where it was merely noisy; here it doubled the bill. Both are now de-duplicated at
+the point of use, and an audit confirms they are **the only two array-typed options in the codebase with a
+non-empty default** — any array option added later behaves the same way. Regression-tested with the exact
+binder output. Docs: `docs/address-screening.md` §12, `docs/backoffice-frontend-integration.md` §22b + the
+status vocabulary. **Still not built:** `DepositSource` (screening the actual sender) stays unimplemented and
+unimplementable as a gate — `DetectedTransfer` carries no From address, and even with one an arrived deposit
+could only be flagged, which is what this milestone already achieves from the other direction.
+
+**Proximity rule for indirect exposure (2026-09-11) — BUILT, OFF BY DEFAULT, 926 tests green (1 known
+pre-existing Merchant failure), verified against the LIVE vendor API.** The knob the decision model was
+missing, shipped disabled so the thresholds become a config change rather than a deployment once there is
+real data to set them from.
+**The gap it closes:** since the designation split, ALL indirect exposure is treated identically — recorded
+as evidence, left entirely to the vendor's score. That is the safe default and it is what makes screening
+usable, but it treats 60% of volume one hop from a sanctioned entity the same as 0.1% five hops away. Those
+are different facts.
+**The rule:** an INDIRECT finding whose risk type is in `AlwaysBlockIndicators`, within
+`Compliance:IndirectReviewMaxHops` AND at or above `Compliance:IndirectReviewMinPercent`, is raised to
+**Review — never Block**. Block stays reserved for a direct designation, a legal fact rather than a matter of
+degree; proximity is a gradient, so the most it justifies is a person looking. **Both conditions must hold**:
+distance alone would flag nearly every address with exchange history (the failure the rule exists to avoid,
+not to cause), and weight alone would flag an address whose whole history traces to something bad fifteen
+removes away. **It can only RAISE a clean result** — score thresholds are evaluated first, so a direct
+designation still blocks and a high score still blocks. It reuses `AlwaysBlockIndicators` rather than taking a
+second list, so the two cannot drift; a drifted compliance rule is worse than a blunt one.
+**Required a provider-contract change:** flat indicator strings can only answer "is it designated", so
+`AddressRiskReport` gained **`Exposures`** (`RiskExposure`: risk type, direct/indirect, hops, percent,
+entity) alongside `Indicators`/`Designations`. `MaxHops = 0` disables the rule and is the default, so
+shipping this changes nothing anywhere until someone configures it. Thresholds in force are stamped onto
+every evidence row (`indirect_review<=3hops>=1pct`) so a decision stays explainable after the setting changes.
+**Why disabled, and why the numbers are NOT guessed:** set loosely, every payout queues for staff, which
+trains people to approve without looking and makes the control worse than nothing; set tightly, it never
+fires and nothing changed. Every screening stores the full provider payload, so the evidence to choose them
+is already accumulating — measure the hop/percent distribution of real destinations once volume has run
+through. Reference point from live data: an ordinary TRX address the vendor scores 3/100 reads
+`sanctioned_entity` at **2.735% of volume, 3 hops** out through an exchange; any threshold catching that will
+catch most legitimate destinations.
+**Verified on the LIVE API:** the same address, same unchanged score of 3, screens `Allow` with the rule off
+and `Review` with it set to 3 hops / 1% — so the rule and not the score moved it; the evidence row carries
+the thresholds that produced the decision. Tests: 10 (off-by-default, close+heavy ⇒ Review, the real live
+reading still passes a sensible threshold, close-but-negligible ignored, heavy-but-distant ignored, a risk
+type outside the designation list unaffected, a direct designation still Blocks with the rule on, thresholds
+recorded on the evidence) plus 2 adapter tests that hops/percent/entity survive the mapping intact. Docs:
+`docs/address-screening.md` §3 + §13. **The screening deferred list is now down to one item: per-merchant
+policy** (thresholds are global config), which waits on the same real hit-rate numbers.
+
+**Screening thresholds made back-office configurable (2026-09-11) — BUILT, 940 tests green (1 known
+pre-existing Merchant failure), HTTP-verified end to end.** The hop limit and every other tuning knob can now
+be set from the UI, which is what the measure-then-set advice needed to be actionable.
+**The split, and it is the security decision:** the TUNING knobs (block/review scores, cache days, hop limit,
+volume floor, added designations) are API-editable; the MASTER SWITCHES (`Compliance:Enabled`,
+`Withdrawal:Screening:Enabled`, `Merchant:Screening:*`, `Wallet:Screening:Enabled`) stay in configuration.
+Thresholds decide how a control is calibrated; switches decide whether it runs at all. A stolen admin session
+must not be able to silently switch off the gate that holds money — keeping that in config means it takes
+infrastructure access, not a browser tab. `GET .../policy` NAMES those keys and the reason, so a settings
+screen says why the switch is absent instead of leaving an operator hunting for it.
+**Config is the floor, a saved version is the override.** Config alone ⇒ every tuning change is a deployment;
+DB alone ⇒ a fresh environment boots with NO policy on a control that decides whether money moves, which is
+the worst possible default. `source` (`Configuration`/`Stored`) distinguishes "nobody has set this" from
+"someone set it to exactly the default" — otherwise indistinguishable, and only one is a question worth
+asking; `configuredDefaults` stays visible beside `current`.
+**Append-only and attributed**, like the evidence it governs: new `compliance.ScreeningPolicyVersion`
+(migration `AddScreeningPolicy`, `150-compliance.sql` regenerated with BOM + QUOTED_IDENTIFIER header). A
+payout allowed last month must stay explainable against the thresholds actually in force, which a mutable
+settings row destroys. `updatedBy` comes from the validated session via the existing `AuditActor` helper and
+NEVER from the body — an attribution the caller supplied is not an attribution. A change also writes a
+warning-level log line. **The designation list is ADD-ONLY**: staff may add, but cannot remove what the
+platform ships with, because a sanctions override is exactly the rule that should not come off in a web form;
+`editableIndicators` is the removable subset.
+**Cross-host propagation:** the ops host serves the API, the money host runs the workers. New
+`ScreeningPolicyProvider` (scoped) + `ScreeningPolicyCache` (SINGLETON — a per-scope cache would expire every
+request and cache nothing) resolves the effective policy with a **30-second** window, so a change reaches the
+workers without a restart; the saving host invalidates its own cache immediately. `AddressScreeningService`
+now resolves thresholds through the provider ONCE per screening (so every rule in one call is judged against
+one consistent set) and reads only `Enabled` straight from config.
+**Validation lives in the domain** (`ScreeningPolicyVersion.Create`), not at the edge, since these are the
+rules themselves: scores 1-100, review at or below block (a higher review floor means nothing EVER reaches
+review — silently useless is worse than refused), cache 1-365 days (zero re-screens on sight and exhausts the
+quota), hops 0-10 (zero disables the proximity rule; beyond ten a finding describes the network, so more only
+LOOKS cautious), percent 0-100, attribution required. New `ComplianceErrors` with stable dotted codes. A
+refused update persists nothing.
+**HTTP-proven on a booted Ops host:** read `Configuration` before anything saved; PUT hop limit 2 / 5% with an
+added designation returned `Stored` attributed to the session user with the shipped designations intact and
+only the added one editable; all six validation rules returned their codes at 400; history showed the version
+with its note; and a subsequent screening stamped `indirect_review<=2hops>=5.00pct` onto its evidence row —
+the saved policy reaching the DECISION PATH, not just the settings screen. Docs:
+`docs/address-screening.md` §14, `docs/backoffice-frontend-integration.md` §22b (all 67 ops routes verified
+documented). **Deliberately NOT exposed:** the master switches above, and the three consumer modules'
+operational settings (`RescreenIntervalHours`, `MaxAddressesPerPass`, `OnUnavailable`) — those are deployment
+characteristics rather than risk appetite, and can be promoted the same way if wanted.
+
+**Ops API verified end-to-end for front-end use, 4 defects found and a host-wide envelope guarantee added
+(2026-09-11) — BUILT, 946 tests green (1 known pre-existing Merchant failure).** Asked to confirm the front
+end can actually use every endpoint, so all **75 route-and-method pairs** were EXERCISED over HTTP against a
+booted host rather than checked off against source — path params filled with a valid-shaped but nonexistent
+id and bodies sent empty, so writes answered with validation or not-found instead of mutating anything.
+**Four defects found that way, each of which would have hit the UI:** `POST /ops/accounts` and `POST
+/ops/roles` returned **500** on a null username/name (the value reached `Trim()`; the validation errors
+`staff_user.username_required` and `role.name_required` already existed and were simply never reached) —
+guarded in the SERVICES, not the endpoints, since that is the boundary every caller crosses;
+`POST /ops/treasury/reload/{id}/submit` returned 500 because `Convert.FromHexString(null)` throws
+`ArgumentNullException`, which the `FormatException` catch never saw; and `GET /ops/treasury/hot-pool`
+returned **400 with NO ENVELOPE** because `chain` was a required minimal-API parameter, so a request without
+it failed model binding before any code ran.
+**That last one is systemic, so the fix is too.** New **`OpsExceptionMiddleware`**, registered FIRST so it
+wraps CORS, auth, authorization and routing: a `BadHttpRequestException` (missing required query param,
+malformed JSON body, wrong-shaped route value) becomes **400 `ops.malformed_request`** and any unhandled
+exception becomes **500 `ops.internal_error`** — both in the standard envelope, with the detail logged and
+NEVER returned. A client-aborted request is swallowed quietly rather than answered on a closed connection,
+and a response that has already started writing is left alone (a truncated response beats a malformed one).
+There was no global handler at all before this, so REQ-7's `errorCode` contract silently did not hold for the
+two classes no endpoint ever saw.
+**Browser behaviour proven, not assumed:** credentialed CORS preflight from the Vite origin returns the
+origin + `allow-credentials: true` and permits `X-CSRF-Token`, an unlisted origin gets no `allow-origin`
+back; login sets the httpOnly `cpe_ops_session` cookie and returns a `csrfToken`; the cookie alone
+authenticates a read; a cookie write WITHOUT the CSRF header is 403 `ops.csrf_invalid` and WITH it reaches
+the handler; logout revokes and the next request is 401.
+**Permission gating proven with a genuinely restricted user** — an admin's wildcard passes every gate, so a
+role holding only `ops.merchants.view` was created and logged in: 200 on `/ops/merchants`, 403
+`ops.permission_denied` on `/ops/sweeps`, `/ops/compliance/policy` and `/ops/accounts`, and the denied WRITE
+refused too rather than merely hidden. Tests: 6 new (both guards, null/empty/whitespace). Docs:
+`docs/backoffice-frontend-integration.md` §2 (envelope guarantee + the two new codes) and new §23b recording
+what was exercised, what it proved, and what it does NOT cover (write success paths stay service-tested, the
+project's convention for Ops endpoints).
+
+**Back-office integration guide rebuilt for a front-end build (2026-09-11).** The user is starting the admin
+portal, so `docs/backoffice-frontend-integration.md` gained three things it lacked, all verified rather than
+asserted. **§0 Start here:** how to boot the host, the dev login, the CORS allow-list trap (a credentialed
+request needs an EXACT origin, so a Vite server on an unlisted port fails every call), the five conventions
+that each cost an afternoon (check `isSuccess`; branch on `errorCode` never prose; cookie writes need
+`X-CSRF-Token`; rates are percent on the wire; money is a display decimal PLUS an exact base-unit string),
+and a ~40-line TypeScript client that gets all five right. **The client was RUN against a live host exactly
+as printed** — login, authenticated read, `/auth/me` session restore, a CSRF-carrying write, a typed 404, and
+the 401 redirect path all behaved as shown; `redirectToLogin` is now `declare`d, since it is called only on a
+401 and an undefined function would break at session expiry, the worst moment to discover it. **§0a Every
+route at a glance:** all 75 route/method pairs GENERATED from the endpoint source with permission and a
+pointer to the section documenting the payload — every one mapped, and every permission string validated
+against the real `OpsPermissions` constants. **§0b Suggested build order:** ten screens with their endpoints
+and dependencies, login-shell first because nothing works until cookie + CSRF + permission-driven nav are
+right. Claims spot-checked live rather than copied from older sections: login returns
+`token/csrfToken/permissions` and `/auth/me` returns `permissions` + a fresh `csrfToken` (so it doubles as
+session restore); a withdrawal row carries `expectedAmount` + `expectedAmountBaseUnits` + `decimals`; a fee
+row exposes `depositFeePercent`/`withdrawalFeePercent` with no bps field. The preamble now says the doc was
+exercised over HTTP, not merely read against source.
+
+**REQ-26 — current-verdict list + batch latest lookup for the admin portal (2026-09-14) — BUILT, 956 tests
+green (1 known pre-existing Merchant failure), HTTP-verified.** Filed by the admin-portal team in
+`platform-admin-frontend/docs/backend-requirements.md`; every factual claim in it was checked against source
+first and held. **The defect:** `GET /ops/compliance/screenings?decision=X` filters ROWS, so an address blocked
+then cleared still matched `decision=Block` through its old row forever — fine for an audit trail, fatal for a
+work queue. **Two new reads, both `ops.compliance.view`, stored evidence only (no quota):**
+`GET /api/v1/ops/compliance/addresses` (one row per chain+address at its latest verdict; filters decision/
+purpose/chain/stale/page) and `POST /api/v1/ops/compliance/screenings/latest` (latest verdict for up to 200
+addresses on one chain). New Contract methods `IAddressScreeningDirectory.SearchCurrentAsync` /
+`FindLatestForAddressesAsync` + `CurrentVerdictFilter`/`CurrentVerdictPage`/`LatestScreeningLookup`/
+`ScreeningLookupLimits`. **No migration.** **Rules:** reduce first, filter second; `purpose` selects WHICH
+addresses (ever screened for it) while the verdict stays the latest row whatever its purpose, so re-screening a
+deposit address from the payout screen cannot drop it from the deposit queue; `stale` = `FreshUntil` null or
+past; `totalCount` counts addresses; `summary` honours every filter EXCEPT `decision` (the counters describe
+the population the table is drawn from). Batch: one entry per distinct address in request order echoed as
+sent, exact duplicates collapse but case variants do not (TRON Base58 is case-sensitive), `null` means never
+screened only, >200 ⇒ 400 `ops.too_many_addresses` (never truncated), a missing `addresses` field ⇒ 400
+`ops.address_required` so a misspelt field cannot succeed about nothing. **One definition of "latest"
+everywhere — `ScreenedAt` then `Seq`, deliberately NOT `Id` as the request asked:** SQL Server orders a
+`uniqueidentifier` by its last six bytes first, so `ORDER BY Id` is deterministic but unrelated to write order
+even for v7 GUIDs; `Seq` is the clustered identity = insertion order. The cache probe
+(`AddressScreeningRepository.FindLatestAsync`, the read the payout gate acts on) previously ordered by
+`ScreenedAt` alone and now uses the same rule, as do the counters. Reduction is a NOT EXISTS so filtering,
+counting and paging compose in SQL on `IX_AddressScreening_Chain_Address_ScreenedAt`. Also: the decision/
+purpose parsers now reject NUMERIC enum strings (`Enum.TryParse` accepts "7"), which previously parsed to a
+nonexistent value and matched nothing. Tests: 10 SQL Server (incl. a timestamp tie resolving identically in
+all four readers). HTTP: 21 checks incl. the 200/201 boundary and 403 for a restricted user. Docs:
+`docs/address-screening.md` §15, `docs/backoffice-frontend-integration.md` §2/§22b/§23b + §0a regenerated (77
+route/method pairs). **Frontend side not edited from here** — REQ-26's status and the per-row lookup
+composable live in the frontend repo.
+
+**Staging operations: the IIS worker outage, nightly-shutdown tooling, and a KMS custody switch for the testnet tier
+(2026-09-14) — BUILT, KeyManagement 122 tests green, gateway round-trip verified on a real database.** A tester's Nile
+deposit on staging never confirmed. Root cause was not code: **the gateway had not been running for five days.** It
+is hosted in-process under IIS, which starts an app on its first request and stops it on idle or recycle; the
+scanner, confirmation worker, outbox relay and expiry worker stop with it, and payers never call the gateway, so
+nothing woke it. Fixed operationally (app pool `AlwaysRunning`, no idle timeout, no recycle, preload); for production,
+run MerchantGateway as a Windows service. Five scripts in `tools/dev/` now cover the box, all ASCII+BOM for PowerShell
+5.1, secrets shown only as fingerprints, state changes dry-run unless `-Force` (`docs/ec2-staging.md` §6):
+`Get-HostConfigReport.ps1` (effective config per IIS site; found DGP-BOAPI2 carrying a stray gateway DLL and the
+portal on the repo's dev pepper/signing key), `Get-DepositDiagnosis.ps1` (node → tx → cursor → deposit → outbox →
+invoice → logs), `Set-ScanCursor.ps1`, `Start-StagingPlatform.ps1` (the nightly/weekend boot: services, IIS tuning,
+scanner catch-up vs skip, verify; registers itself as a startup task), and `Switch-StagingCustody.ps1`. **Cursor
+rule:** catching up never misses a payment and a weekend takes ~25 min, so the cursor is left alone unless the
+catch-up exceeds an hour; a longer gap skips only to just before the earliest moment an invoice was payable (block
+found by timestamp), and every skip is logged for a later rescan. **KMS on the testnet tier (T3, user-approved:
+code change, retire-and-restore, testnet-only CMKs):** previously only Production could use KMS. New
+`AddTestnetKeyCustody(config, reconcileWallets)` registers KMS custody when `KeyManagement:Kms:Enabled`, else the
+in-memory store, never both (the §10 interlock is unchanged), and throws at boot if KMS is on without region + both
+ARNs. All three hosts use it; only MerchantGateway passes `reconcileWallets`, and skips the staking seeder under KMS
+(it imports a private key; there is no Energy CMK). **The switch itself is domain code, not SQL:** wallet rows record
+their store and the filtered unique index allows one active wallet per (merchant, chain, purpose), so a switched-off
+wallet would block its replacement. `CustodyModeReconciler` (KeyManagement.Application, run once at gateway boot by
+`CustodyModeReconciliationService`, which stops the host on failure) archives the other store's active wallets, saves,
+then reactivates the most recently archived wallet of the store in force per group, in one transaction. New
+`HdWallet.Reactivate` (Archived only; Disabled stays disabled; derivation index untouched, so no address is reissued)
++ `IHdWalletRepository.ListForCustodySwitchAsync`. **No migration, no ledger impact.** Money effects, documented: deposits
+keep crediting (detection is keyless); archived addresses cannot be swept or paid out from until switched back (sweep
+fails pre-sign, payout parks `AwaitingFunds` with reserve held); KMS mode starts an empty KMS hot pool. Tests: 6
+reconciler tests on SQL Server (archive frees the slot, round trip restores with indexes intact, idempotent, disabled
+never restored, most-recent wins, domain guard) + 6 composition tests (exactly one store, missing identifier refuses,
+switch ordered before the re-seeder). Verified by booting the real gateway build: KMS on archived 6 wallets, off
+restored 6 with identical indexes, missing ARN refused to start with nothing changed. **Not verified:** sealing a seed
+under a real CMK (no AWS credentials locally; `kms-go-live.md` step 3 on the box). **Known, deferred:** Sweep's scan
+keeps creating sweeps for funded addresses whose key is archived, each failing pre-sign (noise, no funds move);
+staging still uses the leaked TronGrid key and the portal the repo's dev pepper/signing key (user: rotate at prod).
+
+**Merchant API IP allowlist enforced (2026-09-17) — BUILT, Merchant 188 tests green (1 known pre-existing failure),
+HTTP-verified on a booted gateway.** Found while planning the Windows-service work: `AllowedIps` could be edited in both
+portals (and synced to Cloudflare from Ops) but **was never checked on a merchant API call** — the port from the legacy
+`APIGateway` kept its Cloudflare edge sync and dropped `MerchantSecurityFilter`'s per-merchant check, so anyone holding
+a merchant's API key and signing secret could call from anywhere. The edge sync alone could not substitute: it admits
+the UNION of every merchant's addresses. **User decisions:** trust `CF-Connecting-IP` only from Cloudflare's ranges;
+exact addresses only (no CIDR); **an empty allowlist denies every call**; leave the Cloudflare sync as is.
+**Where:** the Merchant module owns the rule. `MerchantIpAddress` (Domain) defines a valid entry — a single full
+address, IPv4 as four decimal octets, normalised (IPv4-mapped IPv6 → IPv4, IPv6 canonical lowercase, zone id dropped),
+refusing CIDR/ports/host names and the shorthand/octal forms `IPAddress.TryParse` silently accepts (`1.2` = `1.0.0.2`).
+`Merchant.UpdateAllowedIps` normalises and refuses the WHOLE update on any bad entry; `MerchantConfiguration.AllowsIp`
+compares normalised addresses, returns false for an empty list, a null caller, or a stored entry that no longer parses
+(e.g. a CIDR range the portal used to accept). **Shared contract change:** `IMerchantRequestVerifier.VerifyAsync` gained a
+REQUIRED `IPAddress? clientIp`, checked LAST — after the signature and `CanTransact` — so a wrong key/signature from any
+address stays the uniform 401 `merchant.invalid_credentials` and only an authentic call from the wrong place gets
+`merchant.ip_not_allowed` (published as `MerchantRequestVerificationErrors.IpNotAllowed` so the host branches without
+touching Domain, §4.5). The verifier logs a warning with merchant code + the address seen. **Gateway:** new
+`ClientIpResolver` believes `CF-Connecting-IP` only when the TCP peer is inside `Gateway:ClientIp:TrustedProxyRanges`
+(Cloudflare's 22 published ranges in `appsettings.json`, fetched 2026-09-17; code default EMPTY because config arrays
+append to code defaults), otherwise uses the peer; through a trusted proxy with a missing, repeated or unparseable header
+the caller is unknown ⇒ refused, never attributed to the proxy. Built at boot so a malformed range stops the host. The
+middleware maps the code to **403 "IP address not whitelisted."** (the legacy message). **Edit paths unified:** Ops and
+portal both use `AllowedIpInput.Partition` (Application) — Ops keeps its contract (saves valid, reports `invalidIps`,
+400 only if all refused), the portal refuses the whole list on any bad entry and **no longer accepts CIDR**; both reads
+and writes return `apiAccessBlocked`. **Dev seed:** `Merchant:DevSeed:AllowedIps` (`127.0.0.1`, `::1` in the gateway and
+portal Development configs), applied only while the list is empty so a restart never undoes an edit. **No migration,
+no ledger impact.** Tests: 29 domain allowlist tests (accept/refuse tables, mapped IPv4, IPv6 forms, empty/null deny,
+stored CIDR matches nothing, whole-update refusal, partition), 4 verifier tests (unlisted ⇒ 403 code, empty list, unknown
+caller, bad signature from an unlisted address still 401), a seeder test (applied once, never overwrites), and 12
+`ClientIpResolverTests` in `Api.IntegrationTests` (forged header from outside Cloudflare ignored,
+IPv6 edges, mapped peers, repeated/listed/garbage headers ⇒ unknown, bad range refuses). **HTTP-verified** on a booted
+gateway with signed requests: listed 200; unlisted 403; forged `CF-Connecting-IP` naming the listed address from localhost
+403; bad signature from an unlisted address 401; empty list 403. **Rollout (breaking by design):** every non-closed merchant
+with a NULL or CIDR-containing list is refused on deploy — pre-deploy query and staging steps in `docs/ec2-staging.md` §7.
+**Deferred:** moving the Cloudflare sync into the Merchant module so portal edits sync too; revisiting client-IP trust if
+a reverse proxy (IIS ARR) is put in front of the gateway on the box — loopback must NOT simply be added to the trusted ranges.
+
+**Treasury cold reload REMOVED + Ops top-up verifier fixed (2026-09-17) — Treasury 9 tests green, migration applied
+twice to a clean database, Ops host HTTP-verified against Nile.** The in-system cold reload (Phase 2 above:
+`TreasuryReload` aggregate, build-unsigned → client-side sign → gateway broadcast/confirm) was superseded. Product owner
+confirmed it obsolete on 2026-09-07 (recorded in both frontend repos' `backend-requirements.md`), and the user
+confirmed the real flow: **deposit addresses → sweep → cold treasury; hot withdrawal pool → the merchant user's
+destination; a low hot wallet is funded by finance from a company wallet OUTSIDE the system and recorded as a top-up.**
+Cold funds never move to the hot pool in-system. **Removed:** `TreasuryReload`, its enums and errors, `TreasuryReloadService`
++ `ITreasuryReloadService`, `TreasuryReloadProcessingService`, repository + EF map, the whole `Treasury/Workers` project
+(its only file was the reload worker; removed from the solution and the gateway), `POST /ops/treasury/reload` and
+`/reload/{id}/submit` + request models, the two `/dev/treasury/reload*` routes, both reload test files, and the Ops
+host's reload-only transaction builder. **Kept:** the cold treasury wallet (Sweep's destination, counted by
+Reconciliation) with `POST /ops/treasury/cold-wallet`, the hot pool, and top-up recording. The two errors the cold-wallet
+code borrowed from the reload moved to `TreasuryColdWalletErrors`; `AddressRequired`'s code changed
+`treasury.reload.address_required` → `treasury.cold_wallet.address_required` (no frontend used it). **Schema (T3,
+user-approved):** migration `RemoveTreasuryReload` drops `treasury.TreasuryReload`; `db/sql/130-treasury.sql`
+regenerated with BOM + header and proven by applying it twice to a fresh LocalDB database. Pre-deploy in-flight check
+and archive query: `docs/ec2-staging.md` §8. **No ledger impact** (the reload never posted). **Real defect fixed on the
+way:** top-up recording needs `ITransactionVerifier`, which the Ops host registered ONLY in its Development block (via the
+in-memory chain), so `POST /ops/treasury/top-up` could not work under Staging or Production — and under Development it
+verified against the fake chain, refusing every real Nile hash. New `AddTronTransactionVerifier(config)` (Blockchain
+Infrastructure: read-only TRON RPC client + `TronTransactionVerifier`, keyless) registered by Ops outside Development or
+when `Chains:Tron:Live=true`, BEFORE the Development block so the in-memory `TryAdd` cannot shadow it. HTTP-verified on
+the new Ops build (Development + Live against Nile): a never-seen hash → real `gettransactioninfobyid` call → 400
+`verification.tx_not_found`, nothing recorded; both reload routes 404; cold-wallet registration still answers.
+**Noted, not built:** the user described top-ups as two steps (admin creates the record in the UI → finance transfers
+on-chain → the record is updated with the hash), while today a top-up is recorded in one step after the transfer.
+
+**Cold COLLECTION wallets + taint segregation + admin-owned sweep dials + multi settlement wallets (2026-09-18) —
+BUILT, 1022 tests green (1 known pre-existing Merchant failure), db/sql applied twice to a clean database.** Four
+connected changes, all T3 (schema + where money goes), agreed with the user before building.
+
+**(1) Cold collection wallets: several per chain, one active per kind.** `TreasuryColdWallet` gained `Kind`
+(`Safe`/`Danger`), `Status` (`Active`/`Retired`), `Label` and a screening snapshot; the unique index moved from
+`(Chain)` to a filtered `(Chain, Kind) WHERE Status='Active'` plus a unique `(Chain, Address)` (migration
+`ColdCollectionWallets` — its `DEFAULT 'Safe'`/`'Active'` backfill is load-bearing: EF's generated empty strings
+would have left the running platform with no active destination and stopped sweeps silently). **Re-pointing is now
+add-and-activate, never an edit of an address in place** — the old address usually still holds funds, and rewriting
+it would drop those funds from the custody total and read as a shortfall. Retired rows are kept forever and
+Reconciliation now sums **every** cold address on a chain (`ListCustodyAddressesAsync`), both kinds, active and
+retired. Two real gaps closed on the way: the registration path had **no address-format validation at all** (the
+same `IAddressEncoderFactory.IsValidAddress` a payout destination gets — a typo here became the destination of every
+future sweep), and **no screening**, while a merchant settlement wallet had both.
+
+**(2) Taint segregation — the deposit address's verdict picks the destination.** `SweepScanService` screens a
+deposit address before creating the sweep: `Allow` → the Safe collection wallet, `Review`/`Block` → the Danger
+(quarantine) wallet, no fresh verdict → `Sweep:Screening:OnUnavailable` (`Hold` by default). **A flagged balance is
+never swept to the Safe wallet as a fallback** — with no Danger wallet registered, or no provider composed, the
+sweep is simply not created and the balance stays on a deposit address the platform also controls. Un-mixing is
+impossible after the fact, which is why the decision is made before the transfer rather than sorted out afterwards;
+`Review` quarantines alongside `Block` because segregating a clean balance is reversible by a human and mixing a
+tainted one is not. Cost is bounded twice: only addresses already over the sweep threshold are screened at all, and
+`MaxScreeningsPerPass` (25) caps live calls, the rest served from stored evidence via one indexed
+`FindAddressesNeedingScreeningAsync`. Each sweep snapshots `DestinationKind`/`ScreeningId`/`ScreeningDecision`
+(migration `SweepSettingsAndDestinationKind`), so a later re-screen never appears to change what a past sweep was
+judged on. New `ScreeningPurpose.ColdCollectionWallet` (string-stored ⇒ no Compliance migration); the collection
+wallets' own verdicts are recorded and **never refuse anything**, because the quarantine wallet is expected to
+score badly — treating that as a disqualification would disable the control exactly when it works.
+
+**(3) Sweep dials owned by the back office.** New `sweep.SweepSettings` (one row per chain): enabled, threshold,
+confirmations, scan interval, plus the schedule state (last run, sweeps created, manual-request marker). Config is
+the floor — a row is created from `Sweep:Policies:{chain}` and keeps tracking it until staff save, after which
+`source` reads `Stored`. One scoped `SweepSettingsService` serves both the workers (`ISweepPolicyProvider`, now
+`ForAsync`) and the API (`ISweepSettingsService`), so a settings screen cannot disagree with what the scan uses.
+The scan worker now ticks every 30s and asks whether a pass is **due** rather than being the schedule itself.
+**The manual trigger is a request, not a scan**: the ops host runs no sweep workers and holds no chain credentials
+(§4.7), so `POST /ops/sweeps/scan/{chain}` stamps the row and the money host claims it on its next tick, consuming
+it exactly once across instances. New permission `ops.sweep.manage`, deliberately split from `.view` — the
+threshold decides when customer funds move and pausing stops them moving at all. `Enabled` lives in the row rather
+than config, unlike a screening master switch: pausing is the *cautious* direction, so it is reachable from the
+back office.
+
+**(4) Merchant settlement wallets: several on file, one active.** Same shape as the collection wallets —
+`Status`/`Label` + a filtered unique `(MerchantId, Chain) WHERE Status='Active'` and a unique
+`(MerchantId, Chain, Address)` (migration `MerchantSettlementWalletSet`, `Status DEFAULT 'Active'` so every existing
+row stays the destination). `IMerchantSettlementDirectory` resolves the **active** one, and the re-screen pass
+covers active wallets only. **Screening no longer refuses the whitelisting** (the user's call): a directly
+designated address is saved with its verdict and simply cannot be made active
+(`Merchant:Screening:BlockActivationOnScreeningBlock`, default true) — the money-path control is kept while the
+record of the decision survives, instead of forcing an operator to re-enter an address the platform already judged.
+Activation re-screens, because that is the moment the address starts receiving earnings. `PUT .../settlement-wallet`
+keeps its old contract (add + activate).
+
+**A real defect found by exercising it on a booted host, not by the type system.** Switching a merchant's
+active settlement wallet returned **500** — intermittently. Only one row per (merchant, chain) may be Active, and
+EF chooses its own UPDATE order, so retiring the incumbent and activating the replacement in one `SaveChanges`
+was rejected by the filtered unique index whenever the activate happened to go first. The first swap in the same
+session succeeded and the next failed, which is the worst shape a bug can take. Fixed the way the Treasury path
+was already written: retire and **save**, then activate and save, inside one transaction
+(`IMerchantRepository.InTransactionAsync`) — two separate transactions would be worse still, since a crash
+between them leaves the merchant with no destination and every cash-out refused. The dev seeder does the same
+two-phase save (`Merchant.PrepareSettlementWallet` + `ActivateSettlementWallet`, the convenience one-save setter
+deleted rather than left as a trap). Regression test swaps back and forth six times on real SQL Server, because a
+single swap can pass on ordering luck; HTTP-verified afterwards with six consecutive 200s on the exact call that
+had 500'd.
+
+**Ops surface:** `GET/POST /ops/treasury/cold-wallets` (+ `/{id}/activate`, `/retire`, `/re-screen`; the singular
+`POST /ops/treasury/cold-wallet` still answers), cold rows carrying live balances (unreadable ⇒ **null, not 0**);
+`GET /ops/sweeps/settings` (also at the original `/policies`), `PUT /ops/sweeps/settings/{chain}`,
+`POST /ops/sweeps/scan/{chain}`; `POST /ops/merchants/{id}/settlement-wallets` (+ activate/retire). Sweep rows now
+emit `destinationKind`/`screeningDecision`/`screeningId`. **No ledger impact anywhere in this work** — a sweep
+relocates funds between addresses the platform already controls, whichever collection wallet receives them.
+Tests: 8 cold-wallet registration tests, 8 sweep-routing tests (incl. "flagged is held rather than swept to Safe"
+and the screening-off provider-never-called guard), a reconciliation test that quarantine and retired addresses
+still count towards custody, and settlement-wallet multi/activate/retire persistence tests. Docs:
+`docs/address-screening.md` §16, `docs/backoffice-frontend-integration.md` §0a/§19/§20/§22/§22b.
+**Deferred:** nothing spends from the quarantine wallet (the key is not in the system, so any movement is a human
+act) and there is no per-source quarantine report; a balance swept before its address went bad is not re-routed.
+
+
 Every other module in the map is a placeholder in this doc, not yet on disk — scaffold a module
 only when real feature work on it starts, creating only the layers it uses (§4.3).
 

@@ -35,6 +35,10 @@ public static class WithdrawalEffectiveStatuses
         // Merchant settlements, which this system records rather than pays: waiting for an admin audit,
         // waiting for finance to pay it externally, and paid-and-verified.
         "pending_admin_audit", "pending_finance_transfer", "finance_settled",
+        // A user payout whose destination is being screened against the AML provider. Its own bucket rather
+        // than folded into "pending", so an operator can tell a queue waiting on a third party apart from one
+        // waiting on us — they call for completely different responses.
+        "pending_screening",
     ];
 
     public static bool IsKnown(string value) =>
@@ -91,7 +95,14 @@ public sealed record WithdrawalAdminRow(
     DateTimeOffset? AuditedAt = null,
     string? CompletedBy = null,
     DateTimeOffset? CompletedAt = null,
-    string? SettlementSourceAddress = null);
+    string? SettlementSourceAddress = null,
+    /// <summary>The address-screening verdict as applied to this payout: Allow / Review / Block / Unavailable,
+    /// with the provider's score. Null when the payout was never screened. Surfaced on the admin row
+    /// deliberately — staff approving a payout the screening flagged need to see WHY on the same screen, not
+    /// in a separate lookup they may skip. <see cref="ScreeningId"/> addresses the full evidence record.</summary>
+    string? ScreeningDecision = null,
+    int? ScreeningScore = null,
+    Guid? ScreeningId = null);
 
 /// <summary>Aggregate totals across the ENTIRE filtered set — not the current page — behind the Ops
 /// withdrawal-transactions screen's summary row. Both sums are exact base-unit integer strings (§14).

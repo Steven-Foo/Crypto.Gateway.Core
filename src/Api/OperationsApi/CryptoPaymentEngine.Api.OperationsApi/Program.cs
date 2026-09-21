@@ -15,6 +15,7 @@ using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Reconciliation.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastructure;
+using CryptoPaymentEngine.Gateway.Core.Platform.Compliance.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Platform.Identity.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Infrastructure;
@@ -86,6 +87,11 @@ builder.Services.AddKeyManagementModule(dbConnection);
 builder.Services.AddBlockchainAddressEncoding();
 builder.Services.AddConfigurationAssetCatalog();
 builder.Services.AddWalletModule(dbConnection);
+
+// Screening of our OWN funded deposit addresses - the service only, never the worker: this host runs no
+// background work (4.7). Here it backs the MANUAL sweep staff can trigger, which is the point of the
+// service and worker being registered separately.
+builder.Services.AddDepositAddressScreening(config);
 builder.Services.AddPaymentIntentModule(config, dbConnection);
 builder.Services.AddDepositModule(config, dbConnection);       // read-only use here: IDepositLookup for /transactions/deposits
 // Withdrawal's DI registration wires up HotWalletAllocator unconditionally (it doesn't know a given host is
@@ -104,17 +110,15 @@ builder.Services.AddAuditModule(dbConnection); // staff-action logging, called d
 // (a bootstrap gap: the portal's own self-service account creation needs a session, which a brand-new
 // merchant does not have yet). Same physical DB, its own schema.
 builder.Services.AddMerchantIdentityModule(config, dbConnection);
-builder.Services.AddTreasuryModule(dbConnection); // cold-reload: hot-pool directory + cold registrar + reload service (composes Wallet/KeyManagement Contracts)
+builder.Services.AddTreasuryModule(config, dbConnection); // hot-pool directory + cold-wallet registrar (composes Wallet/KeyManagement Contracts)
 
-// The cold-reload endpoints build an UNSIGNED treasury→hot transfer, so this host needs a transaction builder —
-// but a KEYLESS one: it never signs (the operator signs the cold key client-side, §10) and never broadcasts
-// (the money host's TreasuryReloadWorker does). Testnet tier uses the in-memory builder; Production uses the
-// real TRON builder — registered UNCONDITIONALLY (not gated on KMS), since the reload is human-signed, not
-// KMS-signed. The builder never crosses a key, so it is safe in the ops host.
-if (builder.Environment.IsDevelopment() || builder.Environment.IsStaging())
-    builder.Services.AddInMemoryTransactionEngine();
-else
-    builder.Services.AddTronTransactionEngine(config);
+// Recording a hot-pool top-up or a merchant settlement verifies the operator's transaction hash on-chain, so this
+// host needs a transaction VERIFIER: read-only and keyless, it never builds, signs or broadcasts (§10). The real
+// TRON verifier is used outside Development, and in Development when Chains:Tron:Live=true (a box running as
+// Development against Nile); otherwise the in-memory one from the Development block below answers. Registered
+// before that block on purpose: the in-memory registration only fills a gap (TryAdd), so the real one wins.
+if (!builder.Environment.IsDevelopment() || config.GetValue<bool>("Chains:Tron:Live"))
+    builder.Services.AddTronTransactionVerifier(config);
 
 // Read-only custody-status view over the reconciliation snapshots the money host's worker writes to Mongo.
 // Registers only the read store (+ shared Mongo client) — NOT the compute ReconciliationService or its worker,
@@ -125,21 +129,35 @@ builder.Services.AddReconciliationReadModel(config);
 // directory only. Energy: the SQL stake/delegate/top-up operation directory + the Mongo resource-health
 // snapshots — NOT the monitor/stake/delegate services or their workers, which need chain/signer capabilities
 // this host lacks and must never run (§4.7). Neither read moves funds, signs, or writes a snapshot (§2).
-builder.Services.AddSweepReadModel(dbConnection);
+builder.Services.AddSweepReadModel(config, dbConnection);
 builder.Services.AddEnergyReadModel(config, dbConnection);
+
+// Address screening (Compliance). The vendor adapter is chosen by DI exactly as the chain adapter is (§8),
+// so there is never a runtime branch where a fake and a real provider could be confused. Development and
+// Staging take the in-memory provider unless a MistTrack key is configured — which lets a developer point
+// at the vendor's SANDBOX (Compliance:MistTrack:BaseUrl) and exercise the real adapter without a live plan.
+// Production always takes the real adapter: an in-memory provider there would fabricate clean scores that
+// are indistinguishable from real verdicts, the same reason a fake signer is never registered in prod (§10).
+var misttrackKeyConfigured = !string.IsNullOrWhiteSpace(config["Compliance:MistTrack:ApiKey"]);
+if (builder.Environment.IsProduction() || misttrackKeyConfigured)
+    builder.Services.AddComplianceModuleWithMistTrack(config, dbConnection);
+else
+    builder.Services.AddComplianceModuleWithInMemoryProvider(config, dbConnection);
 
 if (builder.Environment.IsDevelopment())
 {
-    // Public xpub only, never a seed (§10) — same dev-only seam MerchantGateway uses, and must point at
-    // the SAME HD wallet (matching config) so addresses derived here are consistent with ones derived there.
-    builder.Services.AddDevelopmentKeyCustody(config);
+    // The same secret store MerchantGateway uses: in-memory (public xpubs only) by default, AWS KMS when
+    // KeyManagement:Kms:Enabled=true. It must match that host, because creating a merchant here provisions a
+    // deposit address, and a wallet created under one store cannot be served by the other (§10). Only
+    // MerchantGateway runs the wallet switch.
+    builder.Services.AddTestnetKeyCustody(config);
 
     // Fixed Admin credentials so a fresh clone can call /api/v1/ops/auth/login with no bootstrap step.
     builder.Services.AddDevelopmentStaffSeed(config);
 
     // This host never calls a chain adapter or a signer itself (no build/sign/broadcast endpoint exists
-    // here) — but AddTreasuryModule/AddWithdrawalModule unconditionally wire up HotWalletAllocator/
-    // TreasuryReloadService, which need IBalanceReader/ITransactionBuilder/ISigner to construct at all, so
+    // here) — but AddWithdrawalModule unconditionally wires up HotWalletAllocator/WithdrawalProcessingService,
+    // which need IBalanceReader/ITransactionBuilder/ISigner to construct at all, so
     // ASP.NET Core's Development-only service validation fails at boot without SOMETHING registered for
     // them. These never touch a real key or a real chain (§10) — purely to satisfy the DI graph.
     // KNOWN GAP: there is no Staging/Production branch for these yet in this host (unlike MerchantGateway's
@@ -159,6 +177,11 @@ if (app.Environment.IsDevelopment())
 
 // CORS must precede the auth middleware so preflight (OPTIONS) gets its headers and 401/403 responses still
 // carry CORS headers (otherwise the browser hides the real status behind a CORS error).
+// FIRST, so it wraps CORS, authentication, authorization and routing. A binding failure or an exception
+// thrown in any of those would otherwise escape as a raw framework response with no envelope, and a front
+// end would have to special-case "sometimes there is no envelope".
+app.UseMiddleware<OpsExceptionMiddleware>();
+
 app.UseCors();
 
 app.UseMiddleware<StaffBearerAuthMiddleware>();
@@ -190,5 +213,6 @@ app.MapOpsDashboardApi();
 app.MapOpsReconciliationApi();
 app.MapOpsSweepApi();
 app.MapOpsEnergyApi();
+app.MapOpsComplianceApi();
 
 app.Run();

@@ -107,6 +107,8 @@ public sealed class WithdrawalTronTestnetFlowTests : IAsyncLifetime
         services.AddScoped<ILedgerQuery, LedgerQuery>();
         services.AddScoped<SettledBalanceGate>();
         services.AddScoped<IWithdrawalRequestService, WithdrawalRequestService>();
+        // Screening off: this test exercises the real TRON build/sign/broadcast path, not the AML gate.
+        services.AddSingleton(Microsoft.Extensions.Options.Options.Create(new WithdrawalScreeningOptions()));
         services.AddScoped<WithdrawalProcessingService>();
         services.AddScoped<WithdrawalConfirmationService>();
         services.AddSingleton<IEnergyDelegationService>(new ReadyEnergy()); // in-memory reader reports healthy energy in dev

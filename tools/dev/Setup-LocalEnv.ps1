@@ -1,4 +1,4 @@
-<#
+﻿<#
 .SYNOPSIS
   Brings the dev database up to date on a SQL Server at -SqlHost (a native install or the Docker Compose
   container), so an end-to-end run works and DBeaver can connect to it. Mirrors the EC2 layout.
@@ -57,6 +57,7 @@ $modules = [ordered]@{
     "IdentityDbContext"       = "src/Gateway.Core/Platform/Identity/Infrastructure|OPS"
     "AuditDbContext"          = "src/Gateway.Core/Platform/Audit/Infrastructure|OPS"
     "MerchantIdentityDbContext" = "src/Gateway.Core/Platform/MerchantIdentity/Infrastructure|PORTAL"
+    "ComplianceDbContext"     = "src/Gateway.Core/Platform/Compliance/Infrastructure|OPS"
 }
 
 # DRIFT CHECK (this list has gone stale twice — each time a fresh environment booted onto a schema the code

@@ -142,6 +142,21 @@ public static class BlockchainInfrastructureExtensions
     }
 
     /// <summary>
+    /// Registers ONLY the TRON <see cref="ITransactionVerifier"/> and the read-only RPC client it reads through, for
+    /// a host that must confirm an operator's transaction hash but runs no chain workers (the Ops host records
+    /// hot-pool top-ups and merchant settlements). Read-only and keyless (§10). <see cref="AddTronChainAdapter"/>
+    /// registers the same verifier as part of the full read-only adapter; a host needs one or the other.
+    /// </summary>
+    public static IServiceCollection AddTronTransactionVerifier(this IServiceCollection services, IConfiguration configuration)
+    {
+        var options = ReadTronOptions(configuration);
+
+        services.AddHttpClient<ITronRpc, TronRpc>(ConfigureTronClient(options)).AddStandardResilienceHandler();
+        services.TryAddScoped<ITransactionVerifier, TronTransactionVerifier>();
+        return services;
+    }
+
+    /// <summary>
     /// Registers the real TRON <b>money-out</b> engine — <see cref="ITransactionBuilder"/> +
     /// <see cref="ITransactionBroadcaster"/> — over a resilient typed <see cref="System.Net.Http.HttpClient"/>
     /// (the write-path counterpart to <see cref="AddTronChainAdapter"/>, via a segregated

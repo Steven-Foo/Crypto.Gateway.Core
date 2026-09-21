@@ -55,8 +55,8 @@ public sealed class SetPortalRolePermissionsRequest
 
 public sealed class UpdateAllowedIpsRequest
 {
-    /// <summary>The complete replacement allowlist (not a delta). An empty array clears it, which means "no IP
-    /// restriction" — the same semantics the Ops endpoint has.</summary>
+    /// <summary>The complete replacement allowlist (not a delta): single full IP addresses, no CIDR ranges. An empty
+    /// array clears it, which BLOCKS every API call, the same semantics the Ops endpoint has.</summary>
     public string[] AllowedIps { get; init; } = [];
 }
 

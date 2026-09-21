@@ -260,6 +260,10 @@ public sealed class MerchantWithdrawalServiceTests
     {
         public Task<string?> FindSettlementAddressAsync(Guid merchantId, Chain chain, CancellationToken cancellationToken = default) =>
             Task.FromResult(address);
+
+        // Enumeration exists for the periodic re-screen, which the cash-out path never uses.
+        public Task<IReadOnlyList<SettlementWalletRef>> ListAllAsync(CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<SettlementWalletRef>>([]);
     }
 
     private sealed class FakeCaps(MerchantWithdrawalCap cap) : IMerchantWithdrawalCap

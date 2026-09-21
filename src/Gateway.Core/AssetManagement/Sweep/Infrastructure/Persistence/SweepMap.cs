@@ -24,6 +24,13 @@ public sealed class SweepMap : IEntityTypeConfiguration<SweepEntity>
         builder.Property(s => s.Amount).IsRequired();
 
         builder.Property(s => s.Status).HasConversion<string>().HasMaxLength(16).IsRequired();
+
+        // Why this sweep went where it went. Stored as strings so adding a routing class or a screening
+        // decision later needs no migration, and an old row keeps reading as what it was decided to be.
+        builder.Property(s => s.DestinationKind).HasConversion<string>().HasMaxLength(16).IsRequired();
+        builder.Property(s => s.ScreeningId);
+        builder.Property(s => s.ScreeningDecision).IsUnicode(false).HasMaxLength(16);
+
         builder.Property(s => s.SigningRequestId);
 
         // The signed, broadcast-ready transaction blob (public, not key material). varbinary(max), nullable.

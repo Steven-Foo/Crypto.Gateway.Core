@@ -63,6 +63,13 @@ public static class WithdrawalModuleExtensions
         services.AddScoped<IMerchantSettlementService, MerchantSettlementService>();
         services.AddScoped<IHotWalletTopUpService, HotWalletTopUpService>();
 
+        // Address-screening policy for the payout path — what this flow DOES with a verdict, as opposed to
+        // how Compliance arrives at one. Bound here (not behind the workers) because the request and
+        // merchant-approval paths both read it to decide whether a payout enters PendingScreening at all, and
+        // those run in hosts that register no workers.
+        services.Configure<WithdrawalScreeningOptions>(
+            configuration.GetSection(WithdrawalScreeningOptions.SectionName));
+
         // WithdrawalProcessingService/WithdrawalConfirmationService are NOT registered here — they need the
         // chain-processing ports (ITransactionBuilder/ISigner/ITransactionBroadcaster/IHotWalletProvider/
         // IChainStatusReader), which only a host running the processing workers actually registers. They

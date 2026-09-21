@@ -16,7 +16,7 @@ public sealed class SweepDomainTests
     private static readonly byte[] Signed = [1, 2, 3, 4];
 
     private static Domain.Sweep NewSweep(BigInteger? amount = null) =>
-        Domain.Sweep.Create(Guid.CreateVersion7(), Chain.Tron, Guid.CreateVersion7(), "TFrom", "THot", amount ?? 5_000_000, Now).Value;
+        Domain.Sweep.Create(Guid.CreateVersion7(), Chain.Tron, Guid.CreateVersion7(), "TFrom", "THot", amount ?? 5_000_000, SweepDestinationKind.Safe, null, null, Now).Value;
 
     [Fact]
     public void Create_starts_pending_with_the_full_balance()
@@ -32,7 +32,7 @@ public sealed class SweepDomainTests
     [InlineData(0)]
     [InlineData(-1)]
     public void Create_refuses_a_non_positive_amount(long amount) =>
-        Domain.Sweep.Create(Guid.CreateVersion7(), Chain.Tron, Guid.CreateVersion7(), "TFrom", "THot", amount, Now)
+        Domain.Sweep.Create(Guid.CreateVersion7(), Chain.Tron, Guid.CreateVersion7(), "TFrom", "THot", amount, SweepDestinationKind.Safe, null, null, Now)
             .Error!.Code.ShouldBe(SweepErrors.AmountNotPositive.Code);
 
     [Fact]

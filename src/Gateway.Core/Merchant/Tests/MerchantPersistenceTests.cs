@@ -4,6 +4,7 @@ using CryptoPaymentEngine.Gateway.Core.Merchant.Domain;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Security;
+using CryptoPaymentEngine.Gateway.Core.Platform.Compliance.Contracts;
 using CryptoPaymentEngine.Infrastructure.Persistence.Money;
 using CryptoPaymentEngine.SharedKernel;
 using Microsoft.Data.SqlClient;
@@ -46,8 +47,82 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
             Keys = new Dictionary<int, string> { [1] = Convert.ToBase64String(new byte[32]) },
         }));
 
-    private static MerchantRegistrar NewRegistrar(MerchantDbContext context) =>
-        new(new MerchantRepository(context), new ApiCredentialGenerator(), NewHasher(), NewCipher(), TimeProvider.System);
+    /// <summary>Screening off by default, so these tests keep asserting the behaviour that existed before it —
+    /// the regression guard that settlement screening is genuinely opt-in.</summary>
+    private static MerchantRegistrar NewRegistrar(
+        MerchantDbContext context, IAddressScreeningService? screening = null, bool screenSettlementWallets = false) =>
+        new(new MerchantRepository(context), new ApiCredentialGenerator(), NewHasher(), NewCipher(), TimeProvider.System,
+            screening ?? new NeverCalledScreening(),
+            Options.Create(new MerchantScreeningOptions { ScreenSettlementWallets = screenSettlementWallets }));
+
+    /// <summary>Fails loudly if screening is reached while it is switched off — a silent clean verdict would
+    /// hide exactly the regression these defaults exist to catch.</summary>
+    private sealed class NeverCalledScreening : IAddressScreeningService
+    {
+        public Task<ScreeningVerdict> ScreenAsync(
+            Chain chain, string address, ScreeningPurpose purpose, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("Screening must not be called when it is disabled.");
+
+        public Task<ScreeningVerdict> ReScreenAsync(
+            Chain chain, string address, ScreeningPurpose purpose, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("Screening must not be called when it is disabled.");
+
+        public Task<ScreeningVerdict?> FindLatestAsync(
+            Chain chain, string address, CancellationToken cancellationToken = default) =>
+            Task.FromResult<ScreeningVerdict?>(null);
+
+        // Candidate filtering is for the address-sweep passes; these stubs stand in for money-path and
+        // settlement callers, which never ask.
+        public Task<IReadOnlyList<string>> FindAddressesNeedingScreeningAsync(
+            Chain chain, IReadOnlyCollection<string> addresses, int limit,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<string>>([]);
+    }
+
+    /// <summary>Returns a fixed verdict, for the settlement-screening tests.</summary>
+    private sealed class StubScreening(ScreeningDecision decision) : IAddressScreeningService
+    {
+        public int Calls { get; private set; }
+
+        public Task<ScreeningVerdict> ScreenAsync(
+            Chain chain, string address, ScreeningPurpose purpose, CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            return Task.FromResult(new ScreeningVerdict(
+                Guid.CreateVersion7(), decision,
+                decision == ScreeningDecision.Unavailable ? null : 95,
+                decision == ScreeningDecision.Unavailable ? null : "Severe",
+                ["Sanctioned Entity"], AddressLabel: null, ReportUrl: null,
+                DateTimeOffset.UtcNow, FromCache: false));
+        }
+
+        // A money path must never re-screen: bypassing the cache spends a provider call per payout, which
+        // is exactly what the rate limit cannot absorb. Re-screening is a deliberate staff action only.
+        public Task<ScreeningVerdict> ReScreenAsync(
+            Chain chain, string address, ScreeningPurpose purpose, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("A money path must not force a re-screen.");
+
+        // Stands in for a stored evidence row, so the admin read-back can be tested without a real
+        // evidence table. It deliberately does NOT touch Calls: reading a merchant must never reach the
+        // provider, and a test asserting that needs the counter to mean provider calls only.
+        public Task<ScreeningVerdict?> FindLatestAsync(
+            Chain chain, string address, CancellationToken cancellationToken = default) =>
+            Task.FromResult<ScreeningVerdict?>(new ScreeningVerdict(
+                StoredScreeningId, decision,
+                decision == ScreeningDecision.Unavailable ? null : 95,
+                decision == ScreeningDecision.Unavailable ? null : "Severe",
+                ["Sanctioned Entity"], AddressLabel: null, ReportUrl: null,
+                DateTimeOffset.UtcNow, FromCache: true));
+
+        public static readonly Guid StoredScreeningId = Guid.CreateVersion7();
+
+        // Candidate filtering is for the address-sweep passes; these stubs stand in for money-path and
+        // settlement callers, which never ask.
+        public Task<IReadOnlyList<string>> FindAddressesNeedingScreeningAsync(
+            Chain chain, IReadOnlyCollection<string> addresses, int limit,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<string>>([]);
+    }
 
     public async ValueTask InitializeAsync()
     {
@@ -681,6 +756,397 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
             var fees = NewFeeSchedule(verify);
             (await fees.QuoteTopUpFeeAsync(merchantId, asset, new BigInteger(1_000_000), Ct))
                 .ShouldBe(new BigInteger(20_000));
+        }
+    }
+
+    // ── Settlement-wallet screening ──────────────────────────────────────────────────────────────────────
+
+    private const string SettlementAddress = "TBTwgFxL4KwAzQmMAS2L13YHy58DW6zq7e";
+
+    /// <summary>
+    /// The hard rule. This is the destination every one of that merchant's earnings is paid to, so a refused
+    /// address must not be whitelistable at all — not a warning a staff member can click past.
+    /// </summary>
+    [Fact]
+    public async Task A_blocked_address_is_kept_on_file_but_never_becomes_the_cash_out_destination()
+    {
+        Guid merchantId;
+        await using (var context = NewContext())
+            merchantId = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value.MerchantId;
+
+        await using (var context = NewContext())
+        {
+            var result = await NewRegistrar(context, new StubScreening(ScreeningDecision.Block), true)
+                .SetSettlementWalletAsync(merchantId, Chain.Tron, SettlementAddress, Ct);
+
+            result.IsFailure.ShouldBeTrue();
+            result.Error!.Code.ShouldBe(MerchantErrors.SettlementWalletBlocked.Code);
+        }
+
+        // Whitelisting is never refused — the address stays on file with its verdict recorded — but it is
+        // NOT active, so no earnings can be paid to it. Refusing to save it too would lose the record of
+        // the decision and force the operator to re-enter an address the platform already judged.
+        await using (var verify = NewContext())
+        {
+            var merchant = await verify.Merchants
+                .Include(m => m.SettlementWallets)
+                .SingleAsync(m => m.Id == merchantId, Ct);
+
+            var wallet = merchant.SettlementWallets.ShouldHaveSingleItem();
+            wallet.Address.ShouldBe(SettlementAddress);
+            wallet.IsActive.ShouldBeFalse();
+        }
+
+        // And the cash-out flow, which reads only the active one, still finds nothing to pay.
+        await using (var verify = NewContext())
+        {
+            var address = await new MerchantSettlementDirectory(verify)
+                .FindSettlementAddressAsync(merchantId, Chain.Tron, Ct);
+            address.ShouldBeNull();
+        }
+    }
+
+    /// <summary>
+    /// A flagged address is accepted, because a staff member is already exercising judgement here and may hold
+    /// context the provider does not — but the verdict comes back so it can be shown, never swallowed.
+    /// </summary>
+    [Fact]
+    public async Task A_flagged_address_is_accepted_but_returns_a_warning()
+    {
+        Guid merchantId;
+        await using (var context = NewContext())
+            merchantId = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value.MerchantId;
+
+        await using (var context = NewContext())
+        {
+            var result = await NewRegistrar(context, new StubScreening(ScreeningDecision.Review), true)
+                .SetSettlementWalletAsync(merchantId, Chain.Tron, SettlementAddress, Ct);
+
+            result.IsSuccess.ShouldBeTrue();
+            result.Value.ScreeningDecision.ShouldBe("Review");
+            result.Value.Warnings.ShouldNotBeEmpty();
+        }
+
+        await using (var verify = NewContext())
+        {
+            var merchant = await verify.Merchants
+                .Include(m => m.SettlementWallets)
+                .SingleAsync(m => m.Id == merchantId, Ct);
+            merchant.SettlementWallets.Count.ShouldBe(1);
+        }
+    }
+
+    /// <summary>
+    /// A vendor outage must not block merchant onboarding. Unlike an unattended payout — which holds — this is
+    /// a staff action with a human watching, so it proceeds and says so.
+    /// </summary>
+    [Fact]
+    public async Task An_unavailable_provider_still_lets_staff_whitelist_but_warns()
+    {
+        Guid merchantId;
+        await using (var context = NewContext())
+            merchantId = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value.MerchantId;
+
+        await using (var context = NewContext())
+        {
+            var result = await NewRegistrar(context, new StubScreening(ScreeningDecision.Unavailable), true)
+                .SetSettlementWalletAsync(merchantId, Chain.Tron, SettlementAddress, Ct);
+
+            result.IsSuccess.ShouldBeTrue();
+            result.Value.ScreeningDecision.ShouldBe("Unavailable");
+            result.Value.Warnings.ShouldNotBeEmpty();
+        }
+    }
+
+    [Fact]
+    public async Task A_clean_address_is_whitelisted_with_no_warnings()
+    {
+        Guid merchantId;
+        await using (var context = NewContext())
+            merchantId = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value.MerchantId;
+
+        await using (var context = NewContext())
+        {
+            var result = await NewRegistrar(context, new StubScreening(ScreeningDecision.Allow), true)
+                .SetSettlementWalletAsync(merchantId, Chain.Tron, SettlementAddress, Ct);
+
+            result.IsSuccess.ShouldBeTrue();
+            result.Value.ScreeningDecision.ShouldBe("Allow");
+            result.Value.Warnings.ShouldBeEmpty("a clean address must be silent");
+        }
+    }
+
+    /// <summary>
+    /// The opt-in guard. With settlement screening off the provider is never contacted — <c>NewRegistrar</c>'s
+    /// default screening stub throws if it is, so this passing is proof rather than absence of evidence.
+    /// </summary>
+    [Fact]
+    public async Task With_screening_disabled_whitelisting_never_calls_the_provider()
+    {
+        Guid merchantId;
+        await using (var context = NewContext())
+            merchantId = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value.MerchantId;
+
+        await using (var context = NewContext())
+        {
+            var result = await NewRegistrar(context)
+                .SetSettlementWalletAsync(merchantId, Chain.Tron, SettlementAddress, Ct);
+
+            result.IsSuccess.ShouldBeTrue();
+            result.Value.ScreeningDecision.ShouldBeNull("null means 'not screened', distinct from 'Unavailable'");
+            result.Value.Warnings.ShouldBeEmpty();
+        }
+    }
+
+    /// <summary>
+    /// Regression guard for the SECOND instance of the settlement-wallet loading defect.
+    ///
+    /// <para>GetByIdAsync was fixed when replacing a wallet through the Ops endpoint was found to return a
+    /// 500. GetByCodeAsync had the identical omission and was missed, so the dev seeder — which resolves a
+    /// merchant by code and then sets its settlement wallet — failed the (MerchantId, Chain) unique index on
+    /// every boot of an already-seeded database. Both methods hand the aggregate back to be MUTATED, so both
+    /// have to load all of it.</para>
+    /// </summary>
+    [Fact]
+    public async Task A_merchant_loaded_by_code_carries_its_settlement_wallets()
+    {
+        const string Replacement = "TQp6K2nHpqdk5d6q8VjAYLvp1ufUKVpsts";
+
+        Guid merchantId;
+        string code;
+        await using (var context = NewContext())
+        {
+            var registered = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value;
+            merchantId = registered.MerchantId;
+            code = registered.MerchantCode;
+        }
+
+        await using (var context = NewContext())
+            (await NewRegistrar(context).SetSettlementWalletAsync(merchantId, Chain.Tron, SettlementAddress, Ct))
+                .IsSuccess.ShouldBeTrue();
+
+        // The dev seeder's exact shape: load by code, then set a wallet on a merchant that already has one.
+        await using (var context = NewContext())
+        {
+            var repository = new MerchantRepository(context);
+            var merchant = await repository.GetByCodeAsync(code, Ct);
+
+            merchant.ShouldNotBeNull();
+            merchant.SettlementWallets.Count.ShouldBe(1, "the aggregate must arrive whole, or the next line inserts");
+
+            // The seeder's exact shape, including its two-phase save: retire the previous wallet and SAVE,
+            // then activate the replacement. One save for both would be rejected by the filtered unique
+            // index whenever EF happened to send the activate first — intermittently, which is worse.
+            var prepared = merchant.PrepareSettlementWallet(Chain.Tron, Replacement, DateTimeOffset.UtcNow);
+            prepared.IsSuccess.ShouldBeTrue();
+            await repository.SaveChangesAsync(Ct);
+
+            merchant.ActivateSettlementWallet(prepared.Value.Id, DateTimeOffset.UtcNow).IsSuccess.ShouldBeTrue();
+            await repository.SaveChangesAsync(Ct);
+        }
+
+        // The previous address is kept, retired: switching destinations must not erase the record of what
+        // was whitelisted before. Exactly one is active, and it is the replacement.
+        await using (var verify = NewContext())
+        {
+            var merchant = await verify.Merchants
+                .Include(m => m.SettlementWallets)
+                .SingleAsync(m => m.Id == merchantId, Ct);
+
+            merchant.SettlementWallets.Count.ShouldBe(2);
+            merchant.SettlementWallets.Single(w => w.IsActive).Address.ShouldBe(Replacement);
+            merchant.SettlementWallets.Single(w => !w.IsActive).Address.ShouldBe(SettlementAddress);
+        }
+    }
+
+    /// <summary>
+    /// Staff need the STANDING verdict where they manage a merchant, not only at the moment they saved the
+    /// wallet. A verdict is a snapshot, so an address approved months ago may have been re-screened since —
+    /// and the periodic pass exists precisely to make that happen.
+    ///
+    /// <para>Read from stored evidence, so opening a merchant spends no quota and a vendor outage cannot
+    /// slow it down or break it.</para>
+    /// </summary>
+    [Fact]
+    public async Task The_admin_read_back_carries_the_standing_screening_verdict()
+    {
+        Guid merchantId;
+        await using (var context = NewContext())
+            merchantId = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value.MerchantId;
+
+        await using (var context = NewContext())
+            (await NewRegistrar(context).SetSettlementWalletAsync(merchantId, Chain.Tron, SettlementAddress, Ct))
+                .IsSuccess.ShouldBeTrue();
+
+        await using (var read = NewContext())
+        {
+            var screening = new StubScreening(ScreeningDecision.Review);
+            var view = await NewRegistrar(read, screening).GetAsync(merchantId, Ct);
+
+            var wallet = view.Value.SettlementWallets.ShouldHaveSingleItem();
+            wallet.Address.ShouldBe(SettlementAddress);
+            wallet.ScreeningDecision.ShouldBe("Review");
+            wallet.ScreeningScore.ShouldBe(95);
+
+            // The id is what lets a UI deep-link to the evidence rather than repeat the indicators inline.
+            wallet.ScreeningId.ShouldBe(StubScreening.StoredScreeningId);
+
+            // Reading a merchant must never call the provider.
+            screening.Calls.ShouldBe(0);
+        }
+    }
+
+    /// <summary>A host that composes Merchant without Compliance still reads merchants. Every screening
+    /// field is null, which means "not screened" and must never be rendered as a clean result.</summary>
+    [Fact]
+    public async Task The_admin_read_back_works_with_no_screening_provider_composed()
+    {
+        Guid merchantId;
+        await using (var context = NewContext())
+            merchantId = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value.MerchantId;
+
+        await using (var context = NewContext())
+            (await NewRegistrar(context).SetSettlementWalletAsync(merchantId, Chain.Tron, SettlementAddress, Ct))
+                .IsSuccess.ShouldBeTrue();
+
+        await using (var read = NewContext())
+        {
+            var view = await NewRegistrar(read).GetAsync(merchantId, Ct);
+
+            var wallet = view.Value.SettlementWallets.ShouldHaveSingleItem();
+            wallet.ScreeningDecision.ShouldBeNull();
+            wallet.ScreeningId.ShouldBeNull();
+        }
+    }
+
+    /// <summary>
+    /// Regression: replacing an existing settlement wallet used to throw a unique-index violation, because
+    /// the merchant was loaded without its settlement wallets so the domain could not see one to update.
+    /// Staff could set a merchant's cash-out destination once and never change it.
+    /// </summary>
+    [Fact]
+    public async Task An_existing_settlement_wallet_can_be_replaced()
+    {
+        const string Replacement = "TQp6K2nHpqdk5d6q8VjAYLvp1ufUKVpsts";
+
+        Guid merchantId;
+        await using (var context = NewContext())
+            merchantId = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value.MerchantId;
+
+        await using (var context = NewContext())
+            (await NewRegistrar(context).SetSettlementWalletAsync(merchantId, Chain.Tron, SettlementAddress, Ct))
+                .IsSuccess.ShouldBeTrue();
+
+        await using (var context = NewContext())
+            (await NewRegistrar(context).SetSettlementWalletAsync(merchantId, Chain.Tron, Replacement, Ct))
+                .IsSuccess.ShouldBeTrue("replacing a wallet on the same chain must switch which one is active");
+
+        await using (var verify = NewContext())
+        {
+            var merchant = await verify.Merchants
+                .Include(m => m.SettlementWallets)
+                .SingleAsync(m => m.Id == merchantId, Ct);
+
+            merchant.SettlementWallets.Count.ShouldBe(2, "the replaced address is retired, not deleted");
+            merchant.SettlementWallets.Single(w => w.IsActive).Address.ShouldBe(Replacement);
+        }
+
+        // What the cash-out flow actually reads: exactly one address, the active one.
+        await using (var verify = NewContext())
+        {
+            var address = await new MerchantSettlementDirectory(verify)
+                .FindSettlementAddressAsync(merchantId, Chain.Tron, Ct);
+            address.ShouldBe(Replacement);
+        }
+    }
+
+    /// <summary>
+    /// Several addresses on file, one paid. The activate/retire pair is the only way the destination moves,
+    /// and the active one can never be retired out from under a merchant — that would fail every cash-out
+    /// with "no settlement wallet registered" for a reason nobody intended.
+    /// </summary>
+    [Fact]
+    public async Task Several_addresses_can_be_whitelisted_with_exactly_one_active()
+    {
+        const string Second = "TQp6K2nHpqdk5d6q8VjAYLvp1ufUKVpsts";
+
+        Guid merchantId;
+        await using (var context = NewContext())
+            merchantId = (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value.MerchantId;
+
+        Guid firstWalletId;
+        Guid secondWalletId;
+
+        await using (var context = NewContext())
+        {
+            var registrar = NewRegistrar(context);
+            firstWalletId = (await registrar.AddSettlementWalletAsync(
+                merchantId, Chain.Tron, SettlementAddress, "primary", activate: true, Ct)).Value.WalletId;
+        }
+
+        await using (var context = NewContext())
+        {
+            // Added, deliberately NOT activated: on file and screened, but not yet receiving earnings.
+            var added = await NewRegistrar(context).AddSettlementWalletAsync(
+                merchantId, Chain.Tron, Second, "backup", activate: false, Ct);
+
+            added.IsSuccess.ShouldBeTrue();
+            added.Value.Status.ShouldBe("Retired");
+            secondWalletId = added.Value.WalletId;
+        }
+
+        await using (var context = NewContext())
+        {
+            var address = await new MerchantSettlementDirectory(context)
+                .FindSettlementAddressAsync(merchantId, Chain.Tron, Ct);
+            address.ShouldBe(SettlementAddress, "adding must not move the destination");
+        }
+
+        await using (var context = NewContext())
+        {
+            var retired = await NewRegistrar(context).RetireSettlementWalletAsync(merchantId, firstWalletId, Ct);
+            retired.IsFailure.ShouldBeTrue("the active destination cannot be retired");
+            retired.Error!.Code.ShouldBe(MerchantErrors.CannotRetireActiveSettlementWallet.Code);
+        }
+
+        await using (var context = NewContext())
+            (await NewRegistrar(context).ActivateSettlementWalletAsync(merchantId, secondWalletId, Ct))
+                .IsSuccess.ShouldBeTrue();
+
+        await using (var verify = NewContext())
+        {
+            var merchant = await verify.Merchants
+                .Include(m => m.SettlementWallets)
+                .SingleAsync(m => m.Id == merchantId, Ct);
+
+            merchant.SettlementWallets.Count.ShouldBe(2);
+            merchant.SettlementWallets.Single(w => w.IsActive).Address.ShouldBe(Second);
+        }
+
+        // Swap back and forth. Found live: only one row per (merchant, chain) may be Active, and EF picks its
+        // own UPDATE order, so activating a replacement in the same save as retiring the incumbent failed
+        // whenever the activate went first — a 500 on some attempts and not others. The registrar now retires
+        // and saves before activating, inside one transaction; repeating the swap is what would catch a
+        // regression, because a single swap can pass on ordering luck.
+        for (var i = 0; i < 3; i++)
+        {
+            await using (var context = NewContext())
+                (await NewRegistrar(context).ActivateSettlementWalletAsync(merchantId, firstWalletId, Ct))
+                    .IsSuccess.ShouldBeTrue($"swap {i} back to the first wallet");
+
+            await using (var context = NewContext())
+                (await NewRegistrar(context).ActivateSettlementWalletAsync(merchantId, secondWalletId, Ct))
+                    .IsSuccess.ShouldBeTrue($"swap {i} to the second wallet");
+        }
+
+        await using (var verify = NewContext())
+        {
+            var merchant = await verify.Merchants
+                .Include(m => m.SettlementWallets)
+                .SingleAsync(m => m.Id == merchantId, Ct);
+
+            merchant.SettlementWallets.Count(w => w.IsActive).ShouldBe(1, "never two destinations at once");
+            merchant.SettlementWallets.Single(w => w.IsActive).Address.ShouldBe(Second);
         }
     }
 }

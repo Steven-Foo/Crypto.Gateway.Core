@@ -40,9 +40,8 @@ public sealed class ReconciliationServiceTests
     {
         _assets.GetActiveAsync(Arg.Any<CancellationToken>())
             .Returns([new AssetDto(Usdt, Chain.Tron, "USDT", "TR7NHqjeKQxGTCi8q8ZY4pL8otSzgjLj6t", 6, IsNative: false)]);
-        // No cold treasury registered by default; individual tests opt in.
-        _coldTreasury.GetAsync(Chain.Tron, Arg.Any<CancellationToken>())
-            .Returns(Result.Failure<ColdTreasuryWallet>(Error.NotFound("treasury.cold.none", "none")));
+        // No cold collection wallet registered by default; individual tests opt in.
+        _coldTreasury.ListCustodyAddressesAsync(Chain.Tron, Arg.Any<CancellationToken>()).Returns([]);
     }
 
     private ReconciliationService Build(IBalanceReader balances, BigInteger tolerance = default) =>
@@ -83,8 +82,7 @@ public sealed class ReconciliationServiceTests
     public async Task The_cold_treasury_balance_is_included_in_the_on_chain_total()
     {
         const string cold = "TColdTreasury";
-        _coldTreasury.GetAsync(Chain.Tron, Arg.Any<CancellationToken>())
-            .Returns(Result.Success(new ColdTreasuryWallet(Chain.Tron, cold)));
+        _coldTreasury.ListCustodyAddressesAsync(Chain.Tron, Arg.Any<CancellationToken>()).Returns([cold]);
         _ledger.GetTreasuryHoldingAsync(Usdt, Arg.Any<CancellationToken>()).Returns(new BigInteger(9_000_000));
         GivenControlledAddresses((Guid.CreateVersion7(), Deposit1));
 
@@ -99,6 +97,36 @@ public sealed class ReconciliationServiceTests
         snap.OnChainTotal.ShouldBe(new BigInteger(9_000_000)); // hot + deposit + COLD
         snap.Status.ShouldBe(ReconciliationStatus.Balanced);
         snap.AddressesScanned.ShouldBe(3);
+    }
+
+    /// <summary>
+    /// Every cold address counts, not just the ones currently receiving sweeps: the quarantine wallet, and a
+    /// retired predecessor that still holds funds. Counting only the active destination would report the rest
+    /// as a shortfall the platform never actually has.
+    /// </summary>
+    [Fact]
+    public async Task Quarantine_and_retired_cold_addresses_count_towards_custody_too()
+    {
+        const string safe = "TColdSafe";
+        const string danger = "TColdQuarantine";
+        const string retired = "TColdRetired";
+        _coldTreasury.ListCustodyAddressesAsync(Chain.Tron, Arg.Any<CancellationToken>())
+            .Returns([safe, danger, retired]);
+        _ledger.GetTreasuryHoldingAsync(Usdt, Arg.Any<CancellationToken>()).Returns(new BigInteger(6_000_000));
+        GivenControlledAddresses();
+
+        var reader = new InMemoryBalanceReader();
+        reader.Set(Chain.Tron, HotWallet, Usdt, 1_000_000);
+        reader.Set(Chain.Tron, safe, Usdt, 3_000_000);
+        reader.Set(Chain.Tron, danger, Usdt, 1_500_000);
+        reader.Set(Chain.Tron, retired, Usdt, 500_000);
+
+        await Build(reader).ReconcileAsync(Chain.Tron, Ct);
+
+        var snap = _store.Latest.ShouldNotBeNull();
+        snap.OnChainTotal.ShouldBe(new BigInteger(6_000_000));
+        snap.Status.ShouldBe(ReconciliationStatus.Balanced);
+        snap.AddressesScanned.ShouldBe(4);
     }
 
     [Fact]

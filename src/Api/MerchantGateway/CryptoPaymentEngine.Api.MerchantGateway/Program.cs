@@ -1,6 +1,5 @@
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Infrastructure;
-using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Workers;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Workers;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Reconciliation.Infrastructure;
@@ -9,6 +8,8 @@ using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Financial.Ledger.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Workers;
+using CryptoPaymentEngine.Gateway.Core.Merchant.Workers;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Infrastructure.Persistence;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Workers;
@@ -20,6 +21,7 @@ using CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Workers;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Infrastructure.Persistence;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Workers;
+using CryptoPaymentEngine.Gateway.Core.Platform.Compliance.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Workers;
 using CryptoPaymentEngine.Api.MerchantGateway.Development;
@@ -85,11 +87,36 @@ builder.Services.AddMerchantModule(config, dbConnection);
 builder.Services.AddKeyManagementModule(dbConnection);
 builder.Services.AddBlockchainAddressEncoding();
 builder.Services.AddWalletModule(dbConnection);
-builder.Services.AddTreasuryModule(dbConnection);       // hot-pool directory + cold wallet + reload persistence (schema 'treasury'); backs Withdrawal's allocator + Sweep's destination
+
+// The inbound control, in the only form available. An inbound transfer cannot be screened while it is in
+// flight, and once it lands it is credited and never reversed - a frozen merchant's deposits still credit
+// the ledger (14). What CAN be watched is the other side of the graph: a provider scores an address from
+// its history, so funds arriving from a bad counterparty raise the score of OUR receiving address.
+//
+// It records and flags only. By the time an address looks bad the money has reached a merchant's balance,
+// so any automatic reaction would mean clawing funds back on a vendor's say-so.
+//
+// The per-pass cap matters more here than anywhere else: deposit addresses are the one candidate set that
+// grows without bound, and this shares a quota with the payout gate - the control that actually holds
+// money. This pass must never be the reason a payout cannot be screened.
+builder.Services.AddDepositAddressScreening(config);
+builder.Services.AddTreasuryModule(config, dbConnection);       // hot-pool directory + cold wallet persistence (schema 'treasury'); backs Withdrawal's allocator + Sweep's destination
 builder.Services.AddEnergyModule(config, dbConnection);  // TRON resource monitoring (Phase 5a): SQL policy + Mongo snapshots
 builder.Services.AddLedgerModule(dbConnection);         // consumes Deposit + Withdrawal events (credit/settle/release)
 builder.Services.AddDepositModule(config, dbConnection);
 builder.Services.AddWithdrawalModule(config, dbConnection);
+
+// Address screening (schema 'compliance'). This host owns the screening WORKER, so unlike the Ops host it
+// actually calls the provider. Same DI rule as every other external adapter (§8): Production always takes the
+// real one, because an in-memory provider there would fabricate clean scores indistinguishable from real
+// verdicts — the identical reason a fake signer is never registered in prod (§10). On the testnet tier a
+// configured MistTrack key opts into the real adapter (pointed at the vendor's sandbox by BaseUrl); with no
+// key it stays offline and free.
+if (builder.Environment.IsProduction() || !string.IsNullOrWhiteSpace(config["Compliance:MistTrack:ApiKey"]))
+    builder.Services.AddComplianceModuleWithMistTrack(config, dbConnection);
+else
+    builder.Services.AddComplianceModuleWithInMemoryProvider(config, dbConnection);
+
 builder.Services.AddSweepModule(config, dbConnection);   // concentrate deposit balances → hot wallet (schema sweep); composes Wallet/Blockchain/KeyManagement/Treasury Contracts
 builder.Services.AddConfigurationAssetCatalog();        // canonical AssetId shared by edge, scanner, ledger
 builder.Services.AddPaymentIntentModule(config, dbConnection); // deposit invoices + address pool; matches DepositConfirmed
@@ -141,10 +168,12 @@ if (isTestnetTier)
         builder.Services.AddInMemorySigner(); // NEVER touches a key; a real KMS signer replaces it in prod (§10)
     }
 
-    // In-memory secret provider (PUBLIC xpub only) + idempotent HD-wallet seeder, so a signed /deposit can
-    // provision an address on a fresh clone. Overridable per-developer via appsettings.Local.json. The
-    // provider is InMemoryDevelopment-kind, so it can never back a production wallet row (§10).
-    builder.Services.AddDevelopmentKeyCustody(config);
+    // The tier's secret store. By default the in-memory store (PUBLIC xpubs only, so a signed /deposit can
+    // provision an address on a fresh clone); with KeyManagement:Kms:Enabled=true, AWS KMS envelope custody
+    // instead, so staging exercises real KMS custody without becoming Production. Never both (§10). This host
+    // owns the switch: on boot it archives the active wallets of the store that is off and restores the ones it
+    // archived last time. Switch with tools/dev/Switch-StagingCustody.ps1.
+    var kmsCustody = builder.Services.AddTestnetKeyCustody(config, reconcileWallets: true);
 
     // A fixed, documented test merchant (active) so a signed /api/v1 request works out of the box — the last
     // piece for a full deposit round-trip in dev. Config in Merchant:DevSeed; never runs in production (§10).
@@ -163,7 +192,10 @@ if (isTestnetTier)
     // Registers the platform staking (energy) wallet + policy from Energy:DevStakingWallets on boot (imported
     // throwaway key under KeyManagement:DevSecrets) — the delegation SOURCE the sweep energy gate draws from.
     // Inert until the wallet is funded with (testnet) TRX to freeze. Prod uses a KMS-backed ops action (§10).
-    builder.Services.AddDevelopmentEnergyStakingSeed(config);
+    // Skipped under KMS custody: it imports a private key from config, which only the in-memory store can hold,
+    // and there is no Energy CMK, so staking stays inert in that mode.
+    if (!kmsCustody)
+        builder.Services.AddDevelopmentEnergyStakingSeed(config);
 
     // Seeds the in-memory hot-pool float AFTER the pool seeder above, so the withdrawal happy-path allocates
     // and sends in dev (the in-memory reader reads zero, which the allocator treats as underfunded). No-op
@@ -212,6 +244,23 @@ builder.Services.AddWithdrawalWorkers(new WithdrawalWorkerOptions
     ConfirmationInterval = TimeSpan.FromSeconds(10),
 });
 
+// Re-screens whitelisted settlement wallets, so a verdict taken at approval time does not stand
+// unchallenged for the life of the account. An address clean when it was whitelisted can be designated
+// later, and every one of that merchant's earnings is paid to it in the meantime.
+//
+// It FLAGS ONLY and never revokes a wallet: every merchant cash-out already stops at PendingAdminAudit for
+// a human, and auto-revoking would let a third party's opinion halt a merchant's earnings with nobody in
+// the loop - the same failure the module refuses elsewhere by keeping Unavailable a separate outcome.
+//
+// Registered unconditionally and gated by Merchant:Screening:RescreenSettlementWallets (default OFF), so
+// enabling it is a config change rather than a redeploy. It costs nothing while verdicts are still fresh:
+// a pass reuses the Compliance cache, so CacheDays drives quota consumption, not the interval.
+builder.Services.AddHostedService<SettlementWalletScreeningWorker>();
+
+// The scheduled half of deposit-address screening. Gated by Wallet:Screening:Enabled (default OFF); the
+// manual sweep on the ops host works regardless, so staff can check on demand without a standing spend.
+builder.Services.AddHostedService<DepositAddressScreeningWorker>();
+
 // Concentrates funded deposit addresses into the hot wallet (§9): scan (balance ≥ threshold) → build/sign/
 // broadcast → confirm. Posts NO ledger entry (custody unchanged); gas accounting is the deferred Energy 5b
 // path. Signs FROM deposit addresses via the same ISigner boundary as withdrawal, so it is inert in prod
@@ -220,14 +269,12 @@ builder.Services.AddWithdrawalWorkers(new WithdrawalWorkerOptions
 builder.Services.AddSweepWorkers(new SweepWorkerOptions
 {
     Chains = [Chain.Tron],
-    ScanInterval = TimeSpan.FromMinutes(2),
+    // How often the scan worker LOOKS. The cadence of an actual pass is a per-chain setting staff own from
+    // the back office, so this only bounds how quickly a re-tune or a manual "scan now" is noticed.
+    ScanTickInterval = TimeSpan.FromSeconds(30),
     ProcessInterval = TimeSpan.FromSeconds(15),
     ConfirmationInterval = TimeSpan.FromSeconds(15),
 });
-
-// Treasury cold-reload (Phase 2): broadcasts + confirms operator-signed treasury→hot transfers. Single-flighted
-// like the withdrawal workers. Inert in prod until a real broadcaster lands (no signer needed — the human signs).
-builder.Services.AddTreasuryReloadWorker(new TreasuryReloadWorkerOptions { Interval = TimeSpan.FromSeconds(15) });
 
 // Frees lapsed deposit-invoice addresses back to the pool (§9).
 builder.Services.AddPaymentIntentWorkers();
@@ -266,6 +313,11 @@ builder.Services.AddOutboxDispatcher<PaymentIntentDbContext>(); // relays Paymen
 // (public xpub only). In production it is NOT registered yet — a real KMS-backed ISecretProvider + prod
 // HD-wallet rows must be supplied before /deposit can provision an address there (never an in-memory seed, §10).
 
+// Which address a merchant API call really came from, for the per-merchant IP allowlist. Behind Cloudflare the
+// CF-Connecting-IP header is believed only on connections from Cloudflare's own ranges (Gateway:ClientIp).
+builder.Services.Configure<ClientIpOptions>(config.GetSection(ClientIpOptions.SectionName));
+builder.Services.AddSingleton<ClientIpResolver>();
+
 var app = builder.Build();
 
 // Testnet-tier Swagger UI at /swagger (Development + Staging testing). Absent in production.
@@ -298,6 +350,8 @@ if (isTestnetTier)
 app.UseStaticFiles();
 
 // The frozen merchant API is authenticated by request signature; the pay-page data + health pass through.
+// Built now rather than on the first request, so a malformed proxy range stops the host at boot.
+_ = app.Services.GetRequiredService<ClientIpResolver>();
 app.UseMiddleware<MerchantSignatureMiddleware>();
 
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));

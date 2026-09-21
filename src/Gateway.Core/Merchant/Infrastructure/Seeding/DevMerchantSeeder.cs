@@ -117,9 +117,34 @@ public sealed class DevMerchantSeeder(
         AsyncServiceScope scope, Domain.Merchant merchant, DevMerchantSeedOptions seed, DateTimeOffset now,
         CancellationToken cancellationToken)
     {
+        // API IP allowlist. Seeded only while empty: an empty list refuses every API call, so a fresh clone needs
+        // somewhere to call from, but once anyone has edited the list a restart must not put it back.
+        if (seed.AllowedIps.Length > 0 && merchant.Configuration.AllowedIps.Count == 0)
+        {
+            var allowlist = merchant.UpdateAllowedIps(seed.AllowedIps, now);
+            if (allowlist.IsFailure)
+                logger.LogWarning("Dev merchant IP allowlist skipped: {Error}.", allowlist.Error!.Message);
+        }
+
         // Settlement (cash-out) wallet — the Merchant Withdrawal destination. No asset catalog needed.
+        //
+        // Two saves on purpose: a merchant may already have a different active wallet, and only one may be
+        // Active per (merchant, chain). The previous one has to be retired and SAVED before the replacement
+        // is activated, or the filtered unique index rejects whichever statement EF happens to send first.
         if (!string.IsNullOrWhiteSpace(seed.SettlementAddress))
-            merchant.SetSettlementWallet(Chain.Tron, seed.SettlementAddress.Trim(), now);
+        {
+            var prepared = merchant.PrepareSettlementWallet(Chain.Tron, seed.SettlementAddress.Trim(), now);
+            if (prepared.IsFailure)
+            {
+                logger.LogWarning("Dev merchant settlement wallet skipped: {Error}.", prepared.Error!.Message);
+            }
+            else
+            {
+                await scope.ServiceProvider.GetRequiredService<IMerchantRepository>()
+                    .SaveChangesAsync(cancellationToken);
+                merchant.ActivateSettlementWallet(prepared.Value.Id, now);
+            }
+        }
 
         // Settlement period (T+N). Applied unconditionally so a re-seed reflects a changed config value;
         // 0 (default) = T+0 so the dev happy path cashes out immediately.

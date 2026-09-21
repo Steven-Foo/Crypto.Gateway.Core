@@ -112,6 +112,16 @@ public sealed class SetSettlementWalletRequest
 {
     [Required, MaxLength(16)] public string Chain { get; init; } = null!;
     [Required, MaxLength(128)] public string Address { get; init; } = null!;
+
+    /// <summary>Staff's own name for the address, so two whitelisted addresses can be told apart on screen.</summary>
+    [MaxLength(128)] public string? Label { get; init; }
+
+    /// <summary>
+    /// Make it the chain's cash-out destination, retiring whichever address holds that role. Defaults to
+    /// <b>true</b> on this route, which is what it has always done; the newer
+    /// <c>POST .../settlement-wallets</c> defaults it to false so an address can be put on file first.
+    /// </summary>
+    public bool? Activate { get; init; }
 }
 
 /// <summary>Sets the merchant-withdrawal (cash-out) liquidity cap for one asset: an optional flat cap in

@@ -1,6 +1,7 @@
 using System.Numerics;
 using System.Text.RegularExpressions;
 using CryptoPaymentEngine.SharedKernel;
+using System.Net;
 
 namespace CryptoPaymentEngine.Gateway.Core.Merchant.Domain;
 
@@ -218,13 +219,29 @@ public sealed partial class Merchant : Entity<Guid>
         return result;
     }
 
-    /// <summary>Replaces this merchant's IP allowlist; see <see cref="MerchantConfiguration.UpdateAllowedIps"/>.</summary>
-    public Result<AllowedIpsChange> UpdateAllowedIps(IReadOnlyCollection<string> validIps, DateTimeOffset now)
+    /// <summary>
+    /// Replaces this merchant's API IP allowlist; see <see cref="MerchantConfiguration.UpdateAllowedIps"/>. Every entry
+    /// must be a single full address (<see cref="MerchantIpAddress"/>): one refused entry refuses the whole update, so
+    /// nobody saves a list believing a server is allowed when its entry was dropped. An empty list is valid and
+    /// blocks every API call.
+    /// </summary>
+    /// <summary>Whether a merchant API call from <paramref name="client"/> is permitted; an empty allowlist permits none.</summary>
+    public bool AllowsApiCallFrom(IPAddress? client) => Configuration.AllowsIp(client);
+
+    public Result<AllowedIpsChange> UpdateAllowedIps(IReadOnlyCollection<string> ips, DateTimeOffset now)
     {
         if (Status == MerchantStatus.Closed)
             return Result.Failure<AllowedIpsChange>(MerchantErrors.Closed);
 
-        var change = Configuration.UpdateAllowedIps(validIps, now);
+        var normalized = new List<string>(ips.Count);
+        foreach (var ip in ips)
+        {
+            if (!MerchantIpAddress.TryNormalize(ip, out var address))
+                return Result.Failure<AllowedIpsChange>(MerchantErrors.InvalidIpAddress);
+            normalized.Add(address);
+        }
+
+        var change = Configuration.UpdateAllowedIps(normalized, now);
         UpdatedAt = now;
         return Result.Success(change);
     }
@@ -295,30 +312,126 @@ public sealed partial class Merchant : Entity<Guid>
         return Result.Success();
     }
 
-    /// <summary>Registers or updates the merchant's settlement (cash-out) wallet for a chain — the fixed
-    /// destination of a Merchant Withdrawal. One per chain; re-registering updates the address.</summary>
-    public Result SetSettlementWallet(Chain chain, string address, DateTimeOffset now)
+    /// <summary>
+    /// Whitelists a settlement (cash-out) address for a chain, optionally making it the one that gets paid.
+    ///
+    /// <para>Several addresses may be on file per chain, but only one is active. Adding is deliberately not
+    /// the same act as activating: a freshly typed address should not become the destination of a merchant's
+    /// earnings before anyone has looked at it.</para>
+    ///
+    /// <para>Re-adding an address already on file adopts it rather than creating a duplicate, so a seeder or
+    /// a repeated save is harmless.</para>
+    /// </summary>
+    public Result<MerchantSettlementWallet> AddSettlementWallet(
+        Chain chain, string address, string? label, bool activate, DateTimeOffset now)
     {
         if (Status == MerchantStatus.Closed)
-            return Result.Failure(MerchantErrors.Closed);
+            return Result.Failure<MerchantSettlementWallet>(MerchantErrors.Closed);
 
-        var existing = _settlementWallets.SingleOrDefault(w => w.Chain == chain);
-        if (existing is not null)
+        if (string.IsNullOrWhiteSpace(address))
+            return Result.Failure<MerchantSettlementWallet>(MerchantErrors.SettlementAddressRequired);
+
+        var trimmed = address.Trim();
+        var existing = _settlementWallets.SingleOrDefault(
+            w => w.Chain == chain && string.Equals(w.Address, trimmed, StringComparison.Ordinal));
+
+        if (existing is null)
         {
-            var updateResult = existing.Update(address, now);
-            if (updateResult.IsSuccess)
-                UpdatedAt = now;
+            var createResult = MerchantSettlementWallet.Create(Id, chain, trimmed, label, activate: false, now);
+            if (createResult.IsFailure)
+                return createResult;
 
-            return updateResult;
+            existing = createResult.Value;
+            _settlementWallets.Add(existing);
+        }
+        else if (!string.IsNullOrWhiteSpace(label))
+        {
+            existing.Rename(label, now);
         }
 
-        var createResult = MerchantSettlementWallet.Create(Id, chain, address, now);
-        if (createResult.IsFailure)
-            return Result.Failure(createResult.Error!);
-
-        _settlementWallets.Add(createResult.Value);
         UpdatedAt = now;
-        return Result.Success();
+        return Result.Success(existing);
+    }
+
+    /// <summary>
+    /// Takes every OTHER wallet on this one's chain out of use, in preparation for activating it.
+    ///
+    /// <para>Deliberately a separate step from <see cref="ActivateSettlementWallet"/>, and the caller must
+    /// <b>save between the two</b>. Only one wallet per (merchant, chain) may be Active, enforced by a
+    /// filtered unique index, and EF chooses the order of its UPDATE statements: retiring and activating in
+    /// one save fails whenever it happens to send the activate first — an intermittent failure rather than a
+    /// reliable one, which is worse. <c>MerchantRegistrar</c> wraps the pair in a transaction.</para>
+    /// </summary>
+    public Result<MerchantSettlementWallet> RetireOtherSettlementWallets(Guid walletId, DateTimeOffset now)
+    {
+        if (Status == MerchantStatus.Closed)
+            return Result.Failure<MerchantSettlementWallet>(MerchantErrors.Closed);
+
+        var wallet = _settlementWallets.SingleOrDefault(w => w.Id == walletId);
+        if (wallet is null)
+            return Result.Failure<MerchantSettlementWallet>(MerchantErrors.SettlementWalletNotFound);
+
+        foreach (var other in _settlementWallets.Where(w => w.Chain == wallet.Chain && w.Id != wallet.Id))
+            other.Retire(now);
+
+        UpdatedAt = now;
+        return Result.Success(wallet);
+    }
+
+    /// <summary>
+    /// Marks this wallet as the destination for its chain. The wallet it replaces must already have been
+    /// retired AND saved — see <see cref="RetireOtherSettlementWallets"/>.
+    /// </summary>
+    public Result<MerchantSettlementWallet> ActivateSettlementWallet(Guid walletId, DateTimeOffset now)
+    {
+        if (Status == MerchantStatus.Closed)
+            return Result.Failure<MerchantSettlementWallet>(MerchantErrors.Closed);
+
+        var wallet = _settlementWallets.SingleOrDefault(w => w.Id == walletId);
+        if (wallet is null)
+            return Result.Failure<MerchantSettlementWallet>(MerchantErrors.SettlementWalletNotFound);
+
+        wallet.Activate(now);
+        UpdatedAt = now;
+        return Result.Success(wallet);
+    }
+
+    /// <summary>
+    /// Takes an address out of use without deleting it. Refused for the active one: a chain left with no
+    /// destination fails every cash-out at request time, so a replacement is activated instead — which
+    /// retires this one as part of the same change.
+    /// </summary>
+    public Result<MerchantSettlementWallet> RetireSettlementWallet(Guid walletId, DateTimeOffset now)
+    {
+        var wallet = _settlementWallets.SingleOrDefault(w => w.Id == walletId);
+        if (wallet is null)
+            return Result.Failure<MerchantSettlementWallet>(MerchantErrors.SettlementWalletNotFound);
+
+        if (wallet.IsActive)
+            return Result.Failure<MerchantSettlementWallet>(MerchantErrors.CannotRetireActiveSettlementWallet);
+
+        wallet.Retire(now);
+        UpdatedAt = now;
+        return Result.Success(wallet);
+    }
+
+    /// <summary>
+    /// Whitelists an address and retires whatever else is on that chain, returning the wallet so the caller
+    /// can activate it <b>after saving</b>.
+    ///
+    /// <para>The two steps cannot share one save — see <see cref="RetireOtherSettlementWallets"/> — so this
+    /// deliberately stops half way rather than hiding an intermittent failure inside a convenience method.
+    /// Staff-facing callers should use <c>MerchantRegistrar.AddSettlementWalletAsync</c>, which wraps the
+    /// pair in a transaction; this exists for a caller holding the aggregate directly (the dev seed).</para>
+    /// </summary>
+    public Result<MerchantSettlementWallet> PrepareSettlementWallet(Chain chain, string address, DateTimeOffset now)
+    {
+        var added = AddSettlementWallet(chain, address, label: null, activate: false, now);
+        if (added.IsFailure)
+            return added;
+
+        var retired = RetireOtherSettlementWallets(added.Value.Id, now);
+        return retired.IsFailure ? retired : Result.Success(added.Value);
     }
 
     /// <summary>Sets the per-merchant user-withdrawal min/max override for an asset. Null = unset (the flow uses

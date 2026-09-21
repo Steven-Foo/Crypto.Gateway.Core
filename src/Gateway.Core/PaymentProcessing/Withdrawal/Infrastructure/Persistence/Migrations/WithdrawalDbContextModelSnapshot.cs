@@ -208,6 +208,16 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Infrastr
                         .ValueGeneratedOnAddOrUpdate()
                         .HasColumnType("rowversion");
 
+                    b.Property<string>("ScreeningDecision")
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
+                    b.Property<Guid?>("ScreeningId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<int?>("ScreeningScore")
+                        .HasColumnType("int");
+
                     b.Property<long>("Seq")
                         .ValueGeneratedOnAdd()
                         .HasColumnType("bigint");

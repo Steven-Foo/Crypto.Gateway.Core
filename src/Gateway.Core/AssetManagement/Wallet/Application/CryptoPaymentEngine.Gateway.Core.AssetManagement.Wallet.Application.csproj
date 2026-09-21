@@ -9,11 +9,14 @@
     <ProjectReference Include="../../../KeyManagement/Contracts/CryptoPaymentEngine.Gateway.Core.KeyManagement.Contracts.csproj" />
     <ProjectReference Include="../../../Merchant/Contracts/CryptoPaymentEngine.Gateway.Core.Merchant.Contracts.csproj" />
     <ProjectReference Include="../../../PaymentProcessing/Deposit/Events/CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Deposit.Events.csproj" />
+    <!-- Screening our own receiving addresses for contamination. Contracts only (§4.5). -->
+    <ProjectReference Include="../../../Platform/Compliance/Contracts/CryptoPaymentEngine.Gateway.Core.Platform.Compliance.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="FluentValidation" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
   </ItemGroup>
 
 </Project>

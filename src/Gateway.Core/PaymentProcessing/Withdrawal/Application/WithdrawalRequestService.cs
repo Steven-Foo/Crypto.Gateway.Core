@@ -5,6 +5,7 @@ using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Domain;
 using CryptoPaymentEngine.SharedKernel;
+using Microsoft.Extensions.Options;
 using WithdrawalEntity = CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Domain.Withdrawal;
 
 namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application;
@@ -44,7 +45,8 @@ public sealed class WithdrawalRequestService(
     SettledBalanceGate settledBalance,
     IWithdrawalLedger ledger,
     IAddressEncoderFactory addressEncoders,
-    TimeProvider timeProvider) : IWithdrawalRequestService
+    TimeProvider timeProvider,
+    IOptions<WithdrawalScreeningOptions> screeningOptions) : IWithdrawalRequestService
 {
     public async Task<Result<WithdrawalResult>> RequestAsync(RequestWithdrawalCommand command, CancellationToken cancellationToken = default)
     {
@@ -152,7 +154,9 @@ public sealed class WithdrawalRequestService(
             var merchantPolicy = await merchants.FindByIdAsync(withdrawal.MerchantId, cancellationToken);
             var requiresMerchantApproval = merchantPolicy?.RequiresPayoutApproval ?? false;
 
-            withdrawal.ConfirmReserved(requiresApproval, timeProvider.GetUtcNow(), requiresMerchantApproval);
+            withdrawal.ConfirmReserved(
+                requiresApproval, timeProvider.GetUtcNow(), requiresMerchantApproval,
+                requiresScreening: screeningOptions.Value.Enabled);
             await repository.SaveChangesAsync(cancellationToken);
         }
 

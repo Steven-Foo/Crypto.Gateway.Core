@@ -4,7 +4,13 @@ This is the complete, current contract for the Back Office API (`Api/OperationsA
 `docs/backoffice-api.md`, which predates the roles/permissions rework and is missing several screens — do
 not use that file as a reference; it describes a binary Admin/Viewer model that no longer exists.
 
-Everything below was verified directly against the current endpoint source code, not written from memory.
+Everything below was verified against the current endpoint source, and then **exercised over HTTP against a
+running host** — every route, the browser auth flow, permission gating with a genuinely restricted user, and
+the client snippet in section 0 exactly as printed. Section 23b records what that covered and what it did
+not.
+
+**New here? Start at section 0.** It gets a backend running, hands you a working API client, and lists the
+five conventions that otherwise cost an afternoon each.
 
 **Related documents**
 - `docs/merchant-portal-frontend-integration.md` — the **merchant-facing portal** API (`Api/MerchantPortalApi`,
@@ -12,6 +18,238 @@ Everything below was verified directly against the current endpoint source code,
   mix the two.
 - `docs/dev-sample-data.md` — how to populate a local database with realistic merchants, deposits and
   withdrawals so these screens have something to render.
+
+---
+
+## 0. Start here
+
+### Get a backend running
+
+```powershell
+./tools/dev/Setup-LocalEnv.ps1                                              # database + all migrations
+dotnet run --project src/Api/OperationsApi/CryptoPaymentEngine.Api.OperationsApi
+```
+
+That serves `http://localhost:54001`. Dev staff login is `admin` / `ChangeMe_DevOnly!1`, seeded on boot.
+
+An empty database makes every screen look broken in the same way, so populate it before building anything:
+see section 23. It takes a minute and is worth it — several screens are unreadable without realistic data.
+
+### CORS is an allow-list, so your dev server port matters
+
+`http://localhost:5173` and `:5174` are allow-listed out of the box. A credentialed request needs an **exact**
+origin, never `*`, so if your dev server picks a different port the browser will refuse every call. Add yours
+to `Cors:AllowedOrigins` in the Ops host's `appsettings.Development.json`.
+
+### The five things that will bite you
+
+1. **Check `isSuccess`, not the HTTP status alone.** Both are meaningful; the envelope is the contract.
+2. **Branch on `errorCode`, never on `error`.** The prose is display text and gets reworded.
+3. **Cookie-authenticated writes need `X-CSRF-Token`.** Reads do not. Bearer requests are exempt.
+4. **Rates are percent on the wire, basis points internally.** Send percent. Section 5.
+5. **Money crosses as a display decimal AND an exact base-unit string.** Render the decimal, compare and
+   total the integer. Section 5.
+
+### A client that gets all five right
+
+Copy this. It is the whole contract in about forty lines, and it was run against a live host exactly as
+printed — login, an authenticated read, session restore, a CSRF-carrying write, a typed 404, and the 401
+redirect path all behave as shown.
+
+```ts
+const BASE = 'http://localhost:54001/api/v1/ops';
+
+export interface Envelope<T> {
+  isSuccess: boolean;
+  data: T | null;
+  error: string | null;
+  errorCode: string | null;
+}
+
+export class ApiError extends Error {
+  constructor(readonly code: string, message: string, readonly status: number) {
+    super(message);
+  }
+}
+
+// Yours to supply: clear local session state and route to the login screen. It is called only on a 401,
+// so leaving it undefined breaks nothing until a session expires, which is the worst time to find out.
+declare function redirectToLogin(): void;
+
+// The CSRF token comes from the login response and from /auth/me. It is deliberately readable by JS:
+// useless on its own, because the session itself lives in an httpOnly cookie the page cannot touch.
+let csrfToken: string | null = null;
+export const setCsrfToken = (t: string | null) => { csrfToken = t; };
+
+export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+  const method = (init.method ?? 'GET').toUpperCase();
+  const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(method);
+
+  const res = await fetch(BASE + path, {
+    ...init,
+    // Without this the session cookie is never sent and every call is 401.
+    credentials: 'include',
+    headers: {
+      'Content-Type': 'application/json',
+      ...(unsafe && csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
+      ...init.headers,
+    },
+  });
+
+  // Every response carries the envelope, including binding failures and server faults — see section 2.
+  const body = (await res.json()) as Envelope<T>;
+
+  if (!body.isSuccess) {
+    // 401 means the session is gone: send the user to login rather than showing an error toast.
+    if (res.status === 401) redirectToLogin();
+    throw new ApiError(body.errorCode ?? 'unknown', body.error ?? 'Request failed', res.status);
+  }
+
+  return body.data as T;
+}
+```
+
+Login, which is where the CSRF token comes from:
+
+```ts
+const session = await api<{ token: string; csrfToken: string; permissions: string[] }>(
+  '/auth/login',
+  { method: 'POST', body: JSON.stringify({ username, password }) },
+);
+setCsrfToken(session.csrfToken);
+```
+
+On a page reload the cookie survives but the in-memory token does not. Call `GET /auth/me` on boot: it
+returns the permissions **and** a fresh `csrfToken`, so it doubles as the session-restore call.
+
+### Drive navigation off `permissions`
+
+The session's `permissions` array is what every screen's visibility should key on. `"*"` is the Admin
+wildcard and passes everything. Hide what the user cannot use — but do not rely on hiding it: the server
+refuses a denied call with 403 `ops.permission_denied` whether or not the button was on screen. Verified
+with a genuinely restricted user, section 23b.
+
+---
+
+## 0a. Every route, at a glance
+
+Generated from the endpoint source, so it cannot drift from what the host actually serves. The last column
+is the section in this document that describes the payload.
+
+`{id}` stands for a GUID path parameter. `_any session_` means any authenticated staff member, with no
+specific permission — used only for login, the session endpoints, and the two landing-page reads where
+gating would hand a new account a blank screen.
+
+| Method | Route | Permission | §  |
+|---|---|---|---|
+| GET | `/api/v1/ops/accounts` | `ops.accounts.view` | 7 |
+| POST | `/api/v1/ops/accounts` | `ops.accounts.manage` | 7 |
+| GET | `/api/v1/ops/accounts/{id}` | `ops.accounts.view` | 7 |
+| POST | `/api/v1/ops/accounts/{id}/reset-password` | `ops.accounts.manage` | 7 |
+| PATCH | `/api/v1/ops/accounts/{id}/role` | `ops.accounts.manage` | 7 |
+| PATCH | `/api/v1/ops/accounts/{id}/status` | `ops.accounts.manage` | 7 |
+| GET | `/api/v1/ops/audit` | `ops.audit.view` | 8 |
+| POST | `/api/v1/ops/auth/login` | _any session_ | 3 |
+| POST | `/api/v1/ops/auth/logout` | _any session_ | 3 |
+| GET | `/api/v1/ops/auth/me` | _any session_ | 3 |
+| POST | `/api/v1/ops/callbacks/{type}/{referenceId}/resend` | `ops.callbacks.manage` | 16 |
+| GET | `/api/v1/ops/compliance/addresses` | `ops.compliance.view` | 22b |
+| POST | `/api/v1/ops/compliance/deposit-addresses/screen` | `ops.compliance.manage` | 22b |
+| GET | `/api/v1/ops/compliance/policy` | `ops.compliance.view` | 22b |
+| PUT | `/api/v1/ops/compliance/policy` | `ops.compliance.manage` | 22b |
+| GET | `/api/v1/ops/compliance/policy/history` | `ops.compliance.view` | 22b |
+| GET | `/api/v1/ops/compliance/screenings` | `ops.compliance.view` | 22b |
+| GET | `/api/v1/ops/compliance/screenings/{screeningId}` | `ops.compliance.view` | 22b |
+| POST | `/api/v1/ops/compliance/screenings/latest` | `ops.compliance.view` | 22b |
+| POST | `/api/v1/ops/compliance/screenings/re-screen` | `ops.compliance.manage` | 22b |
+| GET | `/api/v1/ops/dashboard` | _any session_ | 16b |
+| GET | `/api/v1/ops/energy/operations` | `ops.energy.view` | 22 |
+| GET | `/api/v1/ops/energy/resources` | `ops.energy.view` | 22 |
+| GET | `/api/v1/ops/merchants` | `ops.merchants.view` | 9 |
+| POST | `/api/v1/ops/merchants` | `ops.merchants.manage` | 9 |
+| GET | `/api/v1/ops/merchants/{id}` | `ops.merchants.view` | 9 |
+| GET | `/api/v1/ops/merchants/{id}/allowed-ips` | `ops.merchants.view` | 9 |
+| PUT | `/api/v1/ops/merchants/{id}/allowed-ips` | `ops.merchants.manage` | 9 |
+| PUT | `/api/v1/ops/merchants/{id}/approval-threshold` | `ops.fees.manage` | 9 |
+| POST | `/api/v1/ops/merchants/{id}/balance/credit` | `ops.balances.adjust` | 9 |
+| POST | `/api/v1/ops/merchants/{id}/balance/debit` | `ops.balances.adjust` | 9 |
+| GET | `/api/v1/ops/merchants/{id}/balance/history` | `ops.merchants.view` | 9 |
+| POST | `/api/v1/ops/merchants/{id}/close` | `ops.merchants.manage` | 9 |
+| PUT | `/api/v1/ops/merchants/{id}/deposit-limits` | `ops.fees.manage` | 9 |
+| GET | `/api/v1/ops/merchants/{id}/fees` | `ops.fees.view` | 9 |
+| PUT | `/api/v1/ops/merchants/{id}/fees` | `ops.fees.manage` | 9 |
+| PUT | `/api/v1/ops/merchants/{id}/payout-approval` | `ops.merchants.manage` | 9 |
+| PUT | `/api/v1/ops/merchants/{id}/profile` | `ops.merchants.manage` | 9 |
+| POST | `/api/v1/ops/merchants/{id}/regenerate-key` | `ops.merchants.rotate-key` | 9 |
+| PUT | `/api/v1/ops/merchants/{id}/settlement-period` | `ops.merchants.manage` | 9 |
+| PUT | `/api/v1/ops/merchants/{id}/settlement-wallet` | `ops.merchants.manage` | 9 |
+| POST | `/api/v1/ops/merchants/{id}/settlement-wallets` | `ops.merchants.manage` | 19 |
+| POST | `/api/v1/ops/merchants/{id}/settlement-wallets/{walletId}/activate` | `ops.merchants.manage` | 19 |
+| POST | `/api/v1/ops/merchants/{id}/settlement-wallets/{walletId}/retire` | `ops.merchants.manage` | 19 |
+| PATCH | `/api/v1/ops/merchants/{id}/status` | `ops.merchants.manage` | 9 |
+| PUT | `/api/v1/ops/merchants/{id}/withdrawal-cap` | `ops.fees.manage` | 9 |
+| PUT | `/api/v1/ops/merchants/{id}/withdrawal-limits` | `ops.fees.manage` | 9 |
+| GET | `/api/v1/ops/merchants/next-code` | `ops.merchants.view` | 9 |
+| POST | `/api/v1/ops/payment-intents/{reference}/fail` | `ops.deposits.manage` | 12 |
+| GET | `/api/v1/ops/permissions` | `ops.roles.view` | 3 |
+| GET | `/api/v1/ops/reconciliation` | _any session_ | 16b |
+| GET | `/api/v1/ops/roles` | `ops.roles.view` | 6 |
+| POST | `/api/v1/ops/roles` | `ops.roles.manage` | 6 |
+| DELETE | `/api/v1/ops/roles/{id}` | `ops.roles.manage` | 6 |
+| GET | `/api/v1/ops/roles/{id}` | `ops.roles.view` | 6 |
+| PUT | `/api/v1/ops/roles/{id}` | `ops.roles.manage` | 6 |
+| PUT | `/api/v1/ops/roles/{id}/permissions` | `ops.roles.manage` | 6 |
+| GET | `/api/v1/ops/settlement-activity` | `ops.treasury.manage` | 20b |
+| GET | `/api/v1/ops/sweeps` | `ops.sweep.view` | 22 |
+| GET | `/api/v1/ops/sweeps/policies` | `ops.sweep.view` | 22 |
+| POST | `/api/v1/ops/sweeps/scan/{chain}` | `ops.sweep.manage` | 22 |
+| GET | `/api/v1/ops/sweeps/settings` | `ops.sweep.view` | 22 |
+| PUT | `/api/v1/ops/sweeps/settings/{chain}` | `ops.sweep.manage` | 22 |
+| GET | `/api/v1/ops/transactions` | `ops.transactions.view` | 13 |
+| GET | `/api/v1/ops/transactions/deposits` | `ops.deposits.view` | 13 |
+| GET | `/api/v1/ops/transactions/deposits/{systemOrderNumber}` | `ops.deposits.view` | 13 |
+| GET | `/api/v1/ops/transactions/withdrawals` | `ops.withdrawals.view` | 13 |
+| GET | `/api/v1/ops/transactions/withdrawals/{systemOrderNumber}` | `ops.withdrawals.view` | 13 |
+| POST | `/api/v1/ops/treasury/cold-wallet` | `ops.treasury.manage` | 20 |
+| GET | `/api/v1/ops/treasury/cold-wallets` | `ops.treasury.manage` | 20 |
+| POST | `/api/v1/ops/treasury/cold-wallets` | `ops.treasury.manage` | 20 |
+| POST | `/api/v1/ops/treasury/cold-wallets/{walletId}/activate` | `ops.treasury.manage` | 20 |
+| POST | `/api/v1/ops/treasury/cold-wallets/{walletId}/re-screen` | `ops.treasury.manage` | 20 |
+| POST | `/api/v1/ops/treasury/cold-wallets/{walletId}/retire` | `ops.treasury.manage` | 20 |
+| GET | `/api/v1/ops/treasury/hot-pool` | `ops.treasury.manage` | 20 |
+| POST | `/api/v1/ops/treasury/top-up` | `ops.treasury.manage` | 20 |
+| GET | `/api/v1/ops/wallets` | `ops.wallets.view` | 11 |
+| GET | `/api/v1/ops/wallets/{id}` | `ops.wallets.view` | 11 |
+| POST | `/api/v1/ops/wallets/{id}/resume` | `ops.wallets.manage` | 11 |
+| POST | `/api/v1/ops/wallets/{id}/suspend` | `ops.wallets.manage` | 11 |
+| POST | `/api/v1/ops/withdrawals/{withdrawalId}/approve` | `ops.withdrawals.approve` | 14 |
+| POST | `/api/v1/ops/withdrawals/{withdrawalId}/audit-approve` | `ops.withdrawals.approve` | 14 |
+| POST | `/api/v1/ops/withdrawals/{withdrawalId}/audit-reject` | `ops.withdrawals.approve` | 14 |
+| POST | `/api/v1/ops/withdrawals/{withdrawalId}/cancel` | `ops.withdrawals.manage` | 14 |
+| POST | `/api/v1/ops/withdrawals/{withdrawalId}/record-settlement` | `ops.withdrawals.manage` | 14 |
+| POST | `/api/v1/ops/withdrawals/{withdrawalId}/reject` | `ops.withdrawals.approve` | 14 |
+| POST | `/api/v1/ops/withdrawals/{withdrawalId}/release` | `ops.withdrawals.manage` | 14 |
+
+---
+
+## 0b. Suggested build order
+
+Each row lists everything that screen needs. Later rows depend on earlier ones existing.
+
+| # | Screen | Endpoints | Notes |
+|---|---|---|---|
+| 1 | Login + session shell | `POST /auth/login`, `GET /auth/me`, `POST /auth/logout` | Nothing else works until the cookie, CSRF token and permission-driven nav are right. |
+| 2 | Dashboard | `GET /dashboard`, `GET /reconciliation` | No permission gate. Degrades when Mongo is down — see section 16b, and render `null` counts as unknown, never as zero. |
+| 3 | Merchants list + detail | `GET /merchants`, `GET /merchants/{id}` | The spine of the product. Detail carries settlement wallets with their screening verdicts. |
+| 4 | Merchant terms | fees, limits, caps, settlement-period, approval-threshold | Section 19. All percent-on-the-wire. |
+| 5 | Transactions | `GET /transactions/deposits`, `.../withdrawals`, detail endpoints | Section 12-13. Use the effective-status vocabulary in section 18. |
+| 6 | Withdrawal approvals | `POST /withdrawals/{id}/approve`, `/reject`, `/release`, `/cancel` | The first screen that moves money. Read section 13 carefully. |
+| 7 | Roles + accounts | sections 6 and 7 | Needed before anyone but the seeded admin can use the portal. |
+| 8 | Wallets, sweeps, energy, reconciliation | sections 11, 21, 22 | Read-only operational views. |
+| 9 | Treasury | section 20 | Hot-pool balances and top-up recording. Nothing on this screen sends funds. |
+| 10 | Compliance | section 22b | Screening evidence, the policy settings screen, and the deposit-address sweep. |
+
+Screens with no backend at all are listed in section 24. Do not start those.
 
 ---
 
@@ -33,6 +271,12 @@ All routes are prefixed `/api/v1/ops/...`. There is no versioning beyond `v1` to
 ```
 
 Always check `isSuccess`, not just the HTTP status — but the HTTP status is also meaningful (see below).
+
+**The envelope is guaranteed on every response, including the ones no endpoint produced.** A request that
+fails model binding before a handler runs (a required query parameter missing, a malformed JSON body) and an
+unhandled server fault both used to escape as a raw framework response with no envelope and no code. A
+host-wide handler now catches both, so a client never has to special-case "sometimes there is no envelope".
+Verified by probing every route.
 
 **`errorCode` is the field to branch on.** It is a stable dotted string; `error` is display prose that
 gets reworded and localised, so never pattern-match on it. Both fields are present on every response
@@ -64,6 +308,10 @@ Codes come from two places:
 | `ops.invalid_ip_address` | 400 | Every submitted IP/CIDR was malformed |
 | `ops.network_required` | 400 | `coin` filter supplied without `network` |
 | `ops.merchant_id_required` | 400 | `transactionId` filter supplied without `merchantId` |
+| `ops.malformed_request` | 400 | The request never reached a handler: a required query parameter absent, or a body that is not valid JSON |
+| `ops.too_many_addresses` | 400 | A batch screening lookup sent more than 200 addresses. Refused, never truncated — split the request |
+| `ops.internal_error` | 500 | An unhandled server fault. The detail is logged, never returned |
+| `compliance.*` | 400 | Screening-policy validation — see section 22b |
 
 ### HTTP status codes used
 
@@ -381,8 +629,12 @@ that needs to round-trip exactly, since `balance` can lose precision once cast t
 
 ### `GET /api/v1/ops/merchants/{id}/allowed-ips` — `ops.merchants.view`
 ```json
-{ "merchantId": "guid", "allowedIps": ["1.2.3.4"] }
+{ "merchantId": "guid", "allowedIps": ["1.2.3.4"], "apiAccessBlocked": false }
 ```
+**The allowlist is enforced.** Every signed merchant API call (`/api/v1/*` on the merchant gateway) must come from
+an address on this list, or it is refused with **403 "IP address not whitelisted."**. **An empty list refuses
+every call**, and `apiAccessBlocked: true` says so: show it prominently on the merchant screen, because that
+merchant's integration is switched off. The pay page and the portal logins are not affected.
 
 ### `GET /api/v1/ops/merchants/next-code` — `ops.merchants.view`
 Preview of the code `POST .../merchants` will most likely mint next (`ME00001`, `ME00002`, ... — one past the
@@ -558,12 +810,20 @@ No body. Revokes the current credential immediately and issues a new one.
 ```
 
 ### `PUT /api/v1/ops/merchants/{id}/allowed-ips` — `ops.merchants.manage`
-Request: `{ "ipAddresses": ["1.2.3.4", "5.6.7.8"] }` — full replace, not additive. Invalid IP formats are
-silently dropped and reported back in `invalidIps` (not a hard failure) unless *every* submitted IP was
-invalid, in which case it's a 400 and nothing changes.
+Request: `{ "ipAddresses": ["1.2.3.4", "5.6.7.8"] }` — full replace, not additive.
+
+- **Single full addresses only.** IPv4 as four decimal octets, or IPv6. CIDR ranges, ports, host names and
+  shorthand such as `1.2` are refused. Addresses are stored normalised: IPv6 in canonical lowercase form, and
+  `::ffff:1.2.3.4` as `1.2.3.4`, so `allowedIps` may not echo exactly what was typed.
+- Refused entries are dropped and listed in `invalidIps`; the valid ones are saved. **Show `invalidIps` to the
+  operator** — a dropped entry is a server that will get 403. If *every* entry is refused it is a 400
+  `ops.invalid_ip_address` and nothing changes.
+- **Sending `[]` clears the list, which blocks the merchant's API.** The response carries `apiAccessBlocked: true`;
+  confirm with the operator before sending it.
+
 Response:
 ```json
-{ "merchantId": "guid", "allowedIps": ["1.2.3.4"], "invalidIps": [], "cloudflare": { "added": 1, "removed": 0 } }
+{ "merchantId": "guid", "allowedIps": ["1.2.3.4"], "apiAccessBlocked": false, "invalidIps": [], "cloudflare": { "added": 1, "removed": 0 } }
 ```
 
 ---
@@ -997,8 +1257,8 @@ Row:
 - **`pending_approval`** → build an Approve/Reject action (§14 below). Plain `pending` needs no action —
   it's already approved and self-processing.
 - **`insufficient_balance`** → the hot wallet can't physically cover it yet. Funds stay reserved (not
-  lost). **Auto-resumes** once the wallet is reloaded — no endpoint needed to un-stick it, just wait or
-  reload the wallet. Use `sourceWalletId` to jump to the Wallets screen and check that wallet's real
+  lost). **Auto-resumes** once the wallet holds enough — no endpoint needed to un-stick it. An admin funds
+  the wallet from a company wallet and records it as a top-up (§20). Use `sourceWalletId` to jump to the Wallets screen and check that wallet's real
   on-chain balance if investigating.
 - **`awaiting_release`** → funded but above the auto-send threshold, needs an operator Release action
   (§15 below).
@@ -1008,7 +1268,7 @@ Row:
   the threshold) or the merchant rejects it.
 
 `sourceWalletId` is the direct cross-reference into §11 (Wallets) — if a payout is stuck, this tells you
-exactly which pool wallet to go inspect/reload.
+exactly which pool wallet to go inspect and top up.
 
 ### `GET /api/v1/ops/transactions/withdrawals/{systemOrderNumber}` — `ops.withdrawals.view`
 ### `GET /api/v1/ops/transactions/deposits/{systemOrderNumber}` — `ops.deposits.view`
@@ -1060,8 +1320,8 @@ Request: `{ "reason": "string, required, max 512" }`
 Cancels a payout that can't be funded — the only hold → `Failed` path, releases the reserve.
 Response: `{ "withdrawalId": "guid", "status": "Cancelled" }`.
 
-**Reminder:** `insufficient_balance` needs **no** endpoint at all to resume normally — reload the hot
-wallet and the background worker resumes it automatically. Only use `cancel` if you're actually giving up
+**Reminder:** `insufficient_balance` needs **no** endpoint at all to resume normally — fund the hot
+wallet (and record the top-up, §20) and the background worker resumes it automatically. Only use `cancel` if you're actually giving up
 on the payout.
 
 ---
@@ -1186,12 +1446,21 @@ rows as raw base units — do **not** fall back to a guessed 6.
 | Resource | Field | Values | Casing |
 |---|---|---|---|
 | Deposit (payment intent) | `status` | `pending`, `confirmed`, `expired`, `failed` | lowercase |
-| Withdrawal (user payout) | `status` | `pending`, `pending_merchant_approval`, `pending_approval`, `insufficient_balance`, `awaiting_release`, `confirmed`, `failed` | lowercase-snake |
+| Withdrawal (user payout) | `status` | `pending`, `pending_merchant_approval`, `pending_screening`, `pending_approval`, `insufficient_balance`, `awaiting_release`, `confirmed`, `failed` | lowercase-snake |
 | Withdrawal (merchant settlement) | `status` | additionally `pending_admin_audit`, `pending_finance_transfer`, `finance_settled` — see §19b | lowercase-snake |
 | Callback | `status` | `PendingNotification`, `Notified`, `Abandoned` | PascalCase — note the first is **`PendingNotification`**, NOT `Pending` |
 | Wallet | `status` | `Active`, `Disabled`, `Suspended` | PascalCase |
 | Staff account | `status` | `Active`, `Disabled` | PascalCase |
 | Merchant | `status` | `Active`, `Frozen`, `Closed` | PascalCase |
+| Address screening | `decision` | `Allow`, `Review`, `Block`, `Unavailable` | PascalCase |
+| Address screening | `purpose` | `PayoutDestination`, `SettlementWallet`, `DepositAddress`, `DepositSource` | PascalCase |
+
+`pending_screening` is **its own bucket and not part of `pending`**: it is a payout waiting on a third
+party, which calls for different handling from one waiting on us. It is a valid value for the `status`
+filter, like every other value in that row.
+
+`Unavailable` is not a clean result and must never be rendered as one. It means no verdict could be
+obtained, and the payout flow holds such a payout for staff by default.
 
 ---
 
@@ -1203,13 +1472,36 @@ Five setters on top of §10's fees. All are **display decimals** on the way in, 
 | Endpoint | Permission | Body |
 |---|---|---|
 | `PUT /ops/merchants/{id}/settlement-period` | `ops.merchants.manage` | `{ "days": 1 }` (0–30; 0 = T+0) |
-| `PUT /ops/merchants/{id}/settlement-wallet` | `ops.merchants.manage` | `{ "chain": "Tron", "address": "T..." }` |
+| `PUT /ops/merchants/{id}/settlement-wallet` | `ops.merchants.manage` | `{ "chain": "Tron", "address": "T...", "label"?, "activate"?: true }` |
+| `POST /ops/merchants/{id}/settlement-wallets` | `ops.merchants.manage` | same body; `activate` defaults to **false** — puts an address on file without pointing earnings at it |
+| `POST /ops/merchants/{id}/settlement-wallets/{walletId}/activate` | `ops.merchants.manage` | — |
+| `POST /ops/merchants/{id}/settlement-wallets/{walletId}/retire` | `ops.merchants.manage` | — |
 | `PUT /ops/merchants/{id}/withdrawal-cap` | `ops.fees.manage` | `{ "chain", "coin", "flatCap": 5000.0, "percent": 50 }` (percent, not bps — see §"Percent vs basis points") |
 | `PUT /ops/merchants/{id}/withdrawal-limits` | `ops.fees.manage` | `{ "chain", "coin", "minimum": 10.0, "maximum": 5000.0 }` |
 | `PUT /ops/merchants/{id}/deposit-limits` | `ops.fees.manage` | `{ "chain", "coin", "minimum": 1.0, "maximum": null }` |
 | `PUT /ops/merchants/{id}/approval-threshold` | `ops.fees.manage` | `{ "chain", "coin", "threshold": 1000.0 }` |
 | `PUT /ops/merchants/{id}/profile` | `ops.merchants.manage` | `{ "contactEmail", "settlementMode", "remark" }` — all optional, write-only |
 | `PUT /ops/merchants/{id}/payout-approval` | `ops.merchants.manage` | `{ "required": true }` |
+
+### The settlement-wallet actions — response shape
+
+All four settlement-wallet endpoints (`PUT .../settlement-wallet`, `POST .../settlement-wallets`,
+`.../activate`, `.../retire`) return the same shape:
+
+```json
+{ "merchantId": "...", "walletId": "...", "network": "Tron", "address": "T...", "label": "backup desk",
+  "status": "Active", "isActive": true,
+  "screeningDecision": "Allow", "screeningScore": 3, "screeningId": "..." }
+```
+
+Plus a top-level `warnings` array alongside `data` (see below) on the two writes that can produce one
+(`PUT`/`POST .../settlement-wallets`) — activate/retire never carry warnings, since re-screening on
+activation only ever raises a hard refusal (`merchant.settlement_wallet_blocked`), never a warning.
+
+A merchant may keep **several** addresses on file per chain; `status` is `"Active"` (this is where the
+chain's cash-outs are paid) or `"Retired"` (on file, not in use) — read the per-merchant
+`GET /ops/merchants/{id}` response's `settlementWallets[]` array for the full set with all their
+statuses, rather than inferring it from individual write responses.
 
 ### `payout-approval` — two-party payout approval, per merchant
 
@@ -1321,25 +1613,76 @@ because the source wallet is not ours.
 
 ---
 
-## 20. Treasury — cold wallet, hot-pool reload, and top-ups
+## 20. Treasury — cold wallet, hot pool, and top-ups
 
-All `ops.treasury.manage`. This is the human-in-the-loop custody flow: funds accumulate in a **cold** treasury
-whose key the system never holds, and an operator periodically reloads the **hot pool** that pays withdrawals.
+All `ops.treasury.manage`. How money moves between the platform's wallets:
+
+- **Deposit addresses → cold treasury.** Sweeps concentrate deposits into the **cold** treasury, a watch-only
+  address whose key the system never holds.
+- **Hot withdrawal pool → the merchant user's destination.** User payouts are built, signed and sent automatically.
+- **Company wallet → hot pool.** When a pool wallet runs low, finance sends company funds into it **outside this
+  system** and an admin records the transfer here as a top-up.
+
+Cold treasury funds are **not** moved to the hot pool by this system. The in-system cold reload
+(`POST /ops/treasury/reload` and `/reload/{id}/submit`) was removed on 2026-09-17; those routes now return 404.
 
 | Endpoint | Purpose |
 |---|---|
-| `GET /ops/treasury/hot-pool?chain=Tron` | Pool wallets **with live on-chain balances**, to pick which needs topping up. **Never returns a key reference.** |
-| `POST /ops/treasury/cold-wallet` | `{ "chain", "address" }` — register the watch-only cold address |
-| `POST /ops/treasury/reload` | `{ "chain", "targetWalletId", "amount" }` → `{ reloadId, unsignedTransactionHex }` |
-| `POST /ops/treasury/reload/{reloadId}/submit` | `{ "signedHex" }` |
+| `GET /ops/treasury/hot-pool?chain=Tron` | Pool wallets **with live on-chain balances**, to see which needs topping up. **Never returns a key reference.** |
+| `GET /ops/treasury/cold-wallets` | Every registered cold collection wallet, plus each chain's two current destinations (below). |
+| `POST /ops/treasury/cold-wallets` | Register a cold collection address (below). `POST /ops/treasury/cold-wallet`, singular, is the same handler and still works. |
+| `POST /ops/treasury/cold-wallets/{walletId}/activate` | Point that chain's sweeps of this wallet's kind at it, retiring the one it replaces. |
+| `POST /ops/treasury/cold-wallets/{walletId}/retire` | Take a wallet out of use. Refused for the active one — 409 `treasury.cold_wallet.cannot_retire_active`. |
+| `POST /ops/treasury/cold-wallets/{walletId}/re-screen` | Screen the address again, ignoring the cache, and refresh the verdict on the row. **Spends provider quota**, so keep it a button, not a page load. |
+| `POST /ops/treasury/top-up` | Record a top-up that has already happened (below). |
 
-**The UI must sign client-side.** The backend builds an *unsigned* transaction and accepts a *signed* blob; the
-cold private key must never be sent to any backend, including this one. A reload screen that collects the key
-and posts it has defeated the entire point of the cold tier. Broadcast and confirmation are done by a worker in
-the money host, so `submit` returning 200 means *accepted*, not *sent*.
+### Cold collection wallets — several per chain, Safe and Danger
 
-No ledger entry is written — treasury→hot is custody-internal, so total custody is unchanged, only its
-location. Once it confirms, parked `insufficient_balance` withdrawals resume automatically.
+A chain has **two** destinations, not one: sweeps from a deposit address that screened clean go to the
+**Safe** collection wallet, and sweeps from a flagged one go to the **Danger** (quarantine) wallet, so tainted
+inflow never mixes into clean treasury. `kind` is that routing class — it is *not* a verdict about the wallet.
+The Danger wallet is expected to score badly over time, by design, and nothing in the platform refuses to use
+it for that reason.
+
+Several wallets may be registered per (chain, kind); exactly one is `Active`. Replacing a destination is an
+**add-then-activate**, never an edit of an address: the retired address usually still holds funds and stays in
+the custody audit, so rewriting it in place would show up as a shortfall in reconciliation.
+
+`GET /ops/treasury/cold-wallets` returns:
+
+```json
+{ "chains": [ { "chain": "Tron",
+                "safe":   { "walletId": "...", "address": "T...", "label": "Cold A" },
+                "danger": null } ],
+  "wallets": [ { "walletId": "...", "chain": "Tron", "kind": "Safe", "address": "T...", "label": "Cold A",
+                 "status": "Active", "isActive": true,
+                 "coin": "USDT", "balance": 12500.0, "balanceBaseUnits": "12500000000",
+                 "screeningDecision": "Allow", "screeningScore": 3, "screeningId": "...",
+                 "screenedAt": "...", "createdAt": "...", "updatedAt": "..." } ] }
+```
+
+- `chains[].safe = null` ⇒ that chain is **not sweeping at all**; `danger = null` ⇒ it cannot sweep anything
+  flagged (those balances stay on the deposit address). Both are worth saying on the screen.
+- `balance` is `null`, never `0`, when the node could not be read — "unknown" and "empty" call for opposite
+  actions. `coin`/`balance` are null when no USDT asset is configured for the chain.
+- Retired wallets are listed, with balances: they usually still hold funds.
+
+`POST /ops/treasury/cold-wallets` takes
+`{ "chain", "address", "kind"?: "Safe"|"Danger", "label"?, "activate"?: false, "reason"? }` and returns
+`{ walletId, chain, kind, address, label, status, isActive, replacedAddress, screeningDecision,
+screeningScore, screeningId, warnings, registered }`.
+
+- **`activate` defaults to `false`.** Adding an address and pointing a chain's sweeps at it are separate
+  decisions; a UI should make activation its own confirmed step.
+- The address is **format-checked for the chain** — a bad one is 400 `treasury.cold_wallet.invalid_address`,
+  before any row exists. An empty one is 400 `treasury.cold_wallet.address_required`. The same address under
+  the other `kind` is 409 `treasury.cold_wallet.already_registered`; re-registering it under the same kind
+  adopts the existing wallet rather than duplicating it.
+- **Screening never refuses a registration.** A non-clean verdict is returned in `warnings` (empty in the
+  normal case, so don't read a 200 as silence) and recorded on the row. A flagged **Danger** wallet produces
+  no warning at all — that is the control working.
+- Audited as `treasury.cold_wallet_registered` / `_replaced` / `_activated` / `_retired` (entity
+  `TreasuryColdWallet`, id = the wallet id) with the reason and both addresses. `reason` max 200 chars.
 
 ### `POST /ops/treasury/top-up` — recording a hot-wallet top-up
 
@@ -1348,9 +1691,8 @@ location. Once it confirms, parked `insufficient_balance` withdrawals resume aut
   "transactionHash": "0x...", "sourceAddress": "T..." }
 ```
 
-**Different from the cold reload above.** A reload is *built and broadcast by this system*. A top-up already
-happened: an admin sent company funds into a hot wallet from their own business wallet, and is telling us
-about it. So it is verified and recorded, never executed.
+A top-up already happened: finance sent company funds into a hot wallet from a company wallet, and an admin is
+telling us about it. So it is verified on-chain and recorded, never executed.
 
 `GET /ops/treasury/hot-pool` returns each wallet's live `available` balance so the operator can see which one
 is running dry. A balance that could not be read comes back **`null`, not `0`** — "unknown" and "empty" call
@@ -1430,15 +1772,66 @@ audit is down" *is* the answer to the question being asked.
 
 ---
 
-## 22. Sweep and Energy — read-only operational views
+## 22. Sweep and Energy — operational views, and the sweep dials
 
-Read-only. There is deliberately **no ops action** (no manual retry/cancel/stake) on these yet.
+Energy is read-only. Sweep now has two write actions (`ops.sweep.manage`): re-tune a chain's dials, and ask
+for an out-of-schedule pass. There is still no per-sweep action (no manual retry/cancel of one sweep).
 
 ### `GET /api/v1/ops/sweeps` — `ops.sweep.view`
 Filters: `chain`, `status`, `walletId`, `page`, `pageSize`. Returns `{ page, pageSize, totalCount, summary, items }`.
 
-Row: `sweepId`, `walletId`, `chain`, `assetId`, `fromAddress`, `toAddress`, `amount(+amountBaseUnits)`,
-`status`, `txHash`, `confirmations`, `failureReason`, `createdAt`, `updatedAt`.
+Row: `sweepId`, `walletId`, `chain`, `assetId`, `coin`, `decimals`, `fromAddress`, `toAddress`,
+`amount(+amountBaseUnits)`, `status`, **`destinationKind`** (`Safe`/`Danger`), **`screeningDecision`**,
+**`screeningId`**, `txHash`, `confirmations`, `failureReason`, `createdAt`, `updatedAt`.
+
+`destinationKind: "Danger"` means the source deposit address was flagged and its balance was sent to the
+quarantine wallet instead of clean treasury; `screeningId` deep-links to
+`GET /ops/compliance/screenings/{id}` for the indicators behind that. Both are null/`Safe` on sweeps made
+before segregation existed, and whenever `Sweep:Screening` is off.
+
+### `GET /api/v1/ops/sweeps/settings` — `ops.sweep.view`
+Also served at the original path `GET /api/v1/ops/sweeps/policies` (same payload; kept for screens already
+built against it).
+
+One row per chain: `chain`, `configured`, `enabled`, `minSweepAmountBaseUnits`, `confirmations`,
+`scanIntervalMinutes`, `source`, `scanRequestedAt`, `lastScanStartedAt`, `lastScanCompletedAt`,
+`lastSweepsCreated`, `updatedBy`, `updatedAt`, and `assets[]` of `{ coin, decimals, minSweepAmount }` — the
+single base-unit threshold converted for each active asset, because the scan applies the same integer to every
+asset on the chain.
+
+- `source` is `"Configuration"` while the values still track the deployed defaults, `"Stored"` once staff have
+  saved them. Show the difference: "nobody has set this" and "someone set it to exactly the default" look
+  identical otherwise.
+- A chain with no configured policy is `configured: false` with null figures — never a default.
+- `lastScanCompletedAt` + `lastSweepsCreated` are how a screen answers "did the sweep actually run".
+
+### `PUT /api/v1/ops/sweeps/settings/{chain}` — `ops.sweep.manage`
+
+```json
+{ "enabled": true, "minSweepAmountBaseUnits": "10000000", "confirmations": 19, "scanIntervalMinutes": 2 }
+```
+
+Every field is required — a partial save would silently revert a dial the caller happened to hold a stale
+value for. `minSweepAmountBaseUnits` is an **exact base-unit integer string** (§14), not a display decimal:
+the threshold applies to every active asset on the chain, so there is no single asset to convert against.
+
+Validation: `sweep.threshold_negative`, `sweep.confirmations_not_positive` (zero would treat an unconfirmed
+transfer as final), `sweep.scan_interval_out_of_range` (1 minute – 7 days; pause the chain instead of
+scheduling it further out), `ops.invalid_amount` for a non-integer threshold, `sweep.chain_not_configured`
+for a chain with no `Sweep:Policies` section. Audited as `sweep.settings_updated`.
+
+`enabled: false` pauses concentration for the chain: balances stay on deposit addresses, which the platform
+also controls, so nothing is at risk while it is off.
+
+### `POST /api/v1/ops/sweeps/scan/{chain}` — `ops.sweep.manage`
+
+Asks for a pass outside the schedule. Returns `{ chain, requested: true, scanRequestedAt, scanIntervalMinutes }`.
+
+**It is a request, not a scan.** The back-office host runs no sweep workers and holds no chain credentials, so
+it stamps the chain's settings row and the money host claims it on its next tick (within ~30s), consuming the
+request exactly once however many instances are running. A UI should say "requested" and let the operator
+watch `lastScanCompletedAt` / the sweep list, rather than implying the pass has finished. Refused for a paused
+chain with 409 `sweep.chain_paused`. Audited as `sweep.scan_requested`.
 
 ### `GET /api/v1/ops/energy/operations` — `ops.energy.view`
 Filters: `chain`, `kind` (`Stake`/`Delegate`/`TopUp`), `status`, `stakingWalletId`, paging.
@@ -1454,6 +1847,295 @@ figure with a `...Sun` exact integer), `targetEnergy`, `minimumEnergy`, `observe
 
 Energy counts are raw integers, not money — no decimals conversion applies to them. TRX amounts are money and
 carry both forms.
+
+---
+
+## 22b. Address screening — the AML evidence trail
+
+Read-only, plus one action. Everything here is an opinion about a public address; no money and no keys are
+involved.
+
+```
+GET  /api/v1/ops/compliance/screenings                 ops.compliance.view
+GET  /api/v1/ops/compliance/screenings/{screeningId}   ops.compliance.view
+POST /api/v1/ops/compliance/screenings/re-screen       ops.compliance.manage
+```
+
+**List filters** (all optional, they AND together): `chain`, `decision`, `purpose`, `address`, `fromDate`,
+`toDate`, `page`, `pageSize` (max 200). An unknown `decision`, `chain` or `purpose` is a 400 with
+`ops.invalid_decision`, `ops.invalid_chain` or `ops.invalid_purpose`. The `address` filter is an exact
+case-insensitive match, not a substring search, so paste a whole address.
+
+`decision` is one of `Allow`, `Review`, `Block`, `Unavailable`. `purpose` is one of
+`PayoutDestination`, `SettlementWallet`, `DepositSource`.
+
+**This list is the history, not the current state.** `items` and `totalCount` are rows, including superseded
+verdicts, and `decision` matches any row. An address blocked last month and cleared since still appears
+under `decision=Block` here, through its old row. Its `summary` counts each address once at its latest
+verdict but honours only `chain`, so it will not agree with a filtered table. Use this list for an
+address's audit trail. **For anything that asks "what is flagged now", use the current-verdict list below.**
+
+**A row can read `Allow` and still list `sanctioned_entity` in `reasons`.** That is correct and must not be
+rendered as a contradiction. `reasons` includes indirect exposure inherited through counterparties, which is
+evidence a reviewer wants to see; only a direct designation forces a Block. Show the reasons, do not infer a
+decision from them.
+
+**`rawResponse` is only on the detail read**, and only there. It is the provider's verbatim payload, returned
+as a string. Render it as preformatted text; do not assume a shape.
+
+`freshUntil` is when the cached verdict stops being reusable, and is `null` for an `Unavailable` row, which
+is never reused. `failureReason` is populated only for `Unavailable`. `policy` is the thresholds that were
+in force when the decision was taken, so an old row explains itself without reference to current settings.
+
+**Re-screen** takes `{ "chain": "Tron", "address": "T...", "purpose": "PayoutDestination" }`; `purpose`
+defaults to `PayoutDestination`. It ignores the cache and appends a new row. It spends provider quota, which
+is why it is a separate permission — treat it as a deliberate action with a confirmation, not a refresh
+button.
+
+A provider outage comes back as **200** with `decision: "Unavailable"`, never a 5xx. Surface it as "could
+not determine", not as a failed request.
+
+### Current verdicts — build any work queue here
+
+```
+GET  /api/v1/ops/compliance/addresses             ops.compliance.view
+POST /api/v1/ops/compliance/screenings/latest     ops.compliance.view
+```
+
+Both return rows in the same shape as the history list, without `rawResponse` (open the detail route for
+that). Both read stored evidence only, so neither spends provider quota and a vendor outage cannot slow
+either down.
+
+**What "latest" means, everywhere:** newest `screenedAt`, then the row written last. The payout gate, the
+counters, the current list and the batch lookup all use this one rule, so they cannot pick different verdicts
+for the same address.
+
+#### `GET /compliance/addresses` — one row per address, at its current verdict
+
+Query parameters, all optional, AND-ed together: `chain`, `decision`, `purpose`, `stale`, `page`, `pageSize`
+(max 200). Newest `screenedAt` first. Response: `page`, `pageSize`, `totalCount`, `summary`, `items`.
+
+| Rule | What it means for the UI |
+|---|---|
+| `decision` matches the **latest** row only | A cleared address leaves the Block queue the moment it is re-screened clean. |
+| `purpose` picks **which addresses** appear | An address is included if it was *ever* screened for that purpose. The verdict is still its latest row, so a row's own `purpose` can differ from the filter — a deposit address re-screened from the payout screen still shows in the deposit queue. Do not hide those rows. |
+| `stale=true` | The verdict has expired, or the last screening failed (`freshUntil` null). These are due for a re-screen. `stale=false` is the opposite. |
+| `totalCount` counts **addresses** | Page on it directly. |
+| `summary` uses every filter **except** `decision` | The counters describe the same addresses the table is drawn from, so they stay put when the user switches decision tabs. All four keys are always present. |
+
+An unparseable `stale` returns 400 `ops.malformed_request`. An unknown or numeric `decision`/`purpose`
+returns 400 `ops.invalid_decision` / `ops.invalid_purpose`.
+
+#### `POST /compliance/screenings/latest` — the verdict for a page of addresses
+
+Use this for a verdict column on a wallet list: **one call per page**, not one request per row.
+
+```json
+// request
+{ "chain": "Tron", "addresses": ["TEuL4m31…", "TWd4WrZ9…"] }
+
+// response data
+{ "items": [
+  { "address": "TEuL4m31…", "screening": { "screeningId": "…", "decision": "Allow", "score": 3 } },
+  { "address": "TWd4WrZ9…", "screening": null }
+] }
+```
+
+- **One entry per address sent, in request order, echoed exactly as sent.** Key your lookup on the string you
+  sent. Exact duplicates collapse to one entry; different casings do not, because TRON addresses are
+  case-sensitive Base58.
+- **`screening: null` means never screened, and nothing else.** `decision: "Unavailable"` is a screening that
+  happened and could not reach the provider. A failed *request* is a third state — keep all three distinct in
+  the cell: verdict, never screened, lookup failed.
+- **At most 200 addresses.** 201 returns 400 `ops.too_many_addresses`; nothing is ever silently truncated.
+- `[]` returns `items: []`. A missing `addresses` field returns 400 `ops.address_required`, so a misspelt field
+  name cannot come back as a successful answer about nothing. A missing or unknown `chain` returns 400
+  `ops.invalid_chain`. One chain per request.
+- It is a **POST only because a page of addresses does not fit in a query string.** Nothing changes state, but
+  under cookie auth it needs `X-CSRF-Token` like any other POST.
+
+### Where screening surfaces elsewhere, and how to link it
+
+Screening verdicts appear on two other screens. Both carry a `screeningId`, so **link it to the detail
+route above** rather than repeating the indicators inline — one place renders the evidence, and the two can
+never disagree.
+
+| Screen | Fields | What a click should open |
+|---|---|---|
+| Withdrawal search and approval queue | `screeningDecision`, `screeningScore`, `screeningId` | `GET /ops/compliance/screenings/{screeningId}` |
+| Settlement-wallet save / activate | `screeningDecision`, `screeningScore`, `screeningId`, `warnings` | the same detail route |
+| Cold collection wallets (`GET /ops/treasury/cold-wallets`) | `screeningDecision`, `screeningScore`, `screeningId`, `screenedAt` | the same detail route |
+| Sweep rows | `destinationKind`, `screeningDecision`, `screeningId` | the same detail route |
+
+The withdrawal queue uses `pending_screening` as its own effective status, **not folded into `pending`**.
+A payout waiting on a third party and one waiting on us need different handling, so give them different
+treatment in the UI.
+
+On the settlement-wallet save, `warnings` is empty in the normal case — a clean address, or screening
+switched off. A non-empty list means the wallet **was saved** and screening had something to say. Do not
+read a 200 as silence; render the warnings. `screeningDecision: null` means not screened at all, which is
+deliberately different from `"Unavailable"`, meaning asked and no answer.
+
+**Whitelisting is never refused; activation can be.** A merchant may keep several settlement addresses on
+file per chain, and one of them is `Active` — the address that chain's cash-outs are actually paid to. An
+address the provider **directly designates** (`Block`) is still saved, with its verdict, but cannot be made
+active: `400 merchant.settlement_wallet_blocked`, and the wallet is on file as `Retired` so the decision is
+recorded and re-screenable rather than lost. A `Review` or `Unavailable` verdict is accepted with a warning —
+a staff member is exercising judgement here and may hold context the provider does not. Activation
+re-screens (a still-fresh verdict costs no provider call), because that is the moment the address starts
+receiving earnings. Retiring the **active** wallet is refused with `409 merchant.settlement_wallet_active`:
+activate a replacement instead, which retires it as part of the same change and leaves no gap.
+
+Cold **collection** wallets take the opposite stance on purpose, and §20 explains why: their verdict never
+refuses anything, because the quarantine destination is expected to score badly.
+
+### What was exercised on a booted host (2026-09-18)
+
+The cold-collection, sweep-settings and settlement-wallet routes were driven over HTTP against a running Ops
+host, not checked off against source. Registering a cold Danger wallet returned its screening verdict
+(`Allow`, score 3) with `status: "Retired"` because `activate` defaults to false; a malformed address was
+refused 400 `treasury.cold_wallet.invalid_address`; retiring the active Safe wallet was refused 409
+`treasury.cold_wallet.cannot_retire_active`; re-screening appended a NEW `screeningId`, proving it bypassed
+the cache. `PUT /ops/sweeps/settings/Tron` flipped `source` to `"Stored"` with `updatedBy: "admin"`, zero
+confirmations and a one-year interval were refused with their own codes, and `POST /ops/sweeps/scan/Tron`
+was **picked up by the money host on its next tick** (the request marker cleared, `lastScanStartedAt` set) —
+the cross-host trigger working end to end. Requesting a scan on a paused chain was refused 409
+`sweep.chain_paused`. Swapping a merchant's active settlement wallet six times in a row returned 200 every
+time; before the ordering fix (retire-and-save, then activate, in one transaction) it returned 500 on some attempts and not others.
+
+### Screening thresholds — the settings screen
+
+```
+GET /api/v1/ops/compliance/policy           ops.compliance.view
+GET /api/v1/ops/compliance/policy/history   ops.compliance.view
+PUT /api/v1/ops/compliance/policy           ops.compliance.manage
+```
+
+`GET` returns `current`, `configuredDefaults` and `notEditableHere`.
+
+**Render `source` prominently.** `Configuration` means nobody has ever saved a policy and the deployed
+defaults apply. `Stored` means someone saved one. Those look identical field-by-field when a saved policy
+happens to match the defaults, and only one of them is a question worth asking.
+
+**Show `configuredDefaults` beside `current`**, so an operator can see what they changed and what it would
+revert to.
+
+**`notEditableHere` is not an error — render it.** The master switches (whether screening runs at all,
+whether payouts are gated) live in configuration on purpose and take a deployment to change. The payload
+names the keys and the reason. Showing them as disabled with that explanation is far better than leaving an
+operator hunting for a switch that is not on the screen.
+
+**`PUT` is a full replace, not a patch.** Send every field. A partial update on a policy screen invites
+changing one threshold while silently reverting another to whatever stale value the page was holding.
+
+| Field | Notes |
+|---|---|
+| `blockScore`, `reviewScore` | 1-100. Review must not exceed block. |
+| `cacheDays` | 1-365. |
+| `indirectReviewMaxHops` | 0-10. **Zero disables the proximity rule** — `proximityRuleEnabled` says so, do not make the UI infer it from the number. |
+| `indirectReviewMinPercent` | 0-100, a share of volume. |
+| `addedIndicators` | Designations to add. **Add-only.** |
+| `note` | Optional, but it is what makes the history readable. |
+
+**Designations are add-only.** `alwaysBlockIndicators` is everything in force; `editableIndicators` is the
+subset staff added and may remove. Anything in the first list but not the second ships with the platform and
+cannot be removed here — render those as fixed, not as removable chips that fail on save.
+
+**Do not send `updatedBy`.** It is taken from the session. A compliance change attributed to whatever the
+caller typed is not an attribution.
+
+Validation failures return 400 with a specific `errorCode`: `compliance.invalid_score`,
+`compliance.review_above_block`, `compliance.invalid_cache_days`, `compliance.invalid_hops`,
+`compliance.invalid_percent`. Branch on the code, never the message. A refused update saves nothing.
+
+**Changes are not instant across the system.** The workers that screen payouts run in a different host and
+pick up a new policy within about 30 seconds. Do not promise immediate effect in the UI copy.
+
+`GET .../history` returns past versions newest first, with who changed what and when. Screening thresholds
+are append-only, so nothing is ever edited away.
+
+### Screening our own deposit addresses (the inbound check)
+
+Not to be confused with §22's Sweep — this is Compliance screening a deposit address for its risk score,
+unrelated to Sweep moving funds off it.
+
+```
+POST /api/v1/ops/compliance/deposit-addresses/screen    ops.compliance.manage
+```
+
+No body. Returns:
+
+```json
+{ "candidates": 120, "screened": 100, "flagged": 2, "deferred": 20 }
+```
+
+**What it is.** An inbound transfer cannot be screened in flight, and an arrived deposit is never refused —
+it is credited, and a frozen merchant's deposits still credit the ledger. So the check runs on the other side
+of the graph: our own receiving addresses, whose score rises when funds arrive from a bad counterparty.
+
+**It records and flags. Nothing is reversed, withheld or disabled.** By the time an address looks bad the
+money has reached a merchant's balance. Present a flag as something to investigate, never as a blocked or
+held state, and do not offer an action that implies the deposit can be undone.
+
+**`deferred` is not an error.** A pass is capped so it cannot exhaust the quota the payout screening depends
+on. A non-zero `deferred` means the rest are picked up next pass. Show it as progress, not failure.
+
+**Treat the button as spending money.** Each screened address is a provider call against a metered daily
+allowance. Confirm before running, and do not poll it or wire it to a page load.
+
+Results appear in the screening list under `purpose=DepositAddress`, which is distinct from `DepositSource`
+(a counterparty, not built) and from the payout and settlement purposes.
+
+### Settlement wallets — the array on the merchant detail read
+
+`GET /ops/merchants/{id}` returns `settlementWallets` as an ARRAY (a merchant may have several per chain,
+§19), each entry:
+
+```json
+{
+  "chain": "Tron",
+  "address": "TUEZSdKsoDHQMeZwihtdoBiN46zxhGWYdH",
+  "walletId": "01a08a50-1727-72ff-8be2-c9b13e48e7f7",
+  "label": null,
+  "status": "Active",
+  "screeningDecision": "Allow",
+  "screeningScore": 0,
+  "screeningId": "01a08eb1-b302-72ea-8e02-6de0eea3b99d",
+  "screenedAt": "2026-09-11T04:20:05.5044201+00:00"
+}
+```
+
+`walletId` is what the three §19 actions (`activate`/`retire`/re-add) address — read it from here rather
+than from a write response if you need to act on a wallet you did not just create. `status` is
+`"Active"` (this is where the chain's cash-outs are paid — **exactly one per chain**) or `"Retired"`
+(on file, not in use). `label` is the operator's own name for the address, for telling two whitelisted
+addresses apart without comparing base58 strings; null unless staff set one.
+
+The four screening fields (`screeningDecision`, `screeningScore`, `screeningId`, `screenedAt`) are all
+null when the address has never been screened, which is **not** the same as a decision of `Unavailable`.
+Render "not screened", never a tick.
+
+**Show `screenedAt`, not just the decision.** A verdict is a snapshot. An Allow from eight months ago on the
+address that receives all of a merchant's earnings is worth surfacing differently from one taken this week.
+A background pass re-screens ACTIVE wallets periodically (retired ones are not re-screened — nothing is
+paid to them), so the date is meaningful.
+
+`screeningId` deep-links to `GET /ops/compliance/screenings/{id}` for the indicators and the provider
+payload. The list endpoint for merchants does **not** carry `settlementWallets` at all — only the
+single-merchant read does, because the list query does not load settlement wallets.
+
+**A flagged wallet is never revoked automatically.** If you show a warning here, it is information for the
+operator, not a state change: the wallet is still whitelisted and cash-outs still route to it. Every merchant
+cash-out already stops at `pending_admin_audit` for a human, which is where the decision belongs.
+
+### Capacity, so the UI does not design against the wrong limit
+
+The plan allows 10,000 calls a day at one per second, and a completed verdict is cached for 30 days. A
+re-screen is therefore cheap but not free, and a bulk re-screen button is not something to add casually.
+Screen one address at a time from a record the operator is already looking at.
+
+---
+
 
 ---
 
@@ -1482,6 +2164,53 @@ Two things worth knowing when reading the data it produces:
 
 ---
 
+## 23b. Verified against a running host (2026-09-11)
+
+Every route in this document was exercised over HTTP against a booted Ops host before this section was
+written, rather than checked off against the source. What was tested and what it proved:
+
+**All 75 route-and-method pairs are reachable and return the envelope.** Path parameters were filled with a
+valid-shaped but nonexistent id and bodies were sent empty, so writes answered with validation or not-found
+instead of mutating anything. Every one returned the standard envelope with a usable `errorCode`.
+
+**Four defects were found this way and fixed**, all of which would have hit the front end:
+
+| Route | Was | Now |
+|---|---|---|
+| `POST /ops/accounts` | 500, unhandled null username | 400 `staff_user.username_required` |
+| `POST /ops/roles` | 500, unhandled null name | 400 `role.name_required` |
+| `POST /ops/treasury/reload/{id}/submit` (route removed 2026-09-17) | 500, null `signedHex` | 400 `ops.invalid_hex` |
+| `GET /ops/treasury/hot-pool` | 400 with **no envelope** | 400 `ops.network_required` |
+
+The last one is why the host-wide handler exists: `chain` was a required parameter, so a request without it
+failed binding before any code ran and produced a response the client could not interpret.
+
+**Browser behaviour, end to end.** Credentialed CORS preflight from `http://localhost:5173` returns the
+origin and `allow-credentials: true` and permits `X-CSRF-Token`; an unlisted origin gets no
+`allow-origin` header back. Login sets an httpOnly `cpe_ops_session` cookie and returns a `csrfToken`. The
+cookie alone authenticates a read. A cookie-authenticated write **without** `X-CSRF-Token` is refused 403
+`ops.csrf_invalid`; the same write with it reaches the handler. Logout revokes the session, and the next
+request with that cookie is 401.
+
+**Permission gating, with a genuinely restricted user.** An admin's wildcard passes every gate, so a role
+holding only `ops.merchants.view` was created and logged in. It read `/ops/merchants` at 200 and was refused
+`/ops/sweeps`, `/ops/compliance/policy` and `/ops/accounts` at 403 `ops.permission_denied` — and the denied
+**write** was refused too, not merely hidden. Hide a control in the UI for a permission the user lacks, but
+do not rely on hiding it: the server refuses it either way.
+
+**Added after that sweep:** `GET /compliance/addresses` and `POST /compliance/screenings/latest` (REQ-26) were
+exercised separately on a booted host — 21 checks covering one row per address, the summary ignoring
+`decision`, stale filtering, request-order echo, `null` for never screened, the 200 cap refusing 201, the
+missing-field and missing-chain refusals, and 403 for a user without `ops.compliance.view`.
+
+### What this does not cover
+
+Writes were probed against nonexistent ids, which proves routing, binding and error mapping but not the
+success path of each mutation. Those are covered by the service-level test suite rather than over HTTP, which
+is this project's convention for Ops endpoints — they are thin wrappers over already-tested services.
+
+---
+
 ## 24. Known gaps — don't build UI that assumes these work today
 
 - **2FA** — not implemented anywhere in the backend.
@@ -1491,7 +2220,12 @@ Two things worth knowing when reading the data it produces:
 - **No `EnergyPolicy` (threshold) read endpoint** — the resource snapshot already carries target/minimum energy.
 - **No reconciliation history / time series** (§21) — only the current snapshot per (chain, asset).
 - **No paged history endpoint** across transaction records generally — deferred to be applied uniformly.
-- **No client-side signing UI** for the treasury reload (§20) — the API is ready, the signing component is not.
+- **Screening is OFF by default** (section 22b) - three independent flags, all defaulting off. Where none
+  is enabled every verdict reads `Unavailable` and no payout is ever held for screening. The screens work,
+  they are simply empty. Do not render that as broken.
+- **No bulk re-screen and no scheduled re-screening** (section 22b) - a verdict is cached for 30 days and
+  nothing re-checks a stored settlement wallet. Staff force one address at a time, from a record they are
+  already looking at.
 - **`userId` / `payerAddress` were removed**, not left null: both were hardcoded placeholders on every
   deposit/withdrawal row and carried no information. If real user attribution is wanted, it will be added
   deliberately as a populated field.

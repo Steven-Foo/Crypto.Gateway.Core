@@ -1,4 +1,5 @@
 using CryptoPaymentEngine.SharedKernel;
+using System.Net;
 
 namespace CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 
@@ -15,7 +16,11 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 public interface IMerchantRequestVerifier
 {
     /// <summary>
-    /// Returns the owning merchant id when the signature is authentic and the merchant can transact.
+    /// Returns the owning merchant id when the signature is authentic, the merchant can transact, and
+    /// <paramref name="clientIp"/> is on the merchant's IP allowlist (an empty allowlist permits none; an unknown
+    /// caller is refused). The address is checked last, so a wrong key or signature from any address is still the
+    /// uniform <c>merchant.invalid_credentials</c>; only an authentic call from the wrong place gets
+    /// <see cref="MerchantRequestVerificationErrors.IpNotAllowed"/>.
     /// Failure is deliberately uniform (<c>merchant.invalid_credentials</c>) for unknown key / bad
     /// signature so callers cannot probe which part failed.
     /// </summary>
@@ -24,5 +29,6 @@ public interface IMerchantRequestVerifier
         string timestamp,
         string body,
         string signatureHex,
+        IPAddress? clientIp,
         CancellationToken cancellationToken = default);
 }

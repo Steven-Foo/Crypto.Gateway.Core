@@ -12,11 +12,13 @@
     <!-- Energy readiness gate for the hot pool wallet (delegate energy + top-up bandwidth on-demand before a payout). -->
     <ProjectReference Include="../../../AssetManagement/Energy/Contracts/CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Contracts.csproj" />
     <ProjectReference Include="..\..\..\AssetManagement\Treasury\Contracts\CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Contracts.csproj" />
+    <ProjectReference Include="..\..\..\Platform\Compliance\Contracts\CryptoPaymentEngine.Gateway.Core.Platform.Compliance.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="FluentValidation" />
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
   </ItemGroup>
 
 </Project>

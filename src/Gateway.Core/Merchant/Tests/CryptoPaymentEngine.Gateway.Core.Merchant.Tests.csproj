@@ -9,6 +9,7 @@
     <ProjectReference Include="../Domain/CryptoPaymentEngine.Gateway.Core.Merchant.Domain.csproj" />
     <ProjectReference Include="../Application/CryptoPaymentEngine.Gateway.Core.Merchant.Application.csproj" />
     <ProjectReference Include="../Infrastructure/CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\Platform\Compliance\Contracts\CryptoPaymentEngine.Gateway.Core.Platform.Compliance.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>

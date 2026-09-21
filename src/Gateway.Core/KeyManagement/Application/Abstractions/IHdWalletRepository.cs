@@ -76,6 +76,14 @@ public interface IHdWalletRepository
     Task<DerivedKey?> FindDerivedKeyForWalletAsync(
         Guid hdWalletId, long index, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// Every HD wallet that is not disabled, TRACKED, for <c>CustodyModeReconciler</c>: it archives the active wallets
+    /// of the secret store being switched off and reactivates the ones it archived last time, in one transaction.
+    /// Unpaged on purpose: a testnet holds one wallet per merchant per chain plus a few platform wallets, and the
+    /// switch has to see all of them to keep exactly one active wallet per (merchant, chain, purpose).
+    /// </summary>
+    Task<IReadOnlyList<HdWallet>> ListForCustodySwitchAsync(CancellationToken cancellationToken = default);
+
     void Add(HdWallet hdWallet);
 
     /// <summary>

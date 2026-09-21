@@ -100,4 +100,19 @@ public enum WithdrawalStatus
     /// at a glance.</para>
     /// </summary>
     FinanceSettled = 13,
+
+    /// <summary>
+    /// A USER payout whose destination address is being screened against the AML provider before any money
+    /// moves. Reserve is <b>held</b> — the merchant is committed to the amount, and a hold is a deferral, not
+    /// a failure.
+    ///
+    /// <para>It sits here rather than in the request path because the provider is rate-limited (one call per
+    /// second on our plan), so a burst of payouts screened synchronously would turn into timeouts and
+    /// verdict-less failures. A worker drains the queue at the provider's pace instead.</para>
+    ///
+    /// <para><b>Only user payouts reach this state.</b> A merchant cash-out pays out to a staff-whitelisted
+    /// settlement wallet and already stops at <see cref="PendingAdminAudit"/> for a human, so screening belongs
+    /// at the point the wallet is whitelisted, not on every cash-out.</para>
+    /// </summary>
+    PendingScreening = 14,
 }

@@ -139,6 +139,7 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
             "pending_admin_audit" => [WithdrawalStatus.PendingAdminAudit],
             "pending_finance_transfer" => [WithdrawalStatus.PendingFinanceTransfer],
             "finance_settled" => [WithdrawalStatus.FinanceSettled],
+            "pending_screening" => [WithdrawalStatus.PendingScreening],
             "pending" =>
             [
                 WithdrawalStatus.Reserving, WithdrawalStatus.Approved,
@@ -167,7 +168,10 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
         withdrawal.AuditedAt,
         withdrawal.CompletedBy,
         withdrawal.CompletedAt,
-        withdrawal.SettlementSourceAddress);
+        withdrawal.SettlementSourceAddress,
+        withdrawal.ScreeningDecision,
+        withdrawal.ScreeningScore,
+        withdrawal.ScreeningId);
 
     /// <summary>"pending" | "pending_merchant_approval" | "pending_approval" | "insufficient_balance" | "awaiting_release" | "confirmed" |
     /// "failed" — withdrawals have no "expired" state. The states that need a human, not the worker, to move
@@ -187,6 +191,7 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
         WithdrawalStatus.PendingAdminAudit => "pending_admin_audit",
         WithdrawalStatus.PendingFinanceTransfer => "pending_finance_transfer",
         WithdrawalStatus.FinanceSettled => "finance_settled",
+        WithdrawalStatus.PendingScreening => "pending_screening",
         _ => "pending",
     };
 }

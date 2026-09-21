@@ -4,10 +4,13 @@
     <ProjectReference Include="../Domain/CryptoPaymentEngine.Gateway.Core.Merchant.Domain.csproj" />
     <ProjectReference Include="../Contracts/CryptoPaymentEngine.Gateway.Core.Merchant.Contracts.csproj" />
     <ProjectReference Include="../../../SharedKernel/CryptoPaymentEngine.SharedKernel/CryptoPaymentEngine.SharedKernel.csproj" />
+    <ProjectReference Include="../../Platform/Compliance/Contracts/CryptoPaymentEngine.Gateway.Core.Platform.Compliance.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="FluentValidation" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
+    <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
   </ItemGroup>
 
 </Project>

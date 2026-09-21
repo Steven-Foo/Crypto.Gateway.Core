@@ -40,4 +40,16 @@ public interface IMerchantRepository
     Task<bool> TrySaveNewMerchantAsync(Domain.Merchant merchant, CancellationToken cancellationToken = default);
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Runs several saves as one unit.
+    ///
+    /// <para>Needed for switching the active settlement wallet, which is two updates the filtered unique
+    /// index will not tolerate being applied in the wrong order: the previous wallet must be retired before
+    /// the replacement becomes active. EF decides statement order on its own, so doing both in one
+    /// SaveChanges fails intermittently — and a crash between two separate saves would leave the merchant
+    /// with no cash-out destination at all.</para>
+    /// </summary>
+    Task<T> InTransactionAsync<T>(
+        Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken = default);
 }

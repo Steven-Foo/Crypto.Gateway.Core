@@ -27,8 +27,11 @@ public sealed class WithdrawalRequestServiceTests
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
+    /// <summary>Screening defaults to OFF here on purpose: these tests fix the routing behaviour that existed
+    /// before screening, so leaving it off makes them a regression guard that the feature is genuinely opt-in.</summary>
     private static WithdrawalRequestService Compose(
-        MerchantWithdrawalLimits? limits = null, BigInteger? merchantThreshold = null, IAddressEncoderFactory? addresses = null)
+        MerchantWithdrawalLimits? limits = null, BigInteger? merchantThreshold = null,
+        IAddressEncoderFactory? addresses = null, bool screening = false)
     {
         var ledger = new AmpleLedgerQuery();
         return new WithdrawalRequestService(
@@ -41,7 +44,9 @@ public sealed class WithdrawalRequestServiceTests
             new SettledBalanceGate(ledger, TimeProvider.System),
             new FakeLedger(),
             addresses ?? new AlwaysValidAddresses(),
-            TimeProvider.System);
+            TimeProvider.System,
+            Microsoft.Extensions.Options.Options.Create(
+                new WithdrawalScreeningOptions { Enabled = screening }));
     }
 
     private static RequestWithdrawalCommand Command(BigInteger amount, string txn = "w-1") =>

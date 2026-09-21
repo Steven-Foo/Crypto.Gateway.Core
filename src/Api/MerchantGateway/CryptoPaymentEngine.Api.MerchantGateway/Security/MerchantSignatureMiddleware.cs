@@ -16,7 +16,7 @@ public sealed class MerchantSignatureMiddleware(RequestDelegate next)
     public const string MerchantIdItem = "MerchantId";
     private const int ReplayWindowSeconds = 300;
 
-    public async Task InvokeAsync(HttpContext context, IMerchantRequestVerifier verifier)
+    public async Task InvokeAsync(HttpContext context, IMerchantRequestVerifier verifier, ClientIpResolver clientIps)
     {
         // Guard only the merchant API surface; the pay page, health, and swagger pass through unauthenticated.
         if (!context.Request.Path.StartsWithSegments("/api/v1"))
@@ -51,10 +51,16 @@ public sealed class MerchantSignatureMiddleware(RequestDelegate next)
 
         var body = await ReadBufferedBodyAsync(context);
 
-        var result = await verifier.VerifyAsync(apiKey, timestamp, body, signature, context.RequestAborted);
+        var result = await verifier.VerifyAsync(
+            apiKey, timestamp, body, signature, clientIps.Resolve(context), context.RequestAborted);
         if (result.IsFailure)
         {
-            await WriteFail(context, StatusCodes.Status401Unauthorized, result.Error!.Message);
+            // Authentic credentials from an address the merchant has not allowlisted: 403, as the legacy gateway
+            // answered. Every other failure stays the uniform 401.
+            var status = result.Error!.Code == MerchantRequestVerificationErrors.IpNotAllowed
+                ? StatusCodes.Status403Forbidden
+                : StatusCodes.Status401Unauthorized;
+            await WriteFail(context, status, result.Error.Message);
             return;
         }
 

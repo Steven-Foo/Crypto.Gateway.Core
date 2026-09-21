@@ -1,4 +1,5 @@
 using CryptoPaymentEngine.SharedKernel;
+using System.Net;
 
 namespace CryptoPaymentEngine.Gateway.Core.Merchant.Domain;
 
@@ -32,7 +33,7 @@ public sealed class MerchantConfiguration : Entity<Guid>
     public bool IsEnabled { get; private set; }
 
     /// <summary>Comma-separated IP allowlist for this merchant's inbound API calls (BO-managed, synced to
-    /// Cloudflare). Null/empty means no IP restriction is enforced. Stored as CSV like APIGateway's
+    /// Cloudflare). Null/empty permits NO API call (see <see cref="AllowsIp"/>). Stored as CSV like APIGateway's
     /// <c>Merchant.AllowedIps</c> — small, bounded list, not worth a child table.</summary>
     public string? AllowedIpsCsv { get; private set; }
 
@@ -64,10 +65,14 @@ public sealed class MerchantConfiguration : Entity<Guid>
     /// to Cloudflare (matching APIGateway's <c>BoMerchantController.UpdateAllowedIps</c> exactly: IP format
     /// validation happens before this call, at the edge — this method only diffs and stores).
     /// </summary>
-    internal AllowedIpsChange UpdateAllowedIps(IReadOnlyCollection<string> validIps, DateTimeOffset updatedAt)
+    internal AllowedIpsChange UpdateAllowedIps(IReadOnlyCollection<string> normalizedIps, DateTimeOffset updatedAt)
     {
-        var oldSet = new HashSet<string>(AllowedIps, StringComparer.OrdinalIgnoreCase);
-        var newSet = new HashSet<string>(validIps, StringComparer.OrdinalIgnoreCase);
+        // Entries stored before normalisation are compared in their normalised form, so re-saving the same list
+        // written differently reports no churn; one that no longer parses (an old CIDR range) is diffed as typed.
+        var oldSet = new HashSet<string>(
+            AllowedIps.Select(ip => MerchantIpAddress.TryNormalize(ip, out var normalized) ? normalized : ip),
+            StringComparer.OrdinalIgnoreCase);
+        var newSet = new HashSet<string>(normalizedIps, StringComparer.OrdinalIgnoreCase);
 
         var added = newSet.Except(oldSet, StringComparer.OrdinalIgnoreCase).ToList();
         var removed = oldSet.Except(newSet, StringComparer.OrdinalIgnoreCase).ToList();
@@ -76,6 +81,27 @@ public sealed class MerchantConfiguration : Entity<Guid>
         UpdatedAt = updatedAt;
 
         return new AllowedIpsChange(added, removed, [.. newSet]);
+    }
+
+    /// <summary>
+    /// Whether a merchant API call from <paramref name="client"/> is permitted. An empty allowlist permits nothing: an
+    /// API key works only from servers someone deliberately listed, so a leaked key and signing secret are useless
+    /// anywhere else. An unknown caller is refused for the same reason. A stored entry that is not a single full
+    /// address (a CIDR range saved before ranges were refused) matches nothing rather than being guessed at.
+    /// </summary>
+    public bool AllowsIp(IPAddress? client)
+    {
+        if (client is null)
+            return false;
+
+        var caller = MerchantIpAddress.Normalize(client);
+        foreach (var entry in AllowedIps)
+        {
+            if (MerchantIpAddress.TryNormalize(entry, out var normalized) && IPAddress.Parse(normalized).Equals(caller))
+                return true;
+        }
+
+        return false;
     }
 }
 

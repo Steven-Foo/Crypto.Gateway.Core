@@ -82,12 +82,28 @@ public static class OpsPermissions
     public static class Sweep
     {
         public const string View = "ops.sweep.view"; // read the sweep state machine (deposit → cold treasury)
+
+        // Re-tune the per-chain dials (threshold, confirmations, cadence), pause a chain, or ask for an
+        // out-of-schedule pass. Deliberately separate from View: the threshold decides when customer funds
+        // move and pausing stops them moving at all, so it is not something a read-only analyst can reach.
+        public const string Manage = "ops.sweep.manage";
     }
 
     public static class Energy
     {
         // Read the TRON energy state: stake/delegate/top-up operations + per-wallet resource-health snapshots.
         public const string View = "ops.energy.view";
+    }
+
+    public static class Compliance
+    {
+        // Read the address-screening evidence trail.
+        public const string View = "ops.compliance.view";
+
+        // Force a fresh screening, bypassing the cache. Deliberately separate from View because it SPENDS
+        // PROVIDER QUOTA, and the plan meters calls per day — a read-only analyst must not be able to
+        // exhaust the budget the payout screening queue depends on.
+        public const string Manage = "ops.compliance.manage";
     }
 
     public static class Balances
@@ -115,8 +131,9 @@ public static class OpsPermissions
         Audit.View,
         Wallets.View, Wallets.Manage,
         Treasury.Manage,
-        Sweep.View,
+        Sweep.View, Sweep.Manage,
         Energy.View,
         Balances.Adjust,
+        Compliance.View, Compliance.Manage,
     ];
 }

@@ -141,6 +141,7 @@ inert in dev (no real signer, §10).
 | Symptom | Cause |
 |---|---|
 | `401 "Invalid API credentials."` on every signed call | The dev merchant failed to seed. Check the host log for `Invalid column name '…'` — it means `db/sql` is **stale vs. the EF migrations**. Regenerate the module's script (see `db/README.md`) or use `dotnet ef database update`. |
+| `403 "IP address not whitelisted."` | The call came from an address not on the merchant's IP allowlist, or the list is empty (an empty list refuses every call). Locally the dev merchant is seeded with `127.0.0.1`/`::1` only while its list is empty; add your address in the portal or `PUT /api/v1/ops/merchants/{id}/allowed-ips`. The gateway log line `Refused API call for merchant … from <address>` shows the address it saw. |
 | `401 "Request timestamp expired."` | Clock skew > 5 min, or a stale Swagger tab that cached an old timestamp — just Execute again. |
 | `payUrl` opens nothing | `Gateway:BaseUrl` must match `launchSettings.json`'s `applicationUrl`. |
 | Deposit credits but no callback arrives | Redis is down — the outbox dispatcher single-flights on a Redis lock. `docker compose up -d`. |

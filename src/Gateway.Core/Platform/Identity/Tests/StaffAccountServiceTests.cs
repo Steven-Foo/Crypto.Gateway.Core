@@ -65,6 +65,26 @@ public sealed class StaffAccountServiceTests : IAsyncLifetime
         user.Status.ShouldBe(StaffUserStatus.Active);
     }
 
+    /// <summary>
+    /// Found by probing the endpoint with an empty body: a null username reached Trim() and threw, so the
+    /// caller got a 500 with a stack trace instead of a 400 saying what was missing. The guard belongs here
+    /// rather than at the edge, because this is the boundary every caller crosses.
+    /// </summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task Creating_an_account_without_a_username_is_refused_not_thrown(string? username)
+    {
+        var roleId = await SeedRoleAsync();
+
+        await using var context = Context();
+        var result = await Service(context).CreateAsync(username!, roleId, Ct);
+
+        result.IsFailure.ShouldBeTrue();
+        result.Error!.Code.ShouldBe(StaffUserErrors.UsernameRequired.Code);
+    }
+
     [Fact]
     public async Task Creating_an_account_with_a_taken_username_fails()
     {

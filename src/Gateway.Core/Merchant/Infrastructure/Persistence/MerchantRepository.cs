@@ -12,6 +12,12 @@ public sealed class MerchantRepository(MerchantDbContext context) : IMerchantRep
             .Include(m => m.Configuration)
             .Include(m => m.Credentials)
             .Include(m => m.AssetPolicies)
+            // SettlementWallets is load-bearing, not cosmetic: Merchant.SetSettlementWallet decides
+            // update-vs-create by looking for an existing wallet on this chain. Without this Include the
+            // collection is always empty, so a REPLACEMENT wallet was treated as a first one and died on the
+            // (MerchantId, Chain) unique index — a DbUpdateException, i.e. a 500 rather than a clean result.
+            // Staff could therefore set a merchant's cash-out destination once and never change it.
+            .Include(m => m.SettlementWallets)
             .SingleOrDefaultAsync(m => m.Id == merchantId, cancellationToken);
 
     public Task<Domain.Merchant?> GetByCodeAsync(string merchantCode, CancellationToken cancellationToken = default)
@@ -21,6 +27,15 @@ public sealed class MerchantRepository(MerchantDbContext context) : IMerchantRep
             .Include(m => m.Configuration)
             .Include(m => m.Credentials)
             .Include(m => m.AssetPolicies)
+            // Same reason as GetByIdAsync above, and it bit here too: this method returns the aggregate for
+            // MUTATION, and Merchant.SetSettlementWallet decides update-vs-create from this collection. With
+            // it unloaded the dev seeder treated an existing wallet as a first one and failed the
+            // (MerchantId, Chain) unique index on every boot of an already-seeded database.
+            //
+            // The rule, since it has now been missed twice: a read that hands back the aggregate to be
+            // changed must load the whole aggregate. Partial loading is safe only for a read-only projection,
+            // and those go through MerchantDirectory, not here.
+            .Include(m => m.SettlementWallets)
             .SingleOrDefaultAsync(m => m.MerchantCode == normalised, cancellationToken);
     }
 
@@ -116,6 +131,19 @@ public sealed class MerchantRepository(MerchantDbContext context) : IMerchantRep
 
     public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) =>
         context.SaveChangesAsync(cancellationToken);
+
+    public async Task<T> InTransactionAsync<T>(
+        Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken = default)
+    {
+        // Join an outer transaction if the caller already opened one, so this stays composable.
+        if (context.Database.CurrentTransaction is not null)
+            return await action(cancellationToken);
+
+        await using var transaction = await context.Database.BeginTransactionAsync(cancellationToken);
+        var result = await action(cancellationToken);
+        await transaction.CommitAsync(cancellationToken);
+        return result;
+    }
 
     private static bool IsMerchantCodeUniqueViolation(DbUpdateException ex) =>
         ex.InnerException is SqlException { Number: 2601 or 2627 } sql

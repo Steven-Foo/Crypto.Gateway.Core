@@ -71,6 +71,11 @@ public sealed class HdWalletRepository(KeyManagementDbContext context) : IHdWall
          select new DepositSigningKeyInfo(key.Id, wallet.Chain, wallet.SecretReference, key.DerivationIndex))
         .SingleOrDefaultAsync(cancellationToken);
 
+    public async Task<IReadOnlyList<HdWallet>> ListForCustodySwitchAsync(CancellationToken cancellationToken = default) =>
+        await context.HdWallets
+            .Where(w => w.Status != HdWalletStatus.Disabled)
+            .ToListAsync(cancellationToken);
+
     public void Add(HdWallet hdWallet) => context.HdWallets.Add(hdWallet);
 
     public async Task<HdWalletAddOutcome> TryAddActiveAsync(HdWallet hdWallet, CancellationToken cancellationToken = default)

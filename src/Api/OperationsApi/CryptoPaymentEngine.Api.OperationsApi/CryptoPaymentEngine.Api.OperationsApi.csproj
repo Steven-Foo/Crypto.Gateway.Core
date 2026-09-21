@@ -70,6 +70,7 @@
     <ProjectReference Include="..\..\..\Gateway.Core\AssetManagement\Energy\Infrastructure\CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Infrastructure.csproj" />
     <ProjectReference Include="..\..\..\Gateway.Core\Platform\MerchantIdentity\Application\CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Application.csproj" />
     <ProjectReference Include="..\..\..\Gateway.Core\Platform\MerchantIdentity\Infrastructure\CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\..\Gateway.Core\Platform\Compliance\Infrastructure\CryptoPaymentEngine.Gateway.Core.Platform.Compliance.Infrastructure.csproj" />
   </ItemGroup>
 
   <ItemGroup>

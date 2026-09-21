@@ -176,12 +176,9 @@ public static class DevEndpoints
             });
         });
 
-        // ── Treasury cold reload (Phase 2) — dev-only exercise of the human-signed reload flow ──────────────
-        // Production drives this through a staff-authenticated Ops endpoint (a follow-up: it needs the ops host
-        // to gain the transaction builder). Here it is exposed dev-only so the flow is HTTP-exercisable now. The
-        // in-memory engine's "unsigned"/"signed" blobs are opaque bytes; a real TRON run signs client-side.
+        // ── Treasury (dev-only): inspect the hot pool and register the watch-only cold treasury address ──────────
 
-        // Lists the hot pool so you can pick a targetWalletId to reload.
+        // Lists the hot withdrawal pool (wallet ids + addresses).
         group.MapGet("/treasury/hot-pool", async (string chain, ITreasuryHotWalletDirectory hot, HttpContext http) =>
         {
             if (!Enum.TryParse<Chain>(chain, ignoreCase: true, out var parsed))
@@ -190,50 +187,34 @@ public static class DevEndpoints
             return Results.Ok(pool.Select(w => new { w.WalletId, w.Address }));
         });
 
-        // Registers the cold treasury address (the same action the prod ops endpoint will perform).
+        // Registers a cold collection address and makes it that (chain, kind)'s destination — the same
+        // action the prod ops endpoint performs. `kind` is Safe (default) or Danger, the quarantine wallet
+        // flagged deposit addresses are swept into.
         group.MapPost("/treasury/cold-wallet", async (
-            string chain, string address, ITreasuryColdWalletRegistrar registrar, HttpContext http) =>
+            string chain, string address, ITreasuryColdWalletRegistrar registrar, HttpContext http, string? kind = null) =>
         {
             if (!Enum.TryParse<Chain>(chain, ignoreCase: true, out var parsed))
                 return Results.BadRequest(new { error = $"Unknown chain '{chain}'." });
-            var result = await registrar.RegisterAsync(parsed, address, http.RequestAborted);
-            return result.IsFailure ? Results.BadRequest(new { error = result.Error!.Message }) : Results.Ok(new { registered = true, chain = parsed.ToString(), address });
-        });
 
-        // Initiates a reload: builds the unsigned treasury→hot transfer to the operator-chosen pool wallet.
-        group.MapPost("/treasury/reload", async (
-            string chain, Guid targetWalletId, decimal amount, IAssetCatalog assets, ITreasuryReloadService reloads, HttpContext http) =>
-        {
-            if (!Enum.TryParse<Chain>(chain, ignoreCase: true, out var parsed))
-                return Results.BadRequest(new { error = $"Unknown chain '{chain}'." });
-            var asset = await assets.FindAsync(parsed, "USDT", http.RequestAborted);
-            if (asset is null)
-                return Results.BadRequest(new { error = "No USDT asset configured for this chain." });
+            if (!Enum.TryParse<ColdWalletKind>(kind ?? nameof(ColdWalletKind.Safe), ignoreCase: true, out var parsedKind))
+                return Results.BadRequest(new { error = $"Unknown cold wallet kind '{kind}'." });
 
-            var baseUnits = new BigInteger(decimal.Truncate(amount * 1_000_000m)); // USDT: 6 dp
-            var result = await reloads.InitiateAsync(parsed, asset.AssetId, targetWalletId, baseUnits, http.RequestAborted);
+            var result = await registrar.RegisterAsync(
+                new RegisterColdWalletCommand(parsed, parsedKind, address, Label: null, Activate: true),
+                http.RequestAborted);
+
             return result.IsFailure
                 ? Results.BadRequest(new { error = result.Error!.Message })
                 : Results.Ok(new
                 {
-                    result.Value.ReloadId,
-                    result.Value.UnsignedTransactionHex,
-                    whatNext = "Sign the unsigned transaction with the cold key CLIENT-SIDE (never send the key), then " +
-                               "POST /dev/treasury/reload/{id}/submit with the signed hex. A worker broadcasts + confirms " +
-                               "it; the hot wallet's float rises and any parked AwaitingFunds withdrawals resume.",
+                    registered = true,
+                    chain = parsed.ToString(),
+                    kind = parsedKind.ToString(),
+                    address,
+                    walletId = result.Value.WalletId,
+                    replacedAddress = result.Value.ReplacedAddress,
+                    warnings = result.Value.Warnings,
                 });
-        });
-
-        // Submits the operator's client-side-signed blob (hex). In dev the in-memory broadcaster accepts any bytes.
-        group.MapPost("/treasury/reload/{id:guid}/submit", async (
-            Guid id, string signedHex, ITreasuryReloadService reloads, HttpContext http) =>
-        {
-            byte[] signed;
-            try { signed = Convert.FromHexString(signedHex); }
-            catch (FormatException) { return Results.BadRequest(new { error = "signedHex must be valid hex." }); }
-
-            var result = await reloads.SubmitSignedAsync(id, signed, http.RequestAborted);
-            return result.IsFailure ? Results.BadRequest(new { error = result.Error!.Message }) : Results.Ok(new { submitted = true, reloadId = id });
         });
 
         // Simulates a transfer — no signature, no broadcast, no funds moved — to find out how much energy it

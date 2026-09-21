@@ -128,6 +128,22 @@ public sealed class Withdrawal : Entity<Guid>
     /// </summary>
     public string? StatusReason { get; private set; }
 
+    /// <summary>
+    /// The address-screening evidence row behind this payout's screening outcome, or null if it was never
+    /// screened. An opaque cross-module id — no FK — so Compliance stays independently extractable (§4.5).
+    /// </summary>
+    public Guid? ScreeningId { get; private set; }
+
+    /// <summary>
+    /// The screening verdict as applied: Allow / Review / Block / Unavailable. Snapshotted here rather than
+    /// re-read from Compliance, because the evidence is append-only and a later re-screen of the same address
+    /// must never appear to change what THIS payout was judged on.
+    /// </summary>
+    public string? ScreeningDecision { get; private set; }
+
+    /// <summary>The provider's risk score at the time, or null when no verdict was obtained.</summary>
+    public int? ScreeningScore { get; private set; }
+
     /// <summary>The operator who released a large (above-threshold) parked withdrawal for sending, and when.
     /// Once set, the withdrawal is treated as auto-cleared on subsequent passes — a fund dip that re-parks it
     /// never demands a second release.</summary>
@@ -220,13 +236,21 @@ public sealed class Withdrawal : Entity<Guid>
     /// passes false and behaves exactly as before: the merchant's server already authorised it by signing the
     /// request, so it goes straight to the platform threshold decision.
     /// </summary>
-    public Result ConfirmReserved(bool requiresApproval, DateTimeOffset now, bool requiresMerchantApproval = false)
+    public Result ConfirmReserved(
+        bool requiresApproval, DateTimeOffset now, bool requiresMerchantApproval = false,
+        bool requiresScreening = false)
     {
         if (Status != WithdrawalStatus.Reserving)
             return Result.Failure(WithdrawalErrors.InvalidStateTransition);
 
         Status = requiresMerchantApproval
             ? WithdrawalStatus.PendingMerchantApproval
+            // Screening comes AFTER the merchant's own sign-off but BEFORE the platform's, so a payout the
+            // merchant will decline never spends a provider call, and staff always see a verdict when they
+            // judge one. A merchant cash-out is excluded — its destination is the staff-whitelisted settlement
+            // wallet, screened when that wallet is whitelisted rather than on every cash-out.
+            : requiresScreening && Kind == WithdrawalKind.User
+                ? WithdrawalStatus.PendingScreening
             // A MERCHANT settlement is never paid by this system — an admin pays it from a company wallet
             // outside platform custody and records the result — so it diverts here to the audit queue instead
             // of the automated pipeline. It therefore cannot be blocked by a low hot wallet, and it never
@@ -254,7 +278,8 @@ public sealed class Withdrawal : Entity<Guid>
     /// call, not theirs: at or below the approval threshold it is cleared to send automatically; above it, it
     /// still needs platform staff (§10). A merchant can never approve its way past the platform gate.
     /// </summary>
-    public Result MerchantApprove(string approvedBy, bool requiresPlatformApproval, DateTimeOffset now)
+    public Result MerchantApprove(
+        string approvedBy, bool requiresPlatformApproval, DateTimeOffset now, bool requiresScreening = false)
     {
         if (Status != WithdrawalStatus.PendingMerchantApproval)
             return Result.Failure(WithdrawalErrors.InvalidStateTransition);
@@ -264,9 +289,75 @@ public sealed class Withdrawal : Entity<Guid>
 
         MerchantApprovedBy = approvedBy.Trim();
         MerchantApprovedAt = now;
+        // Screening runs before the platform gate, so staff never review a payout that screening will block,
+        // and a payout they DO review carries its verdict. The platform threshold is re-resolved after
+        // screening clears, not captured here.
+        Status = requiresScreening
+            ? WithdrawalStatus.PendingScreening
+            : requiresPlatformApproval ? WithdrawalStatus.PendingApproval : WithdrawalStatus.Approved;
+        UpdatedAt = now;
+        return Result.Success();
+    }
+
+    /// <summary>
+    /// Screening cleared the destination: resume the normal platform routing. The threshold is re-resolved by
+    /// the caller at THIS moment rather than carried from request time, matching how merchant approval works.
+    /// </summary>
+    public Result ClearScreening(Guid screeningId, int? score, bool requiresPlatformApproval, DateTimeOffset now)
+    {
+        if (Status != WithdrawalStatus.PendingScreening)
+            return Result.Failure(WithdrawalErrors.InvalidStateTransition);
+
+        RecordScreening(screeningId, "Allow", score);
+        StatusReason = null;
         Status = requiresPlatformApproval ? WithdrawalStatus.PendingApproval : WithdrawalStatus.Approved;
         UpdatedAt = now;
         return Result.Success();
+    }
+
+    /// <summary>
+    /// Screening refused the destination. Terminal, and it releases the reserve through the same event path a
+    /// platform rejection uses — a refusal must never strand the merchant's money in clearing.
+    /// </summary>
+    public Result BlockScreening(Guid screeningId, int? score, string reason, DateTimeOffset now)
+    {
+        if (Status != WithdrawalStatus.PendingScreening)
+            return Result.Failure(WithdrawalErrors.InvalidStateTransition);
+
+        RecordScreening(screeningId, "Block", score);
+        FailureReason = reason;
+        StatusReason = null;
+        Status = WithdrawalStatus.Rejected;
+        UpdatedAt = now;
+        RaiseReleased(reason, now); // return the reserved funds
+        return Result.Success();
+    }
+
+    /// <summary>
+    /// Screening produced a verdict a human must judge — an elevated score, or no verdict at all because the
+    /// provider was unreachable. It goes to the existing platform approval queue rather than a second review
+    /// state, so staff have one place to act and the existing approve/reject actions serve as the override.
+    /// <paramref name="decision"/> records WHICH of those two it was, because "risky" and "we could not tell"
+    /// call for different judgement.
+    /// </summary>
+    public Result HoldScreeningForReview(
+        Guid screeningId, string decision, int? score, string reason, DateTimeOffset now)
+    {
+        if (Status != WithdrawalStatus.PendingScreening)
+            return Result.Failure(WithdrawalErrors.InvalidStateTransition);
+
+        RecordScreening(screeningId, decision, score);
+        StatusReason = reason;
+        Status = WithdrawalStatus.PendingApproval;
+        UpdatedAt = now;
+        return Result.Success();
+    }
+
+    private void RecordScreening(Guid screeningId, string decision, int? score)
+    {
+        ScreeningId = screeningId;
+        ScreeningDecision = decision;
+        ScreeningScore = score;
     }
 
     /// <summary>The merchant declines its own payout before the platform sees it — releases the reserve, exactly

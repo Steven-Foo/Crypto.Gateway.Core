@@ -124,6 +124,13 @@ public static class OpsErrorCodes
     // ── request validation ──
     public const string InvalidChain = "ops.invalid_chain";
     public const string InvalidStatus = "ops.invalid_status";
+    public const string InvalidDecision = "ops.invalid_decision";
+    public const string InvalidPurpose = "ops.invalid_purpose";
+    public const string AddressRequired = "ops.address_required";
+
+    // A batch lookup sent more addresses than it accepts. Refused rather than truncated, because a
+    // truncated answer renders every address past the cut as never screened.
+    public const string TooManyAddresses = "ops.too_many_addresses";
     public const string InvalidWalletType = "ops.invalid_wallet_type";
     public const string InvalidWithdrawalKind = "ops.invalid_withdrawal_kind";
     public const string InvalidCallbackType = "ops.invalid_callback_type";
@@ -135,4 +142,11 @@ public static class OpsErrorCodes
     public const string NetworkRequired = "ops.network_required";
     public const string MerchantIdRequired = "ops.merchant_id_required";
     public const string NotFound = "ops.not_found";
+
+    // The request never reached a handler: a required query parameter was absent, the body was not valid
+    // JSON, or a route value was the wrong shape.
+    public const string MalformedRequest = "ops.malformed_request";
+
+    // An unhandled server fault. The detail is in the log, never in the response.
+    public const string InternalError = "ops.internal_error";
 }

@@ -12,6 +12,11 @@ public sealed class WithdrawalWorkerOptions
     public TimeSpan ProcessInterval { get; init; } = TimeSpan.FromSeconds(10);
 
     public TimeSpan ConfirmationInterval { get; init; } = TimeSpan.FromSeconds(10);
+
+    /// <summary>How often to drain the address-screening queue. Payouts wait here for a third-party call, so
+    /// this is the latency a merchant sees before a payout starts moving — short, but no shorter than useful,
+    /// since the provider's own rate limit sets the real pace.</summary>
+    public TimeSpan ScreeningInterval { get; init; } = TimeSpan.FromSeconds(5);
 }
 
 /// <summary>Drives approved withdrawals through build → sign → broadcast (§9). Idempotent per pass; a failure is logged and retried.
@@ -56,6 +61,32 @@ public sealed class WithdrawalConfirmationWorker(
                     var changed = await scope.ServiceProvider.GetRequiredService<WithdrawalConfirmationService>().TrackOnceAsync(ct);
                     if (changed > 0)
                         logger.LogInformation("{Count} withdrawal(s) confirmed.", changed);
+                });
+        });
+}
+
+/// <summary>
+/// Screens the destination of payouts parked in <c>PendingScreening</c> and routes them on the verdict (§9).
+///
+/// <para><b>The single-flight lock is load-bearing here, not just an optimisation.</b> The provider's rate
+/// limit is enforced in-process by the adapter, which is only correct while one instance screens at a time.
+/// Two instances draining this queue concurrently would each pace themselves correctly and still breach the
+/// limit together — so if this lock is ever removed, the adapter's limiter must become a Redis token bucket.
+/// Skipping a tick is safe as always: the payouts stay queued and the next pass takes them.</para>
+/// </summary>
+public sealed class WithdrawalScreeningWorker(
+    IServiceScopeFactory scopeFactory,
+    WithdrawalWorkerOptions options,
+    ILogger<WithdrawalScreeningWorker> logger) : BackgroundService
+{
+    protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
+        WorkerLoop.RunAsync(options.ScreeningInterval, stoppingToken, logger, "withdrawal screening", async ct =>
+        {
+            await using var scope = scopeFactory.CreateAsyncScope();
+            await WorkerLoop.SingleFlightAsync(
+                scope.ServiceProvider.GetRequiredService<IDistributedLockFactory>(), "withdrawal:screening", ct, async () =>
+                {
+                    await scope.ServiceProvider.GetRequiredService<WithdrawalScreeningService>().ProcessPendingAsync(ct);
                 });
         });
 }

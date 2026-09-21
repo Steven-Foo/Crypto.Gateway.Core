@@ -23,6 +23,15 @@ public static class OpsMerchantSettlementEndpoints
         app.MapPut("/api/v1/ops/merchants/{id:guid}/settlement-period", SetSettlementPeriodAsync).RequirePermission(OpsPermissions.Merchants.Manage);
         app.MapPut("/api/v1/ops/merchants/{id:guid}/settlement-wallet", SetSettlementWalletAsync).RequirePermission(OpsPermissions.Merchants.Manage);
 
+        // A merchant may keep several cash-out addresses on file per chain; exactly one is paid. Adding and
+        // activating are separate acts, so an address can be whitelisted and screened before it is used.
+        app.MapPost("/api/v1/ops/merchants/{id:guid}/settlement-wallets", AddSettlementWalletAsync)
+            .RequirePermission(OpsPermissions.Merchants.Manage);
+        app.MapPost("/api/v1/ops/merchants/{id:guid}/settlement-wallets/{walletId:guid}/activate", ActivateSettlementWalletAsync)
+            .RequirePermission(OpsPermissions.Merchants.Manage);
+        app.MapPost("/api/v1/ops/merchants/{id:guid}/settlement-wallets/{walletId:guid}/retire", RetireSettlementWalletAsync)
+            .RequirePermission(OpsPermissions.Merchants.Manage);
+
         // Turns the merchant's OWN payout-approval stage on/off. Merchants.Manage rather than Fees.Manage:
         // it controls the merchant's process, not its pricing.
         app.MapPut("/api/v1/ops/merchants/{id:guid}/payout-approval", SetPayoutApprovalAsync).RequirePermission(OpsPermissions.Merchants.Manage);
@@ -78,22 +87,103 @@ public static class OpsMerchantSettlementEndpoints
             });
     }
 
-    private static async Task<IResult> SetSettlementWalletAsync(
-        Guid id, SetSettlementWalletRequest request, IMerchantRegistrar registrar, HttpContext http)
+    /// <summary>Whitelists an address and (by default) makes it the chain's cash-out destination — the
+    /// original single-wallet behaviour, unchanged for callers already using it.</summary>
+    private static Task<IResult> SetSettlementWalletAsync(
+        Guid id, SetSettlementWalletRequest request, IMerchantRegistrar registrar, HttpContext http) =>
+        WhitelistAsync(id, request, registrar, http, defaultActivate: true);
+
+    /// <summary>Puts an address on file without pointing earnings at it. Activation is a separate call, so a
+    /// freshly typed address is screened and looked at before it becomes a destination.</summary>
+    private static Task<IResult> AddSettlementWalletAsync(
+        Guid id, SetSettlementWalletRequest request, IMerchantRegistrar registrar, HttpContext http) =>
+        WhitelistAsync(id, request, registrar, http, defaultActivate: false);
+
+    private static async Task<IResult> WhitelistAsync(
+        Guid id, SetSettlementWalletRequest request, IMerchantRegistrar registrar, HttpContext http, bool defaultActivate)
     {
         if (!Enum.TryParse<Chain>(request.Chain, ignoreCase: true, out var chain))
             return Bad(OpsErrorCodes.InvalidChain, $"Unknown chain '{request.Chain}'.");
 
-        var result = await registrar.SetSettlementWalletAsync(id, chain, request.Address, http.RequestAborted);
-        return result.IsFailure
-            ? OpsResults.Fail(result.Error!)
-            : Results.Ok(new
-            {
-                isSuccess = true,
-                data = new { merchantId = id, network = chain.ToString(), address = request.Address.Trim() },
-                error = (string?)null, errorCode = (string?)null,
-            });
+        var result = await registrar.AddSettlementWalletAsync(
+            id, chain, request.Address, request.Label, request.Activate ?? defaultActivate, http.RequestAborted);
+        if (result.IsFailure)
+            return OpsResults.Fail(result.Error!);
+
+        // `warnings` is empty in the normal case (clean address, or screening switched off). A non-empty list
+        // means the wallet WAS saved but screening had something to say — the UI should show it rather than
+        // treat a 200 as silence, since this is the destination all of that merchant's earnings go to.
+        var saved = result.Value;
+        return Results.Ok(new
+        {
+            isSuccess = true,
+            data = Describe(id, saved),
+            warnings = saved.Warnings,
+            error = (string?)null, errorCode = (string?)null,
+        });
     }
+
+    /// <summary>Points the merchant's cash-outs at an address already on file, retiring the one it replaces.
+    /// Re-screened here, because this is the moment it starts receiving earnings.</summary>
+    private static async Task<IResult> ActivateSettlementWalletAsync(
+        Guid id, Guid walletId, IMerchantRegistrar registrar, IAuditLogger audit, HttpContext http)
+    {
+        var result = await registrar.ActivateSettlementWalletAsync(id, walletId, http.RequestAborted);
+        if (result.IsFailure)
+            return OpsResults.Fail(result.Error!);
+
+        var actor = AuditActor.From(http);
+        await audit.LogAsync(new LogAuditEntryCommand(
+            actor.StaffUserId, actor.Username, "merchant.settlement_wallet_activated", "MerchantSettlementWallet",
+            walletId.ToString(), $"{result.Value.Chain} {result.Value.Address}", actor.IpAddress), http.RequestAborted);
+
+        return Results.Ok(new
+        {
+            isSuccess = true,
+            data = Describe(id, result.Value),
+            warnings = result.Value.Warnings,
+            error = (string?)null, errorCode = (string?)null,
+        });
+    }
+
+    /// <summary>Takes an address out of use, keeping the record of it. Refused for the active one — activate
+    /// a replacement instead, so the merchant is never left unable to cash out.</summary>
+    private static async Task<IResult> RetireSettlementWalletAsync(
+        Guid id, Guid walletId, IMerchantRegistrar registrar, IAuditLogger audit, HttpContext http)
+    {
+        var result = await registrar.RetireSettlementWalletAsync(id, walletId, http.RequestAborted);
+        if (result.IsFailure)
+            return OpsResults.Fail(result.Error!);
+
+        var actor = AuditActor.From(http);
+        await audit.LogAsync(new LogAuditEntryCommand(
+            actor.StaffUserId, actor.Username, "merchant.settlement_wallet_retired", "MerchantSettlementWallet",
+            walletId.ToString(), $"{result.Value.Chain} {result.Value.Address}", actor.IpAddress), http.RequestAborted);
+
+        return Results.Ok(new
+        {
+            isSuccess = true,
+            data = Describe(id, result.Value),
+            error = (string?)null, errorCode = (string?)null,
+        });
+    }
+
+    private static object Describe(Guid merchantId, SettlementWalletResult saved) => new
+    {
+        merchantId,
+        walletId = saved.WalletId,
+        network = saved.Chain.ToString(),
+        address = saved.Address,
+        label = saved.Label,
+        status = saved.Status,
+        isActive = string.Equals(saved.Status, "Active", StringComparison.Ordinal),
+        screeningDecision = saved.ScreeningDecision,
+        screeningScore = saved.ScreeningScore,
+
+        // Deep-links the warning to GET /ops/compliance/screenings/{id}. Without it an operator who
+        // sees a flag here has no route to the indicators behind it.
+        screeningId = saved.ScreeningId,
+    };
 
     private static async Task<IResult> SetWithdrawalCapAsync(
         Guid id, SetWithdrawalCapRequest request, IMerchantAssetPolicyService policies, IAssetCatalog assets, HttpContext http)

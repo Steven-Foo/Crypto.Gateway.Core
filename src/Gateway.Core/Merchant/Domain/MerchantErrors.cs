@@ -66,6 +66,40 @@ public static class MerchantErrors
     public static readonly Error NotTransactable =
         Error.Unauthorized("merchant.not_transactable", "Merchant is not active.");
 
+    /// <summary>
+    /// The signature was authentic, but the call came from an address not on the merchant's IP allowlist (an empty
+    /// allowlist permits none). Deliberately distinct from <see cref="InvalidCredentials"/>: it is reachable only
+    /// with a genuine key AND signing secret, so it reveals nothing to a prober, and it tells the merchant what to fix.
+    /// The message is the legacy gateway's, which merchants' integrations already know.
+    /// </summary>
+    public static readonly Error IpNotAllowed =
+        Error.Failure("merchant.ip_not_allowed", "IP address not whitelisted.");
+
+    public static readonly Error InvalidIpAddress =
+        Error.Validation(
+            "merchant.invalid_ip_address",
+            "Allowed IPs must be single IPv4 or IPv6 addresses written in full: no CIDR ranges, ports or host names.");
+
     public static readonly Error NoValidIpsProvided =
         Error.Validation("merchant.no_valid_ips_provided", "No valid IP addresses were provided; existing allowed IPs are unchanged.");
+
+    /// <summary>
+    /// Address screening refused the proposed settlement wallet. Deliberately a hard refusal rather than a
+    /// warning a staff member can wave through: this is the destination every one of that merchant's
+    /// earnings is paid to, and a sanctions hit on it is a legal matter, not a risk appetite.
+    /// </summary>
+    public static readonly Error SettlementWalletBlocked =
+        Error.Validation(
+            "merchant.settlement_wallet_blocked",
+            "Address screening refused this settlement wallet. It cannot be made the cash-out destination.");
+
+    public static readonly Error SettlementWalletNotFound =
+        Error.NotFound("merchant.settlement_wallet_not_found", "No such settlement wallet for this merchant.");
+
+    /// <summary>Retiring the address a chain's cash-outs are paid to would leave the merchant unable to cash
+    /// out at all. Activating a replacement retires it instead, so there is never a gap.</summary>
+    public static readonly Error CannotRetireActiveSettlementWallet =
+        Error.Conflict(
+            "merchant.settlement_wallet_active",
+            "This is the active cash-out destination. Activate a replacement instead, which retires it.");
 }

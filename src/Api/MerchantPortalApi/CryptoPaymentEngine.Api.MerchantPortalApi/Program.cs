@@ -71,13 +71,14 @@ builder.Services.AddWalletModule(dbConnection);
 builder.Services.AddPaymentIntentModule(config, dbConnection);
 builder.Services.AddDepositModule(config, dbConnection);      // read-only: IDepositLookup for payin enrichment
 builder.Services.AddWithdrawalModule(config, dbConnection);   // IWithdrawalDirectory (read) + request/cash-out services (write)
-builder.Services.AddTreasuryModule(dbConnection);             // needed by Withdrawal's HotWalletAllocator
+builder.Services.AddTreasuryModule(config, dbConnection);             // needed by Withdrawal's HotWalletAllocator
 builder.Services.AddLedgerModule(dbConnection);               // read-only: ILedgerQuery for funds
 
 if (builder.Environment.IsDevelopment())
 {
-    // Public xpub only, never a seed (§10) — must point at the SAME HD wallet as the other hosts.
-    builder.Services.AddDevelopmentKeyCustody(config);
+    // The same secret store as the other hosts: in-memory (public xpubs only) by default, AWS KMS when
+    // KeyManagement:Kms:Enabled=true. Must match MerchantGateway, which owns the wallet switch (§10).
+    builder.Services.AddTestnetKeyCustody(config);
 
     // Seed the dev merchant (idempotent, same config as the other hosts) so the portal login can bind to it,
     // then seed the merchant-portal login itself.

@@ -498,12 +498,20 @@ Top-ups appear in the normal deposit history (`/transactions/payin`) once detect
 
 ### API credential — `portal.api.view` / `portal.api.manage`
 
-- `GET /api/v1/portal/api-credential` — metadata only. **The secret is never returned.**
+- `GET /api/v1/portal/api-credential` — metadata only: `hasActiveCredential`, `allowedIps`, `apiAccessBlocked`.
+  **The secret is never returned.**
 - `POST /api/v1/portal/api-credential/rotate` — issues a new credential and **immediately invalidates the
   old one**. The new secret is returned **once and never again**. The UI must make that unmistakable — there
   is no recovery, by design.
-- `PUT /api/v1/portal/allowed-ips` — replaces the whole allowlist (IPs and CIDRs, validated at the edge; a
-  malformed entry is a 400). This is a **replace**, not an append: send the complete list.
+- `PUT /api/v1/portal/allowed-ips` — `{ "allowedIps": ["1.2.3.4", "2001:db8::10"] }` replaces the whole
+  allowlist; send the complete list. Returns `{ allowedIps, apiAccessBlocked }`.
+  - **Enforced on every API call.** A signed request from an address not on the list gets **403 "IP address not
+    whitelisted."**. The merchant's own servers must all be listed before the integration works.
+  - **An empty list blocks all API calls** (`apiAccessBlocked: true`). Warn before saving an empty list. The portal
+    itself keeps working, so a merchant who locks out their integration can fix it here.
+  - **Single full addresses only.** CIDR ranges, ports, host names and shorthand like `1.2` are refused with 400
+    `portal.invalid_ip_address`, and nothing is saved if any entry is refused. Addresses are stored normalised
+    (IPv6 lowercase canonical; `::ffff:1.2.3.4` becomes `1.2.3.4`), so display what the response returns.
 
 ### Accounts — `portal.accounts.view` / `portal.accounts.manage`
 

@@ -221,6 +221,11 @@ public sealed class WithdrawalDirectoryTests : IAsyncLifetime
         settled.AdminAuditApprove("admin", now);
         settled.RecordFinanceSettlement("finance", "0xsettled", "TCompanyWallet", now);
 
+        // A user payout queued for address screening. Only user payouts reach this state — a merchant
+        // settlement's destination is the staff-whitelisted settlement wallet, screened when it is whitelisted.
+        var screening = Persisted("ST-SCREENING", WithdrawalKind.User, "TDest", "1000000");
+        screening.ConfirmReserved(requiresApproval: false, now, requiresScreening: true);
+
         await _context.SaveChangesAsync(Ct);
     }
 

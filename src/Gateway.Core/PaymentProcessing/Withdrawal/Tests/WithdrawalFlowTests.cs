@@ -15,6 +15,7 @@ using CryptoPaymentEngine.Gateway.Core.KeyManagement.Contracts;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Signing;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application;
+using CryptoPaymentEngine.Gateway.Core.Platform.Compliance.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Domain;
@@ -29,6 +30,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Shouldly;
@@ -62,6 +64,8 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
     private ServiceProvider _provider = null!;
     private InMemoryBalanceReader _hotFloat = null!;
     private StubEnergy _energy = null!;
+    private WithdrawalScreeningOptions _screeningOptions = null!;
+    private StubScreening _screening = null!;
 
     private const string HotWalletAddress = "THotWallet";
     private static readonly Guid HotWalletId = Guid.CreateVersion7();
@@ -130,6 +134,15 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
         // energy-gate test dials it to Provisioning.
         _energy = new StubEnergy();
         services.AddSingleton<IEnergyDelegationService>(_energy);
+
+        // Address screening. Disabled by default, so every pre-existing test in this file keeps asserting the
+        // routing that existed before screening — which is what makes them a regression guard that the feature
+        // is genuinely opt-in. The screening tests below enable it explicitly.
+        _screeningOptions = new WithdrawalScreeningOptions { Enabled = false };
+        services.AddSingleton(Options.Create(_screeningOptions));
+        _screening = new StubScreening();
+        services.AddSingleton<IAddressScreeningService>(_screening);
+        services.AddScoped<WithdrawalScreeningService>();
 
         _provider = services.BuildServiceProvider();
 
@@ -202,6 +215,156 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
         await using (var scope = _provider.CreateAsyncScope())
             (await scope.ServiceProvider.GetRequiredService<WithdrawalDbContext>().Withdrawals.SingleAsync(Ct))
                 .Status.ShouldBe(WithdrawalStatus.Broadcast);
+    }
+
+    // ── Address screening (Phase 2) ──────────────────────────────────────────────────────────────────────
+
+    /// <summary>
+    /// The regression guard that matters most: with screening off, a payout must route exactly as it did
+    /// before the feature existed. If this ever fails, screening has stopped being opt-in and is silently
+    /// holding money on deployments that never asked for it.
+    /// </summary>
+    [Fact]
+    public async Task With_screening_disabled_a_payout_never_enters_the_screening_queue()
+    {
+        await SeedMerchantBalanceAsync(BigInteger.Parse("10000000"));
+
+        var request = await RequestAsync(BigInteger.Parse("3000000"), "idem-screen-off");
+
+        request.Value.Status.ShouldBe(nameof(WithdrawalStatus.Approved));
+        _screening.Calls.ShouldBe(0, "a disabled feature must not call the provider at all");
+    }
+
+    [Fact]
+    public async Task A_clean_destination_below_the_threshold_is_cleared_to_send()
+    {
+        _screeningOptions.Enabled = true;
+        _screening.Decision = ScreeningDecision.Allow;
+        await SeedMerchantBalanceAsync(BigInteger.Parse("10000000"));
+
+        var request = await RequestAsync(BigInteger.Parse("3000000"), "idem-screen-allow");
+        request.Value.Status.ShouldBe(nameof(WithdrawalStatus.PendingScreening));
+
+        // Nothing moves until the screening pass runs — the payout is waiting on a third party, not on us.
+        await ProcessAsync();
+        (await SingleWithdrawalAsync()).Status.ShouldBe(WithdrawalStatus.PendingScreening);
+
+        await ScreenAsync();
+        var screened = await SingleWithdrawalAsync();
+        screened.Status.ShouldBe(WithdrawalStatus.Approved);
+        screened.ScreeningDecision.ShouldBe("Allow");
+        screened.ScreeningId.ShouldNotBeNull();
+
+        await ProcessAsync();
+        (await SingleWithdrawalAsync()).Status.ShouldBe(WithdrawalStatus.Broadcast);
+    }
+
+    /// <summary>
+    /// Screening clears the address but the amount is still above the platform threshold, so it must land in
+    /// the staff queue — a clean screening is not an approval.
+    /// </summary>
+    [Fact]
+    public async Task A_clean_destination_above_the_threshold_still_needs_platform_approval()
+    {
+        _screeningOptions.Enabled = true;
+        _screening.Decision = ScreeningDecision.Allow;
+        await SeedMerchantBalanceAsync(BigInteger.Parse("20000000"));
+
+        await RequestAsync(BigInteger.Parse("6000000"), "idem-screen-allow-big"); // above the 5 USDT threshold
+        await ScreenAsync();
+
+        (await SingleWithdrawalAsync()).Status.ShouldBe(WithdrawalStatus.PendingApproval);
+    }
+
+    /// <summary>
+    /// The load-bearing one. A blocked destination must be refused AND must return the merchant's money —
+    /// a refusal that stranded the reserve would quietly take funds out of circulation with no owner.
+    /// </summary>
+    [Fact]
+    public async Task A_blocked_destination_is_rejected_and_the_reserve_is_released()
+    {
+        _screeningOptions.Enabled = true;
+        _screening.Decision = ScreeningDecision.Block;
+        await SeedMerchantBalanceAsync(BigInteger.Parse("10000000"));
+
+        await RequestAsync(BigInteger.Parse("3000000"), "idem-screen-block");
+        (await BalanceAsync(AccountType.MerchantLiability, Merchant))
+            .ShouldBe(BigInteger.Parse("6900000"), "reserved while queued");
+
+        await ScreenAsync();
+
+        var blocked = await SingleWithdrawalAsync();
+        blocked.Status.ShouldBe(WithdrawalStatus.Rejected);
+        blocked.ScreeningDecision.ShouldBe("Block");
+        blocked.FailureReason.ShouldNotBeNull();
+
+        await DispatchAsync(); // WithdrawalFailed → Ledger release, the same durable path a staff rejection uses
+
+        (await BalanceAsync(AccountType.MerchantLiability, Merchant))
+            .ShouldBe(BigInteger.Parse("10000000"), "the full amount and fee return to the merchant");
+        (await BalanceAsync(AccountType.WithdrawalClearing, null)).ShouldBe(BigInteger.Zero);
+
+        // And it never signs, no matter how many passes run.
+        await ProcessAsync();
+        (await SingleWithdrawalAsync()).Status.ShouldBe(WithdrawalStatus.Rejected);
+    }
+
+    /// <summary>A risky-but-not-blocked address goes to a human, never straight through and never refused.</summary>
+    [Fact]
+    public async Task A_flagged_destination_is_held_for_platform_review_with_the_reason_recorded()
+    {
+        _screeningOptions.Enabled = true;
+        _screening.Decision = ScreeningDecision.Review;
+        await SeedMerchantBalanceAsync(BigInteger.Parse("10000000"));
+
+        await RequestAsync(BigInteger.Parse("3000000"), "idem-screen-review"); // BELOW the threshold
+        await ScreenAsync();
+
+        var held = await SingleWithdrawalAsync();
+        held.Status.ShouldBe(
+            WithdrawalStatus.PendingApproval,
+            "a flagged payout needs a human even when the amount would have auto-cleared");
+        held.ScreeningDecision.ShouldBe("Review");
+        held.StatusReason.ShouldNotBeNull();
+        held.ScreeningScore.ShouldBe(42);
+
+        // Reserve still held — a review is a deferral, not a refusal.
+        (await BalanceAsync(AccountType.MerchantLiability, Merchant)).ShouldBe(BigInteger.Parse("6900000"));
+    }
+
+    /// <summary>
+    /// A vendor outage must not be read as an endorsement. The default holds for a human; a fail-open
+    /// deployment is a deliberate config choice, asserted separately below.
+    /// </summary>
+    [Fact]
+    public async Task An_unavailable_provider_holds_the_payout_for_review_by_default()
+    {
+        _screeningOptions.Enabled = true;
+        _screeningOptions.OnUnavailable = ScreeningUnavailableBehaviour.Hold;
+        _screening.Decision = ScreeningDecision.Unavailable;
+        await SeedMerchantBalanceAsync(BigInteger.Parse("10000000"));
+
+        await RequestAsync(BigInteger.Parse("3000000"), "idem-screen-down");
+        await ScreenAsync();
+
+        var held = await SingleWithdrawalAsync();
+        held.Status.ShouldBe(WithdrawalStatus.PendingApproval);
+        held.ScreeningDecision.ShouldBe("Unavailable");
+        held.ScreeningScore.ShouldBeNull("there was no verdict to score");
+    }
+
+    [Fact]
+    public async Task An_unavailable_provider_lets_the_payout_through_only_when_configured_to()
+    {
+        _screeningOptions.Enabled = true;
+        _screeningOptions.OnUnavailable = ScreeningUnavailableBehaviour.Allow;
+        _screening.Decision = ScreeningDecision.Unavailable;
+        await SeedMerchantBalanceAsync(BigInteger.Parse("10000000"));
+
+        await RequestAsync(BigInteger.Parse("3000000"), "idem-screen-down-open");
+        await ScreenAsync();
+
+        (await SingleWithdrawalAsync()).Status.ShouldBe(WithdrawalStatus.Approved);
     }
 
     [Fact]
@@ -543,6 +706,13 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
         await scope.ServiceProvider.GetRequiredService<WithdrawalProcessingService>().ProcessOnceAsync(Ct);
     }
 
+    /// <summary>One pass of the screening drain — the worker's body, without the worker.</summary>
+    private async Task ScreenAsync()
+    {
+        await using var scope = _provider.CreateAsyncScope();
+        await scope.ServiceProvider.GetRequiredService<WithdrawalScreeningService>().ProcessPendingAsync(Ct);
+    }
+
     private async Task ConfirmAsync()
     {
         await using var scope = _provider.CreateAsyncScope();
@@ -581,6 +751,43 @@ public sealed class WithdrawalFlowTests : IAsyncLifetime
 
         public Task<EnergyReadiness> EnsureEnergyForTransferAsync(Chain chain, string address, CancellationToken cancellationToken = default) =>
             Task.FromResult(Readiness);
+    }
+
+    /// <summary>Returns whatever verdict a test sets, so the payout routing can be driven without a vendor.</summary>
+    private sealed class StubScreening : IAddressScreeningService
+    {
+        public ScreeningDecision Decision { get; set; } = ScreeningDecision.Allow;
+
+        public int Calls { get; private set; }
+
+        public Task<ScreeningVerdict> ScreenAsync(
+            Chain chain, string address, ScreeningPurpose purpose, CancellationToken cancellationToken = default)
+        {
+            Calls++;
+            return Task.FromResult(new ScreeningVerdict(
+                Guid.CreateVersion7(), Decision,
+                Decision == ScreeningDecision.Unavailable ? null : 42,
+                Decision == ScreeningDecision.Unavailable ? null : "Moderate",
+                ["test-indicator"], AddressLabel: null, ReportUrl: null,
+                DateTimeOffset.UtcNow, FromCache: false));
+        }
+
+        // A money path must never re-screen: bypassing the cache spends a provider call per payout, which
+        // is exactly what the rate limit cannot absorb. Re-screening is a deliberate staff action only.
+        public Task<ScreeningVerdict> ReScreenAsync(
+            Chain chain, string address, ScreeningPurpose purpose, CancellationToken cancellationToken = default) =>
+            throw new InvalidOperationException("A money path must not force a re-screen.");
+
+        public Task<ScreeningVerdict?> FindLatestAsync(
+            Chain chain, string address, CancellationToken cancellationToken = default) =>
+            Task.FromResult<ScreeningVerdict?>(null);
+
+        // Candidate filtering is for the address-sweep passes; these stubs stand in for money-path and
+        // settlement callers, which never ask.
+        public Task<IReadOnlyList<string>> FindAddressesNeedingScreeningAsync(
+            Chain chain, IReadOnlyCollection<string> addresses, int limit,
+            CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<string>>([]);
     }
 
     private sealed class StubTreasuryPool(Guid walletId, string address) : ITreasuryHotWalletDirectory

@@ -239,6 +239,22 @@ public sealed class HdWallet : Entity<Guid>
         UpdatedAt = now;
     }
 
+    /// <summary>
+    /// Returns an archived wallet to service, the reverse of <see cref="Archive"/>. Used when a testnet tier switches
+    /// its secret store back (<c>CustodyModeReconciler</c>). A disabled wallet stays disabled: that is a deliberate
+    /// retirement, not a store switch. <see cref="NextDerivationIndex"/> is untouched, so the wallet resumes after the
+    /// last address it handed out and never issues an address twice.
+    /// </summary>
+    public Result Reactivate(DateTimeOffset now)
+    {
+        if (Status != HdWalletStatus.Archived)
+            return Result.Failure(KeyManagementErrors.NotArchived);
+
+        Status = HdWalletStatus.Active;
+        UpdatedAt = now;
+        return Result.Success();
+    }
+
     public void Disable(DateTimeOffset now)
     {
         Status = HdWalletStatus.Disabled;

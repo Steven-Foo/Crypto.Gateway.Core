@@ -12,6 +12,8 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
+using CryptoPaymentEngine.Gateway.Core.KeyManagement.Domain;
+using Microsoft.Extensions.Hosting;
 
 namespace CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure;
 
@@ -80,6 +82,56 @@ public static class KeyManagementModuleExtensions
     {
         services.TryAddSingleton<ISigner, TronSigner>();
         return services;
+    }
+
+    /// <summary>
+    /// DEV/TESTNET tier. Chooses the tier's secret store from configuration: AWS KMS envelope custody when
+    /// <c>KeyManagement:Kms:Enabled</c> is true, otherwise the in-memory development store
+    /// (<see cref="AddDevelopmentKeyCustody"/>). Exactly one is ever registered, so the §10 interlock holds: a wallet
+    /// sealed under one store can never be served by the other.
+    ///
+    /// <para>KMS mode runs the same custody code as Production while keeping the testnet-tier conveniences (dev
+    /// merchant seed, Swagger, /dev endpoints). Use CMKs created for testnet only: anyone who controls the box can
+    /// decrypt whatever its instance role allows.</para>
+    ///
+    /// <para><paramref name="reconcileWallets"/> belongs to the ONE host that owns the switch (the money host). It
+    /// registers <see cref="CustodyModeReconciliationService"/> ahead of the store, so the switch finishes before the
+    /// dev re-seeder and any seeder that allocates from an HD wallet: hosted services start in registration order.</para>
+    /// </summary>
+    /// <returns>True when KMS custody is in force.</returns>
+    public static bool AddTestnetKeyCustody(
+        this IServiceCollection services,
+        IConfiguration configuration,
+        bool reconcileWallets = false)
+    {
+        var kms = configuration.GetSection(AwsKmsKeyCustodyOptions.SectionName).Get<AwsKmsKeyCustodyOptions>()
+            ?? new AwsKmsKeyCustodyOptions();
+
+        // Fail at boot, not at the first deposit: a half-configured KMS tier would start and then refuse every
+        // address and signature with an error far from its cause.
+        if (kms.Enabled && (string.IsNullOrWhiteSpace(kms.Region)
+                || kms.KeyArnFor(HdWalletPurpose.Deposit) is null
+                || kms.KeyArnFor(HdWalletPurpose.Withdrawal) is null))
+        {
+            throw new InvalidOperationException(
+                "KeyManagement:Kms:Enabled is true, but KeyManagement:Kms:Region, KeyArns:Deposit and KeyArns:Withdrawal "
+                + "must all be set.");
+        }
+
+        if (reconcileWallets)
+        {
+            services.AddSingleton(new CustodyModeOptions(
+                kms.Enabled ? SecretProviderKind.AwsKmsEnvelope : SecretProviderKind.InMemoryDevelopment));
+            services.AddScoped<CustodyModeReconciler>();
+            services.AddHostedService<CustodyModeReconciliationService>();
+        }
+
+        if (kms.Enabled)
+            services.AddAwsKmsKeyCustody(configuration);
+        else
+            services.AddDevelopmentKeyCustody(configuration);
+
+        return kms.Enabled;
     }
 
     /// <summary>

@@ -46,6 +46,11 @@ namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Infrastructure.
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("datetimeoffset");
 
+                    b.Property<string>("DestinationKind")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
                     b.Property<string>("FailureReason")
                         .HasMaxLength(512)
                         .HasColumnType("nvarchar(512)");
@@ -60,6 +65,14 @@ namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Infrastructure.
                         .IsConcurrencyToken()
                         .ValueGeneratedOnAddOrUpdate()
                         .HasColumnType("rowversion");
+
+                    b.Property<string>("ScreeningDecision")
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.Property<Guid?>("ScreeningId")
+                        .HasColumnType("uniqueidentifier");
 
                     b.Property<long>("Seq")
                         .ValueGeneratedOnAdd()
@@ -113,6 +126,67 @@ namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Infrastructure.
                         .HasFilter("[Status] IN ('Pending', 'Signing', 'Broadcast')");
 
                     b.ToTable("Sweep", "sweep");
+                });
+
+            modelBuilder.Entity("CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Domain.SweepSettings", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Chain")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
+                    b.Property<int>("Confirmations")
+                        .HasColumnType("int");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<bool>("Enabled")
+                        .HasColumnType("bit");
+
+                    b.Property<bool>("IsStaffConfigured")
+                        .HasColumnType("bit");
+
+                    b.Property<DateTimeOffset?>("LastScanCompletedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("LastScanStartedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<int?>("LastSweepsCreated")
+                        .HasColumnType("int");
+
+                    b.Property<BigInteger>("MinSweepAmount")
+                        .HasColumnType("decimal(38,0)");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<int>("ScanIntervalMinutes")
+                        .HasColumnType("int");
+
+                    b.Property<DateTimeOffset?>("ScanRequestedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("UpdatedBy")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("Chain")
+                        .IsUnique()
+                        .HasDatabaseName("UX_SweepSettings_Chain");
+
+                    b.ToTable("SweepSettings", "sweep");
                 });
 
             modelBuilder.Entity("CryptoPaymentEngine.Infrastructure.Outbox.OutboxMessage", b =>

@@ -1,6 +1,9 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <ItemGroup>
+    <!-- Contracts holds this module's public enums (ColdWalletKind/ColdWalletStatus) and the Domain consumes
+         them, so one definition serves both — the same shape Compliance uses for ScreeningPurpose/Decision. -->
+    <ProjectReference Include="../Contracts/CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Contracts.csproj" />
     <ProjectReference Include="../../../../SharedKernel/CryptoPaymentEngine.SharedKernel/CryptoPaymentEngine.SharedKernel.csproj" />
   </ItemGroup>
 

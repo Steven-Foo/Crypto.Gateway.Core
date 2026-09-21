@@ -120,3 +120,73 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [sweep].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918032157_SweepSettingsAndDestinationKind'
+)
+BEGIN
+    ALTER TABLE [sweep].[Sweep] ADD [DestinationKind] nvarchar(16) NOT NULL DEFAULT N'Safe';
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [sweep].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918032157_SweepSettingsAndDestinationKind'
+)
+BEGIN
+    ALTER TABLE [sweep].[Sweep] ADD [ScreeningDecision] varchar(16) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [sweep].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918032157_SweepSettingsAndDestinationKind'
+)
+BEGIN
+    ALTER TABLE [sweep].[Sweep] ADD [ScreeningId] uniqueidentifier NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [sweep].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918032157_SweepSettingsAndDestinationKind'
+)
+BEGIN
+    CREATE TABLE [sweep].[SweepSettings] (
+        [Id] uniqueidentifier NOT NULL,
+        [Chain] nvarchar(16) NOT NULL,
+        [Enabled] bit NOT NULL,
+        [MinSweepAmount] decimal(38,0) NOT NULL,
+        [Confirmations] int NOT NULL,
+        [ScanIntervalMinutes] int NOT NULL,
+        [IsStaffConfigured] bit NOT NULL,
+        [ScanRequestedAt] datetimeoffset NULL,
+        [LastScanStartedAt] datetimeoffset NULL,
+        [LastScanCompletedAt] datetimeoffset NULL,
+        [LastSweepsCreated] int NULL,
+        [UpdatedBy] nvarchar(128) NULL,
+        [CreatedAt] datetimeoffset NOT NULL,
+        [UpdatedAt] datetimeoffset NOT NULL,
+        [RowVersion] rowversion NULL,
+        CONSTRAINT [PK_SweepSettings] PRIMARY KEY ([Id])
+    );
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [sweep].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918032157_SweepSettingsAndDestinationKind'
+)
+BEGIN
+    CREATE UNIQUE INDEX [UX_SweepSettings_Chain] ON [sweep].[SweepSettings] ([Chain]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [sweep].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918032157_SweepSettingsAndDestinationKind'
+)
+BEGIN
+    INSERT INTO [sweep].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260918032157_SweepSettingsAndDestinationKind', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

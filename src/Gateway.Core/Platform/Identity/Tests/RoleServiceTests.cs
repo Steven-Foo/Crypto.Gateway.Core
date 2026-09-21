@@ -52,6 +52,21 @@ public sealed class RoleServiceTests : IAsyncLifetime
         fetched.Value.Name.ShouldBe("Finance");
     }
 
+    /// <summary>Same defect as the account one: a null name reached Trim() and threw a 500 rather than
+    /// returning the validation error that already existed for it.</summary>
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    public async Task Creating_a_role_without_a_name_is_refused_not_thrown(string? name)
+    {
+        await using var context = Context();
+        var result = await Service(context).CreateAsync(name!, null, ["ops.merchants.view"], Ct);
+
+        result.IsFailure.ShouldBeTrue();
+        result.Error!.Code.ShouldBe(RoleErrors.NameRequired.Code);
+    }
+
     [Fact]
     public async Task Creating_a_role_with_a_taken_name_fails()
     {

@@ -1,3 +1,4 @@
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Application;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Contracts;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Infrastructure.Configuration;
@@ -32,7 +33,16 @@ public static class SweepModuleExtensions
             .UseBigIntegerMoney());
 
         services.TryAddSingleton(TimeProvider.System);
-        services.AddSingleton<ISweepPolicyProvider>(_ => new ConfigurationSweepPolicyProvider(configuration));
+        services.Configure<SweepScreeningOptions>(configuration.GetSection(SweepScreeningOptions.SectionName));
+
+        // Configuration supplies the defaults; the effective dials are a per-chain row an operator can
+        // change while the platform runs. One scoped service serves both the workers (ISweepPolicyProvider)
+        // and the back office (ISweepSettingsService), so a settings screen can never disagree with the scan.
+        services.AddSingleton<ISweepConfigurationDefaults>(_ => new ConfigurationSweepDefaults(configuration));
+        services.AddScoped<ISweepSettingsRepository, SweepSettingsRepository>();
+        services.AddScoped<SweepSettingsService>();
+        services.AddScoped<ISweepPolicyProvider>(sp => sp.GetRequiredService<SweepSettingsService>());
+        services.AddScoped<ISweepSettingsService>(sp => sp.GetRequiredService<SweepSettingsService>());
         services.AddScoped<ISweepRepository, SweepRepository>();
 
         return services;
@@ -44,14 +54,24 @@ public static class SweepModuleExtensions
     /// policy provider, the mutating repository, or the workers, so a host that lacks the signer/broadcaster/
     /// balance-reader the workers need can still read what the money host wrote (§4.7). Never moves funds.
     /// </summary>
-    public static IServiceCollection AddSweepReadModel(this IServiceCollection services, string connectionString)
+    public static IServiceCollection AddSweepReadModel(
+        this IServiceCollection services, IConfiguration configuration, string connectionString)
     {
         services.AddDbContext<SweepDbContext>(options => options
             .UseSqlServer(connectionString, sql => sql.MigrationsHistoryTable(
                 "__EFMigrationsHistory", SweepDbContext.SchemaName))
             .UseBigIntegerMoney());
 
+        services.TryAddSingleton(TimeProvider.System);
         services.AddScoped<ISweepDirectory, SweepDirectory>();
+
+        // The settings service, so staff can read and re-tune the dials and ask for an out-of-schedule pass.
+        // It writes only the settings row — never a sweep — so this host still scans, signs and broadcasts
+        // nothing (§4.7); a manual trigger is a request the money host picks up on its next tick.
+        services.AddSingleton<ISweepConfigurationDefaults>(_ => new ConfigurationSweepDefaults(configuration));
+        services.AddScoped<ISweepSettingsRepository, SweepSettingsRepository>();
+        services.AddScoped<SweepSettingsService>();
+        services.AddScoped<ISweepSettingsService>(sp => sp.GetRequiredService<SweepSettingsService>());
         return services;
     }
 }

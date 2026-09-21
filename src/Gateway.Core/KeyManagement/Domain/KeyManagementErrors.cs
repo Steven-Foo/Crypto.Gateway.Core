@@ -44,6 +44,9 @@ public static class KeyManagementErrors
     public static readonly Error NotActive =
         Error.Conflict("keymgmt.hd_wallet_not_active", "The HD wallet is not active.");
 
+    public static readonly Error NotArchived =
+        Error.Conflict("keymgmt.hd_wallet_not_archived", "Only an archived HD wallet can be reactivated.");
+
     /// <summary>
     /// Non-hardened BIP-32 indices are 0 .. 2^31-1. Past that the index would mean a hardened child
     /// — a completely different key. Refuse rather than silently derive the wrong address.

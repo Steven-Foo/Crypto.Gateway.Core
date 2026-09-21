@@ -751,3 +751,56 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918033602_MerchantSettlementWalletSet'
+)
+BEGIN
+    DROP INDEX [IX_MerchantSettlementWallet_MerchantId_Chain] ON [merchant].[MerchantSettlementWallet];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918033602_MerchantSettlementWalletSet'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantSettlementWallet] ADD [Label] nvarchar(128) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918033602_MerchantSettlementWalletSet'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantSettlementWallet] ADD [Status] nvarchar(16) NOT NULL DEFAULT N'Active';
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918033602_MerchantSettlementWalletSet'
+)
+BEGIN
+    EXEC(N'CREATE UNIQUE INDEX [UX_MerchantSettlementWallet_MerchantId_Chain_Active] ON [merchant].[MerchantSettlementWallet] ([MerchantId], [Chain]) WHERE [Status] = ''Active''');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918033602_MerchantSettlementWalletSet'
+)
+BEGIN
+    CREATE UNIQUE INDEX [UX_MerchantSettlementWallet_MerchantId_Chain_Address] ON [merchant].[MerchantSettlementWallet] ([MerchantId], [Chain], [Address]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918033602_MerchantSettlementWalletSet'
+)
+BEGIN
+    INSERT INTO [merchant].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260918033602_MerchantSettlementWalletSet', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

@@ -2,6 +2,7 @@ using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Domain;
 using CryptoPaymentEngine.SharedKernel;
+using Microsoft.Extensions.Options;
 
 namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Application;
 
@@ -31,7 +32,8 @@ public sealed class MerchantPayoutApprovalService(
     IWithdrawalRepository repository,
     IWithdrawalPolicyProvider policies,
     IMerchantApprovalThreshold merchantApprovalThreshold,
-    TimeProvider timeProvider) : IMerchantPayoutApprovalService
+    TimeProvider timeProvider,
+    IOptions<WithdrawalScreeningOptions> screeningOptions) : IMerchantPayoutApprovalService
 {
     public async Task<Result<WithdrawalResult>> ApproveAsync(
         Guid merchantId, Guid withdrawalId, string approvedBy, CancellationToken cancellationToken = default)
@@ -47,7 +49,11 @@ public sealed class MerchantPayoutApprovalService(
         var threshold = merchantThreshold ?? policies.For(withdrawal.Chain).ApprovalThreshold;
         var requiresPlatformApproval = withdrawal.Amount > threshold;
 
-        var result = withdrawal.MerchantApprove(approvedBy, requiresPlatformApproval, timeProvider.GetUtcNow());
+        // Screening runs between the merchant's sign-off and the platform's, so the destination is checked
+        // exactly once per payout and a blocked one never reaches staff.
+        var result = withdrawal.MerchantApprove(
+            approvedBy, requiresPlatformApproval, timeProvider.GetUtcNow(),
+            requiresScreening: screeningOptions.Value.Enabled);
         if (result.IsFailure)
             return Result.Failure<WithdrawalResult>(result.Error!);
 

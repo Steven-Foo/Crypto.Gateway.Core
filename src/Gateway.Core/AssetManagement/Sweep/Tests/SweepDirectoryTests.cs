@@ -1,5 +1,6 @@
 using System.Numerics;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Contracts;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Domain;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Infrastructure.Persistence;
 using CryptoPaymentEngine.Infrastructure.Persistence.Money;
 using CryptoPaymentEngine.SharedKernel;
@@ -54,14 +55,14 @@ public sealed class SweepDirectoryTests : IAsyncLifetime
         await using var context = NewContext();
 
         // Distinct wallets so the one-in-flight-per-(wallet, asset) unique index never collides.
-        var pending = SweepEntity.Create(PendingWallet, Chain.Tron, Asset, "TFrom1", "TCold", BigAmount, T0).Value;
+        var pending = SweepEntity.Create(PendingWallet, Chain.Tron, Asset, "TFrom1", "TCold", BigAmount, SweepDestinationKind.Safe, null, null, T0).Value;
 
-        var confirmed = SweepEntity.Create(Guid.CreateVersion7(), Chain.Tron, Asset, "TFrom2", "TCold", new BigInteger(5_000_000), T0.AddMinutes(1)).Value;
+        var confirmed = SweepEntity.Create(Guid.CreateVersion7(), Chain.Tron, Asset, "TFrom2", "TCold", new BigInteger(5_000_000), SweepDestinationKind.Safe, null, null, T0.AddMinutes(1)).Value;
         confirmed.RecordSigned(Guid.CreateVersion7(), [1], T0.AddMinutes(2)).IsSuccess.ShouldBeTrue();
         confirmed.MarkBroadcast("tx-confirmed", T0.AddMinutes(3)).IsSuccess.ShouldBeTrue();
         confirmed.Confirm(T0.AddMinutes(4)).IsSuccess.ShouldBeTrue();
 
-        var failed = SweepEntity.Create(Guid.CreateVersion7(), Chain.Tron, Asset, "TFrom3", "TCold", new BigInteger(2_000_000), T0.AddMinutes(5)).Value;
+        var failed = SweepEntity.Create(Guid.CreateVersion7(), Chain.Tron, Asset, "TFrom3", "TCold", new BigInteger(2_000_000), SweepDestinationKind.Danger, null, null, T0.AddMinutes(5)).Value;
         failed.Fail("no energy", T0.AddMinutes(6)).IsSuccess.ShouldBeTrue();
 
         context.Sweeps.AddRange(pending, confirmed, failed);

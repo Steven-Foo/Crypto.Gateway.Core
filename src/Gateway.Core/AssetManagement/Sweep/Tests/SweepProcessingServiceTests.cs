@@ -41,7 +41,7 @@ public sealed class SweepProcessingServiceTests
         NullLogger<SweepProcessingService>.Instance);
 
     private static Domain.Sweep NewSweep() =>
-        Domain.Sweep.Create(Guid.CreateVersion7(), Chain.Tron, Guid.CreateVersion7(), "TFrom", "THot", 5_000_000, DateTimeOffset.UtcNow).Value;
+        Domain.Sweep.Create(Guid.CreateVersion7(), Chain.Tron, Guid.CreateVersion7(), "TFrom", "THot", 5_000_000, SweepDestinationKind.Safe, null, null, DateTimeOffset.UtcNow).Value;
 
     private void GivenPipelineSucceeds()
     {

@@ -136,3 +136,117 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [treasury].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260917035503_RemoveTreasuryReload'
+)
+BEGIN
+    DROP TABLE [treasury].[TreasuryReload];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [treasury].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260917035503_RemoveTreasuryReload'
+)
+BEGIN
+    INSERT INTO [treasury].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260917035503_RemoveTreasuryReload', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [treasury].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918032022_ColdCollectionWallets'
+)
+BEGIN
+    DROP INDEX [UX_TreasuryColdWallet_Chain] ON [treasury].[TreasuryColdWallet];
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [treasury].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918032022_ColdCollectionWallets'
+)
+BEGIN
+    ALTER TABLE [treasury].[TreasuryColdWallet] ADD [Kind] nvarchar(16) NOT NULL DEFAULT N'Safe';
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [treasury].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918032022_ColdCollectionWallets'
+)
+BEGIN
+    ALTER TABLE [treasury].[TreasuryColdWallet] ADD [Label] nvarchar(128) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [treasury].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918032022_ColdCollectionWallets'
+)
+BEGIN
+    ALTER TABLE [treasury].[TreasuryColdWallet] ADD [ScreenedAt] datetimeoffset NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [treasury].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918032022_ColdCollectionWallets'
+)
+BEGIN
+    ALTER TABLE [treasury].[TreasuryColdWallet] ADD [ScreeningDecision] varchar(16) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [treasury].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918032022_ColdCollectionWallets'
+)
+BEGIN
+    ALTER TABLE [treasury].[TreasuryColdWallet] ADD [ScreeningId] uniqueidentifier NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [treasury].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918032022_ColdCollectionWallets'
+)
+BEGIN
+    ALTER TABLE [treasury].[TreasuryColdWallet] ADD [ScreeningScore] int NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [treasury].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918032022_ColdCollectionWallets'
+)
+BEGIN
+    ALTER TABLE [treasury].[TreasuryColdWallet] ADD [Status] nvarchar(16) NOT NULL DEFAULT N'Active';
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [treasury].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918032022_ColdCollectionWallets'
+)
+BEGIN
+    CREATE UNIQUE INDEX [UX_TreasuryColdWallet_Chain_Address] ON [treasury].[TreasuryColdWallet] ([Chain], [Address]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [treasury].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918032022_ColdCollectionWallets'
+)
+BEGIN
+    EXEC(N'CREATE UNIQUE INDEX [UX_TreasuryColdWallet_Chain_Kind_Active] ON [treasury].[TreasuryColdWallet] ([Chain], [Kind]) WHERE [Status] = ''Active''');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [treasury].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260918032022_ColdCollectionWallets'
+)
+BEGIN
+    INSERT INTO [treasury].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260918032022_ColdCollectionWallets', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

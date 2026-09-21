@@ -313,6 +313,10 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
                     b.Property<DateTimeOffset>("CreatedAt")
                         .HasColumnType("datetimeoffset");
 
+                    b.Property<string>("Label")
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
                     b.Property<Guid>("MerchantId")
                         .HasColumnType("uniqueidentifier");
 
@@ -321,13 +325,24 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
                         .ValueGeneratedOnAddOrUpdate()
                         .HasColumnType("rowversion");
 
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .HasColumnType("nvarchar(16)");
+
                     b.Property<DateTimeOffset>("UpdatedAt")
                         .HasColumnType("datetimeoffset");
 
                     b.HasKey("Id");
 
                     b.HasIndex("MerchantId", "Chain")
-                        .IsUnique();
+                        .IsUnique()
+                        .HasDatabaseName("UX_MerchantSettlementWallet_MerchantId_Chain_Active")
+                        .HasFilter("[Status] = 'Active'");
+
+                    b.HasIndex("MerchantId", "Chain", "Address")
+                        .IsUnique()
+                        .HasDatabaseName("UX_MerchantSettlementWallet_MerchantId_Chain_Address");
 
                     b.ToTable("MerchantSettlementWallet", "merchant");
                 });

@@ -19,7 +19,8 @@ public sealed class Sweep : Entity<Guid>
 {
     private Sweep(
         Guid id, Guid walletId, Chain chain, Guid assetId, string fromAddress, string toAddress,
-        BigInteger amount, SweepStatus status, DateTimeOffset now) : base(id)
+        BigInteger amount, SweepStatus status, SweepDestinationKind destinationKind,
+        Guid? screeningId, string? screeningDecision, DateTimeOffset now) : base(id)
     {
         WalletId = walletId;
         Chain = chain;
@@ -28,6 +29,9 @@ public sealed class Sweep : Entity<Guid>
         ToAddress = toAddress;
         Amount = amount;
         Status = status;
+        DestinationKind = destinationKind;
+        ScreeningId = screeningId;
+        ScreeningDecision = screeningDecision;
         CreatedAt = now;
         UpdatedAt = now;
     }
@@ -44,6 +48,19 @@ public sealed class Sweep : Entity<Guid>
     public string ToAddress { get; private set; } = null!;
     public BigInteger Amount { get; private set; }
     public SweepStatus Status { get; private set; }
+
+    /// <summary>Which collection wallet this sweep pays into, and therefore why it pays into that address.
+    /// Set once at creation — a sweep never changes class mid-flight.</summary>
+    public SweepDestinationKind DestinationKind { get; private set; }
+
+    /// <summary>The screening evidence the routing decision was based on. An opaque reference into the
+    /// Compliance module, deliberately not an FK (§4.5). Null when screening was off or produced nothing.</summary>
+    public Guid? ScreeningId { get; private set; }
+
+    /// <summary>The decision that routed this sweep (Allow/Review/Block/Unavailable), snapshotted so a later
+    /// re-screen of the same address never appears to change what this sweep was judged on.</summary>
+    public string? ScreeningDecision { get; private set; }
+
     public Guid? SigningRequestId { get; private set; }
 
     /// <summary>The signed, broadcast-ready transaction blob (public, never key material). Persisted the
@@ -59,10 +76,16 @@ public sealed class Sweep : Entity<Guid>
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
 
-    /// <summary>Creates a sweep in <see cref="SweepStatus.Pending"/> for the full balance found at a deposit
-    /// address. No ledger reserve — the funds are already ours; this only relocates them.</summary>
+    /// <summary>
+    /// Creates a sweep in <see cref="SweepStatus.Pending"/> for the full balance found at a deposit address.
+    /// No ledger reserve — the funds are already ours; this only relocates them.
+    /// </summary>
+    /// <param name="destinationKind">Which collection wallet <paramref name="toAddress"/> is, and with it the
+    /// routing decision this sweep records.</param>
+    /// <param name="screeningId">Evidence behind that decision, when there was any.</param>
     public static Result<Sweep> Create(
-        Guid walletId, Chain chain, Guid assetId, string fromAddress, string toAddress, BigInteger amount, DateTimeOffset now)
+        Guid walletId, Chain chain, Guid assetId, string fromAddress, string toAddress, BigInteger amount,
+        SweepDestinationKind destinationKind, Guid? screeningId, string? screeningDecision, DateTimeOffset now)
     {
         if (walletId == Guid.Empty)
             return Result.Failure<Sweep>(SweepErrors.WalletRequired);
@@ -75,7 +98,7 @@ public sealed class Sweep : Entity<Guid>
 
         return Result.Success(new Sweep(
             Guid.CreateVersion7(), walletId, chain, assetId, fromAddress.Trim(), toAddress.Trim(),
-            amount, SweepStatus.Pending, now));
+            amount, SweepStatus.Pending, destinationKind, screeningId, screeningDecision, now));
     }
 
     /// <summary>

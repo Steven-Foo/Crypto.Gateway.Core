@@ -24,3 +24,26 @@ public enum SweepStatus
     /// <summary>Failed before broadcast — nothing left the chain, so the deposit address is untouched.</summary>
     Failed = 4,
 }
+
+/// <summary>
+/// Which cold collection wallet a sweep was routed to, decided by screening the deposit address before the
+/// sweep was created.
+///
+/// <para>Recorded on the sweep itself rather than inferred later from the destination address: the
+/// destination of a given kind can be replaced, and a sweep has to stay explainable against the decision
+/// that was actually made at the time — the same reason a payout snapshots its screening verdict.</para>
+///
+/// <para>Deliberately Sweep's own enum rather than a reference to Treasury's <c>ColdWalletKind</c>: the
+/// Domain layer depends on nothing outside its module (§4.4), and the two are mapped in the Application
+/// layer where the destination is resolved.</para>
+/// </summary>
+public enum SweepDestinationKind
+{
+    /// <summary>The deposit address screened clean — or screening is switched off, which is the platform's
+    /// pre-segregation behaviour and keeps every sweep going where it always did.</summary>
+    Safe = 0,
+
+    /// <summary>The deposit address was flagged, so the balance goes to the quarantine wallet instead of
+    /// being mixed into clean treasury.</summary>
+    Danger = 1,
+}

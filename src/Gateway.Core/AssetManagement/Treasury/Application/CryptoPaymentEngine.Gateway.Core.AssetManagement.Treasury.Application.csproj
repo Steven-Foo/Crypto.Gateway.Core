@@ -5,14 +5,17 @@
     <ProjectReference Include="../Contracts/CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Contracts.csproj" />
     <ProjectReference Include="../../../../SharedKernel/CryptoPaymentEngine.SharedKernel/CryptoPaymentEngine.SharedKernel.csproj" />
     <!-- Composes other modules' Contracts only (§4.5): Wallet's platform-wallet read/write, KeyManagement's
-         platform-key read/write, and Blockchain's tx build/broadcast for the treasury reload flow. -->
+         platform-key read/write, Blockchain's address-format check for a cold collection address, and
+         Compliance's screening seam (optional at runtime — a host that never registers one need not compose it). -->
     <ProjectReference Include="../../Wallet/Contracts/CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts.csproj" />
     <ProjectReference Include="../../../KeyManagement/Contracts/CryptoPaymentEngine.Gateway.Core.KeyManagement.Contracts.csproj" />
     <ProjectReference Include="../../../Blockchain/Contracts/CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.csproj" />
+    <ProjectReference Include="../../../Platform/Compliance/Contracts/CryptoPaymentEngine.Gateway.Core.Platform.Compliance.Contracts.csproj" />
   </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="Microsoft.Extensions.Logging.Abstractions" />
+    <PackageReference Include="Microsoft.Extensions.Options" />
   </ItemGroup>
 
 </Project>

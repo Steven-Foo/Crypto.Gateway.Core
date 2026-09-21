@@ -1,4 +1,5 @@
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Application;
+using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Contracts;
 using CryptoPaymentEngine.SharedKernel;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
@@ -27,13 +28,35 @@ public sealed class TreasuryColdWalletSeeder(
                 continue;
             }
 
+            if (!Enum.TryParse<ColdWalletKind>(seed.Kind ?? nameof(ColdWalletKind.Safe), ignoreCase: true, out var kind))
+            {
+                logger.LogWarning(
+                    "Treasury cold-wallet seed for {Chain} skipped: unknown kind '{Kind}'.", chain, seed.Kind);
+                continue;
+            }
+
             try
             {
                 await using var scope = scopeFactory.CreateAsyncScope();
                 var registrar = scope.ServiceProvider.GetRequiredService<ITreasuryColdWalletRegistrar>();
-                var result = await registrar.RegisterAsync(chain, seed.Address, cancellationToken);
+
+                // Activate: the seed IS the dev destination, and registering without designating would leave
+                // sweeps inert on a fresh environment. Idempotent — re-registering the same address adopts it.
+                var result = await registrar.RegisterAsync(
+                    new RegisterColdWalletCommand(chain, kind, seed.Address, seed.Label, Activate: true),
+                    cancellationToken);
                 if (result.IsFailure)
-                    logger.LogWarning("Treasury cold-wallet seed for {Chain} skipped: {Error}.", chain, result.Error!.Message);
+                {
+                    // The shipped placeholder is deliberately NOT a valid address, so a fresh clone cannot
+                    // sweep real funds to a made-up destination. Sweeping stays inert until a developer puts
+                    // a real watch-only address in appsettings.Local.json — the same posture as an absent
+                    // signer (§10). Say so, rather than leaving someone to wonder why nothing sweeps.
+                    logger.LogWarning(
+                        "Treasury cold-wallet seed for {Chain}/{Kind} skipped: {Error} Sweeps stay inert for "
+                        + "this chain until Treasury:ColdWallets holds a real watch-only address "
+                        + "(set it in the git-ignored appsettings.Local.json).",
+                        chain, kind, result.Error!.Message);
+                }
             }
             catch (Exception ex)
             {

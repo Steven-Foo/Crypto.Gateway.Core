@@ -47,6 +47,14 @@ public sealed class WithdrawalMap : IEntityTypeConfiguration<WithdrawalEntity>
 
         // Why the withdrawal is parked (ops trace) + who/when released a large one for send.
         builder.Property(w => w.StatusReason).HasMaxLength(512);
+
+        // Address-screening outcome, snapshotted at the moment it was applied. ScreeningId is an opaque
+        // cross-module reference into compliance.AddressScreening — deliberately NOT a foreign key, so the
+        // two modules stay independently extractable (§4.5).
+        builder.Property(w => w.ScreeningId);
+        builder.Property(w => w.ScreeningDecision).HasMaxLength(16);
+        builder.Property(w => w.ScreeningScore);
+
         builder.Property(w => w.ReleasedBy).HasMaxLength(128);
         builder.Property(w => w.ReleasedAt);
 

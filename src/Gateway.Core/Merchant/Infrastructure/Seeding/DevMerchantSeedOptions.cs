@@ -55,4 +55,9 @@ public sealed class DevMerchantSeedOptions
     /// immediately withdrawable and the dev happy path isn't blocked. Set to 1/2 to demo the settled-balance
     /// gate (a fresh deposit then can't be withdrawn until it matures). Max 30.</summary>
     public int SettlementDelayDays { get; init; }
+
+    /// <summary>DEV: the API IP allowlist to give the dev merchant, e.g. <c>["127.0.0.1", "::1"]</c>. An empty
+    /// allowlist refuses every API call, so without this a fresh clone's signed requests all return 403. Applied only
+    /// while the merchant's allowlist is empty, so a restart never undoes an edit made since.</summary>
+    public string[] AllowedIps { get; init; } = [];
 }

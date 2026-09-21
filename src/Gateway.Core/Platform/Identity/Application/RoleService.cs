@@ -32,6 +32,9 @@ public sealed class RoleService(IRoleRepository repository, TimeProvider timePro
     public async Task<Result<RoleView>> CreateAsync(
         string name, string? description, IReadOnlyCollection<string> permissionCodes, CancellationToken cancellationToken = default)
     {
+        if (string.IsNullOrWhiteSpace(name))
+            return Result.Failure<RoleView>(RoleErrors.NameRequired);
+
         var trimmed = name.Trim();
 
         // Pre-check for a friendly error; a unique index remains the real arbiter of a concurrent create race.

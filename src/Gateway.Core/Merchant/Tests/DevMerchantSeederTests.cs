@@ -12,6 +12,8 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Shouldly;
 using Xunit;
+using System.Net;
+using CryptoPaymentEngine.Gateway.Core.Merchant.Application;
 
 namespace CryptoPaymentEngine.Gateway.Core.Merchant.Tests;
 
@@ -50,6 +52,7 @@ public sealed class DevMerchantSeederTests : IAsyncLifetime
             ["Merchant:DevSeed:ApiKey"] = ApiKey,
             ["Merchant:DevSeed:ApiSecret"] = "dev-bearer-secret",
             ["Merchant:DevSeed:SigningSecret"] = SigningSecret,
+            ["Merchant:DevSeed:AllowedIps:0"] = "127.0.0.1",
         }).Build();
 
     private static MerchantDbContext NewContext() =>
@@ -111,7 +114,7 @@ public sealed class DevMerchantSeederTests : IAsyncLifetime
         var expectedMerchant = await repository.GetByCodeAsync(MerchantCode, Ct);
         expectedMerchant.ShouldNotBeNull();
 
-        var result = await verifier.VerifyAsync(ApiKey, timestamp, body, signature, Ct);
+        var result = await verifier.VerifyAsync(ApiKey, timestamp, body, signature, IPAddress.Loopback, Ct);
 
         result.IsSuccess.ShouldBeTrue();
         result.Value.ShouldBe(expectedMerchant.Id);
@@ -130,7 +133,7 @@ public sealed class DevMerchantSeederTests : IAsyncLifetime
         await using var scope = _provider.CreateAsyncScope();
         var verifier = scope.ServiceProvider.GetRequiredService<IMerchantRequestVerifier>();
 
-        var result = await verifier.VerifyAsync(ApiKey, timestamp, body, tampered, Ct);
+        var result = await verifier.VerifyAsync(ApiKey, timestamp, body, tampered, IPAddress.Loopback, Ct);
 
         result.IsFailure.ShouldBeTrue();
         result.Error!.Code.ShouldBe(MerchantErrors.InvalidCredentials.Code);
@@ -146,5 +149,28 @@ public sealed class DevMerchantSeederTests : IAsyncLifetime
 
         await using var context = NewContext();
         (await context.Merchants.CountAsync(m => m.MerchantCode == MerchantCode, Ct)).ShouldBe(1);
+    }
+
+    [Fact]
+    public async Task The_seeded_allowlist_is_applied_once_and_never_overwrites_a_later_edit()
+    {
+        _provider = BuildHost();
+        await RunSeederAsync();
+
+        await using (var scope = _provider.CreateAsyncScope())
+        {
+            var merchant = await scope.ServiceProvider.GetRequiredService<IMerchantRepository>().GetByCodeAsync(MerchantCode, Ct);
+            merchant!.Configuration.AllowedIps.ShouldBe(["127.0.0.1"]);
+
+            var edited = await scope.ServiceProvider.GetRequiredService<IMerchantRegistrar>()
+                .UpdateAllowedIpsAsync(merchant.Id, ["198.51.100.7"], Ct);
+            edited.IsSuccess.ShouldBeTrue();
+        }
+
+        await RunSeederAsync(); // a restart
+
+        await using var check = _provider.CreateAsyncScope();
+        var reloaded = await check.ServiceProvider.GetRequiredService<IMerchantRepository>().GetByCodeAsync(MerchantCode, Ct);
+        reloaded!.Configuration.AllowedIps.ShouldBe(["198.51.100.7"]);
     }
 }

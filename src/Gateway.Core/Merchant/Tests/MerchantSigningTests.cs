@@ -8,6 +8,9 @@ using NSubstitute;
 using Shouldly;
 using Xunit;
 using MerchantEntity = CryptoPaymentEngine.Gateway.Core.Merchant.Domain.Merchant;
+using System.Net;
+using Microsoft.Extensions.Logging.Abstractions;
+using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 
 namespace CryptoPaymentEngine.Gateway.Core.Merchant.Tests;
 
@@ -30,13 +33,19 @@ public sealed class MerchantSigningTests
             Keys = new Dictionary<int, string> { [1] = Convert.ToBase64String(Enumerable.Repeat((byte)9, 32).ToArray()) },
         }));
 
-    private static (IMerchantRepository Repo, MerchantEntity Merchant, AesGcmSecretCipher Cipher) Setup(bool active = true)
+    /// <summary>The address the test merchant's servers call from — on its allowlist unless a test says otherwise.</summary>
+    private static readonly IPAddress CallerIp = IPAddress.Parse("203.0.113.10");
+
+    private static (IMerchantRepository Repo, MerchantEntity Merchant, AesGcmSecretCipher Cipher) Setup(
+        bool active = true, bool allowlisted = true)
     {
         var cipher = NewCipher();
         var now = DateTimeOffset.UtcNow;
         var merchant = MerchantEntity.Create("SIGN-1", "Signer", null).Value; // Active by default on Create
         if (!active) merchant.Freeze(now);
         var credential = merchant.IssueCredential(ApiKey, "bearer-hash", 1, cipher.Protect(SigningSecretHex), now).Value;
+        if (allowlisted)
+            merchant.UpdateAllowedIps([CallerIp.ToString()], now).IsSuccess.ShouldBeTrue();
 
         var repo = Substitute.For<IMerchantRepository>();
         repo.FindActiveCredentialAsync(ApiKey, Arg.Any<CancellationToken>()).Returns(credential);
@@ -56,11 +65,11 @@ public sealed class MerchantSigningTests
     public async Task A_correct_signature_authenticates_and_returns_the_merchant()
     {
         var (repo, merchant, cipher) = Setup();
-        var verifier = new MerchantRequestVerifier(repo, cipher);
+        var verifier = new MerchantRequestVerifier(repo, cipher, NullLogger<MerchantRequestVerifier>.Instance);
 
         const string ts = "1700000000";
         const string body = """{"amount":"1000000"}""";
-        var result = await verifier.VerifyAsync(ApiKey, ts, body, SignHex(SigningSecretHex, ts, body), Ct);
+        var result = await verifier.VerifyAsync(ApiKey, ts, body, SignHex(SigningSecretHex, ts, body), CallerIp, Ct);
 
         result.IsSuccess.ShouldBeTrue();
         result.Value.ShouldBe(merchant.Id);
@@ -70,9 +79,9 @@ public sealed class MerchantSigningTests
     public async Task A_wrong_signature_is_refused()
     {
         var (repo, _, cipher) = Setup();
-        var verifier = new MerchantRequestVerifier(repo, cipher);
+        var verifier = new MerchantRequestVerifier(repo, cipher, NullLogger<MerchantRequestVerifier>.Instance);
 
-        var result = await verifier.VerifyAsync(ApiKey, "1700000000", "body", "deadbeef", Ct);
+        var result = await verifier.VerifyAsync(ApiKey, "1700000000", "body", "deadbeef", CallerIp, Ct);
 
         result.IsFailure.ShouldBeTrue();
         result.Error!.Code.ShouldBe(MerchantErrors.InvalidCredentials.Code);
@@ -82,11 +91,11 @@ public sealed class MerchantSigningTests
     public async Task A_tampered_body_breaks_the_signature()
     {
         var (repo, _, cipher) = Setup();
-        var verifier = new MerchantRequestVerifier(repo, cipher);
+        var verifier = new MerchantRequestVerifier(repo, cipher, NullLogger<MerchantRequestVerifier>.Instance);
 
         const string ts = "1700000000";
         var signature = SignHex(SigningSecretHex, ts, """{"amount":"1"}""");
-        var result = await verifier.VerifyAsync(ApiKey, ts, """{"amount":"999999"}""", signature, Ct);
+        var result = await verifier.VerifyAsync(ApiKey, ts, """{"amount":"999999"}""", signature, CallerIp, Ct);
 
         result.IsFailure.ShouldBeTrue();
     }
@@ -95,9 +104,9 @@ public sealed class MerchantSigningTests
     public async Task An_unknown_api_key_is_refused()
     {
         var repo = Substitute.For<IMerchantRepository>(); // returns null for any key
-        var verifier = new MerchantRequestVerifier(repo, NewCipher());
+        var verifier = new MerchantRequestVerifier(repo, NewCipher(), NullLogger<MerchantRequestVerifier>.Instance);
 
-        var result = await verifier.VerifyAsync("cpe_unknown", "1700000000", "body", "abcd", Ct);
+        var result = await verifier.VerifyAsync("cpe_unknown", "1700000000", "body", "abcd", CallerIp, Ct);
 
         result.IsFailure.ShouldBeTrue();
         result.Error!.Code.ShouldBe(MerchantErrors.InvalidCredentials.Code);
@@ -107,11 +116,11 @@ public sealed class MerchantSigningTests
     public async Task A_valid_signature_for_a_non_transactable_merchant_is_refused()
     {
         var (repo, _, cipher) = Setup(active: false); // Frozen → cannot transact
-        var verifier = new MerchantRequestVerifier(repo, cipher);
+        var verifier = new MerchantRequestVerifier(repo, cipher, NullLogger<MerchantRequestVerifier>.Instance);
 
         const string ts = "1700000000";
         const string body = "body";
-        var result = await verifier.VerifyAsync(ApiKey, ts, body, SignHex(SigningSecretHex, ts, body), Ct);
+        var result = await verifier.VerifyAsync(ApiKey, ts, body, SignHex(SigningSecretHex, ts, body), CallerIp, Ct);
 
         result.IsFailure.ShouldBeTrue();
         result.Error!.Code.ShouldBe(MerchantErrors.NotTransactable.Code);
@@ -122,14 +131,67 @@ public sealed class MerchantSigningTests
     {
         var (repo, merchant, cipher) = Setup();
         var signer = new MerchantCallbackSigner(repo, cipher, TimeProvider.System);
-        var verifier = new MerchantRequestVerifier(repo, cipher);
+        var verifier = new MerchantRequestVerifier(repo, cipher, NullLogger<MerchantRequestVerifier>.Instance);
 
         const string body = """{"transactionId":"abc","data":{"amount":"5"}}""";
         var signed = await signer.SignAsync(merchant.Id, body, Ct);
         signed.IsSuccess.ShouldBeTrue();
 
         // The merchant verifies a callback exactly as we verify their requests — same construction, same key.
-        var roundTrip = await verifier.VerifyAsync(ApiKey, signed.Value.Timestamp, body, signed.Value.SignatureHex, Ct);
+        var roundTrip = await verifier.VerifyAsync(ApiKey, signed.Value.Timestamp, body, signed.Value.SignatureHex, CallerIp, Ct);
         roundTrip.IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task An_authentic_request_from_an_address_not_on_the_allowlist_is_refused_as_ip_not_allowed()
+    {
+        var (repo, _, cipher) = Setup();
+        var verifier = new MerchantRequestVerifier(repo, cipher, NullLogger<MerchantRequestVerifier>.Instance);
+
+        const string ts = "1700000000";
+        const string body = "body";
+        var result = await verifier.VerifyAsync(
+            ApiKey, ts, body, SignHex(SigningSecretHex, ts, body), IPAddress.Parse("198.51.100.7"), Ct);
+
+        result.Error!.Code.ShouldBe(MerchantRequestVerificationErrors.IpNotAllowed);
+    }
+
+    [Fact]
+    public async Task A_merchant_with_an_empty_allowlist_can_make_no_api_call()
+    {
+        var (repo, _, cipher) = Setup(allowlisted: false);
+        var verifier = new MerchantRequestVerifier(repo, cipher, NullLogger<MerchantRequestVerifier>.Instance);
+
+        const string ts = "1700000000";
+        const string body = "body";
+        var result = await verifier.VerifyAsync(ApiKey, ts, body, SignHex(SigningSecretHex, ts, body), CallerIp, Ct);
+
+        result.Error!.Code.ShouldBe(MerchantRequestVerificationErrors.IpNotAllowed);
+    }
+
+    [Fact]
+    public async Task An_authentic_request_whose_caller_address_is_unknown_is_refused()
+    {
+        var (repo, _, cipher) = Setup();
+        var verifier = new MerchantRequestVerifier(repo, cipher, NullLogger<MerchantRequestVerifier>.Instance);
+
+        const string ts = "1700000000";
+        const string body = "body";
+        var result = await verifier.VerifyAsync(ApiKey, ts, body, SignHex(SigningSecretHex, ts, body), clientIp: null, Ct);
+
+        result.Error!.Code.ShouldBe(MerchantRequestVerificationErrors.IpNotAllowed);
+    }
+
+    [Fact]
+    public async Task A_bad_signature_from_an_unlisted_address_is_still_invalid_credentials()
+    {
+        // The address is checked last, so without the signing secret nobody learns whether a key exists or where
+        // it may be used from.
+        var (repo, _, cipher) = Setup();
+        var verifier = new MerchantRequestVerifier(repo, cipher, NullLogger<MerchantRequestVerifier>.Instance);
+
+        var result = await verifier.VerifyAsync(ApiKey, "1700000000", "body", "deadbeef", IPAddress.Parse("198.51.100.7"), Ct);
+
+        result.Error!.Code.ShouldBe(MerchantErrors.InvalidCredentials.Code);
     }
 }

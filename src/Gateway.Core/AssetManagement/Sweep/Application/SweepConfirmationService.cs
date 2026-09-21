@@ -49,7 +49,8 @@ public sealed class SweepConfirmationService(
 
             sweep.RecordConfirmations(confirmations, now);
 
-            if (confirmations >= policies.For(sweep.Chain).Confirmations && sweep.Confirm(now).IsSuccess)
+            var policy = await policies.ForAsync(sweep.Chain, cancellationToken);
+            if (confirmations >= policy.Confirmations && sweep.Confirm(now).IsSuccess)
                 confirmedCount++;
         }
 

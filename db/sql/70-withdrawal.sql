@@ -540,3 +540,40 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260911025113_AddWithdrawalScreening'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [ScreeningDecision] nvarchar(16) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260911025113_AddWithdrawalScreening'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [ScreeningId] uniqueidentifier NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260911025113_AddWithdrawalScreening'
+)
+BEGIN
+    ALTER TABLE [withdrawal].[Withdrawal] ADD [ScreeningScore] int NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [withdrawal].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260911025113_AddWithdrawalScreening'
+)
+BEGIN
+    INSERT INTO [withdrawal].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260911025113_AddWithdrawalScreening', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

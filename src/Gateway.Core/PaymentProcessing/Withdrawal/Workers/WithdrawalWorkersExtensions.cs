@@ -26,6 +26,13 @@ public static class WithdrawalWorkersExtensions
         services.AddSingleton(options);
         services.AddHostedService<WithdrawalProcessingWorker>();
         services.AddHostedService<WithdrawalConfirmationWorker>();
+
+        // The screening drain. Registered unconditionally: with Withdrawal:Screening disabled no payout ever
+        // reaches PendingScreening, so the pass finds nothing and costs one cheap query per tick. Gating the
+        // REGISTRATION on config instead would leave any payout already queued when the flag was turned off
+        // stranded with nothing to move it — and those payouts hold a live ledger reserve.
+        services.AddScoped<WithdrawalScreeningService>();
+        services.AddHostedService<WithdrawalScreeningWorker>();
         return services;
     }
 }

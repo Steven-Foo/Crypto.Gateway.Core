@@ -97,6 +97,7 @@ To fund the balance from an actual on-chain deposit instead of `/dev/credit-bala
 | Broadcast fails: *account does not exist* | Hot wallet has no TRX → send it test TRX (Step 0). |
 | Broadcast fails: *balance is not sufficient* | Hot wallet has no/low test USDT → send it test USDT. |
 | Withdraw returns *insufficient balance* | Ledger balance too low → `POST /dev/credit-balance` a larger amount. |
+| `/api/v1/*` returns 403 "IP address not whitelisted." | The calling machine's public address is not on the merchant's IP allowlist, or the list is empty. Add it in the portal or Ops. The gateway log shows the address it saw (`Refused API call for merchant …`). |
 | `/api/v1/*` returns 401 | The seed merchant/keys aren't set → check `Merchant:DevSeed:*` + `Merchant:ApiCredentials`/`SigningSecrets` in the EC2 Local config. |
 | Withdraw returns *duplicate*/same id | `transactionId` is the idempotency key — use a new one each run. |
 | Stuck in `Broadcast`, never `Confirmed` | Tx reverted on-chain (ops case), or the confirmation worker can't reach Nile → check logs + the tx on the explorer. |

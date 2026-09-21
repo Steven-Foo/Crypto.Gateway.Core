@@ -176,23 +176,16 @@ public static class OpsMerchantEndpoints
         var result = await registrar.GetAsync(id, http.RequestAborted);
         return result.IsFailure
             ? OpsResults.Fail(result.Error!)
-            : Results.Ok(new { isSuccess = true, data = new { merchantId = id, allowedIps = result.Value.AllowedIps }, error = (string?)null, errorCode = (string?)null });
+            : Results.Ok(new { isSuccess = true, data = new { merchantId = id, allowedIps = result.Value.AllowedIps, apiAccessBlocked = result.Value.AllowedIps.Count == 0 }, error = (string?)null, errorCode = (string?)null });
     }
 
     private static async Task<IResult> UpdateAllowedIpsAsync(
         Guid id, UpdateAllowedIpsRequest request, IMerchantRegistrar registrar, IMerchantRepository repository,
         CloudflareService cloudflare, IAuditLogger audit, HttpContext http)
     {
-        var invalidIps = new List<string>();
-        var validIps = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-
-        foreach (var raw in request.IpAddresses.Select(ip => ip.Trim()).Where(ip => !string.IsNullOrEmpty(ip)))
-        {
-            if (IPAddress.TryParse(raw, out _))
-                validIps.Add(raw);
-            else
-                invalidIps.Add(raw);
-        }
+        // One rule for what counts as an allowed IP, owned by the Merchant module: single full addresses, normalised
+        // (no CIDR ranges, ports, host names or shorthand). Refused entries are reported back, as before.
+        var (validIps, invalidIps) = AllowedIpInput.Partition(request.IpAddresses);
 
         // If every submitted IP was invalid and the request wasn't intentionally empty, keep existing IPs.
         if (validIps.Count == 0 && invalidIps.Count > 0)
@@ -227,6 +220,8 @@ public static class OpsMerchantEndpoints
             {
                 merchantId = id,
                 allowedIps = change.Current,
+                // An empty allowlist permits no API call: the merchant's integration is now switched off.
+                apiAccessBlocked = change.Current.Count == 0,
                 invalidIps,
                 cloudflare = new { added = change.Added.Count, removed = change.Removed.Count },
             },

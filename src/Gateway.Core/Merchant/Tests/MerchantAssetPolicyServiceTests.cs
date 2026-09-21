@@ -320,6 +320,11 @@ public sealed class MerchantAssetPolicyServiceTests
             return Task.FromResult(1);
         }
 
+        /// <summary>No transaction to open here — just run the body, so the saves inside it are still counted.</summary>
+        public Task<T> InTransactionAsync<T>(
+            Func<CancellationToken, Task<T>> action, CancellationToken cancellationToken = default) =>
+            action(cancellationToken);
+
         public Task<MerchantEntity?> GetByCodeAsync(string merchantCode, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
         public Task<bool> CodeExistsAsync(string merchantCode, CancellationToken cancellationToken = default) =>

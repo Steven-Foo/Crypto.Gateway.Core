@@ -8,6 +8,10 @@ namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Sweep.Contracts;
 /// display value at the edge, and keeps the precise integer for audit. <see cref="Status"/> is the domain
 /// status name as a string, so this Contract stays Domain-free.
 /// </summary>
+/// <param name="DestinationKind">Which collection wallet this sweep pays into — <c>Safe</c> or
+/// <c>Danger</c> — and therefore whether the deposit address was flagged before the funds were moved.</param>
+/// <param name="ScreeningDecision">The verdict that routed it, snapshotted at creation. Null when screening
+/// was off or produced nothing; <see cref="ScreeningId"/> opens the evidence behind it.</param>
 public sealed record SweepAdminRow(
     Guid SweepId,
     Guid WalletId,
@@ -17,6 +21,9 @@ public sealed record SweepAdminRow(
     string ToAddress,
     string AmountBaseUnits,
     string Status,
+    string DestinationKind,
+    string? ScreeningDecision,
+    Guid? ScreeningId,
     string? TransactionHash,
     int? Confirmations,
     string? FailureReason,

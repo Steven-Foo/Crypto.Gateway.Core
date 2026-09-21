@@ -1,5 +1,10 @@
 # Back Office API (`OperationsApi`) — Frontend Reference
 
+> **SUPERSEDED — do not use this file.** `docs/backoffice-frontend-integration.md` is the current, complete
+> contract: it covers the roles/permissions model this file predates, every screen since added (settlement
+> wallets, cold collection wallets, sweep, energy, reconciliation, compliance, the dashboard, and more), and
+> it has been exercised over HTTP against a running host. This file is kept only for history.
+
 Everything below reflects the **actual current code** in `src/Api/OperationsApi` as of 2026-07-29 — not
 the target design, the real request/response shapes. Endpoints not listed here do not exist yet (see
 "Not built yet" at the bottom); do not build frontend screens for them.
@@ -484,10 +489,10 @@ withdrawal is above the config approval threshold and is **waiting on a human** 
 action for exactly these rows (see "Withdrawal approval" below); plain `pending` means it's already approved
 and processing automatically (building/signing/broadcasting) — no action needed, it resolves itself.
 `insufficient_balance` means the **hot wallet can't physically cover it** — the merchant's funds are still
-reserved (not lost), and the payout **auto-resumes** the moment the hot wallet is reloaded from treasury;
+reserved (not lost), and the payout **auto-resumes** the moment the hot wallet holds enough (an admin funds it from a company wallet and records the top-up);
 `statusReason` on the row carries the detail ("needs X, has Y"). `awaiting_release` means the payout is
 funded but **above the auto-send threshold**, so it needs an operator to release it (see "Withdrawal funding
-holds" below). No action is strictly required for `insufficient_balance` beyond reloading the wallet. `callback`/`callbackFailedCount`/
+holds" below). No action is strictly required for `insufficient_balance` beyond funding the wallet. `callback`/`callbackFailedCount`/
 `callbackNextAttemptAt` follow the exact same vocabulary and retry/abandon/resend rules as the deposit
 endpoint above (see "Callback delivery" below) — a withdrawal callback fires on both `Confirmed` (payload
 `status: "confirmed"`) and `Rejected`/`Failed` (payload `status: "failed"`, includes `reason`), same as
@@ -543,8 +548,8 @@ human). No request body; who released is taken from your session. It sends on th
 ```
 **Response 409**: not currently on a fundable hold (e.g. already sent, or still `insufficient_balance`).
 
-A withdrawal in `insufficient_balance` needs **no** endpoint to resume — reload the hot wallet from
-treasury and the worker resumes it automatically once the float is sufficient.
+A withdrawal in `insufficient_balance` needs **no** endpoint to resume — fund the hot wallet from a company
+wallet (recorded as a top-up) and the worker resumes it automatically once the float is sufficient.
 
 ### `POST /api/v1/ops/withdrawals/{withdrawalId}/cancel` 🔒 Admin
 Abandons a parked withdrawal (`insufficient_balance` or `awaiting_release`) that won't be funded, releasing

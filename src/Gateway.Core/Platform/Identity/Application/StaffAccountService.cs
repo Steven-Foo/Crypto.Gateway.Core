@@ -43,6 +43,9 @@ public sealed class StaffAccountService(
     public async Task<Result<StaffAccountCredentialResult>> CreateAsync(
         string username, Guid roleId, CancellationToken cancellationToken = default)
     {
+        if (string.IsNullOrWhiteSpace(username))
+            return Result.Failure<StaffAccountCredentialResult>(StaffUserErrors.UsernameRequired);
+
         var trimmed = username.Trim();
 
         // Pre-check for a friendly error; the unique index remains the real arbiter of a concurrent race.

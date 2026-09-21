@@ -135,12 +135,15 @@ public sealed class ReconciliationService(
         foreach (var deposit in deposits)
             unique.TryAdd(deposit.Address, CustodyLocation.DepositAddress);
 
-        // The cold treasury holds most of the custody post-sweep, and it is not a Wallet-module row (it is
-        // watch-only, keyless — homed in Treasury). Include it, or reconciliation would report a huge false
-        // drift once sweeping concentrates funds there.
-        var cold = await coldTreasury.GetAsync(chain, cancellationToken);
-        if (cold.IsSuccess)
-            unique[cold.Value.Address] = CustodyLocation.ColdTreasury;
+        // The cold collection wallets hold most of the custody post-sweep, and they are not Wallet-module
+        // rows (watch-only, keyless — homed in Treasury). Include them, or reconciliation would report a
+        // huge false drift once sweeping concentrates funds there.
+        //
+        // EVERY registered cold address, not just the ones currently receiving sweeps: both the clean and
+        // the quarantine destination, and every retired predecessor. A retired address normally still holds
+        // funds, and the audit has to sum what the platform holds rather than where it is sweeping today.
+        foreach (var address in await coldTreasury.ListCustodyAddressesAsync(chain, cancellationToken))
+            unique[address] = CustodyLocation.ColdTreasury;
 
         return [.. unique.Select(kv => (kv.Key, kv.Value))];
     }

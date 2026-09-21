@@ -36,6 +36,8 @@ public static class PortalCredentialEndpoints
         {
             hasActiveCredential = result.Value.HasActiveCredential,
             allowedIps = result.Value.AllowedIps,
+            // An empty allowlist permits no API call. The UI should say so plainly: the integration is switched off.
+            apiAccessBlocked = result.Value.AllowedIps.Count == 0,
         });
     }
 
@@ -71,14 +73,13 @@ public static class PortalCredentialEndpoints
     private static async Task<IResult> UpdateAllowedIpsAsync(
         UpdateAllowedIpsRequest request, IMerchantRegistrar registrar, IAuditLogger audit, HttpContext http)
     {
-        // IP format validation is the host edge's job (the module only persists and diffs). Reject malformed
-        // input rather than storing an entry that would silently never match.
-        var entries = request.AllowedIps.Select(ip => ip.Trim()).Where(ip => ip.Length > 0).ToList();
-        foreach (var entry in entries)
-        {
-            if (!IsValidIpOrCidr(entry))
-                return Bad(PortalErrorCodes.InvalidIpAddress, $"'{entry}' is not a valid IP address or CIDR range.");
-        }
+        // The Merchant module owns what counts as an allowed IP: single full addresses, normalised. Any refused entry
+        // fails the whole update (the portal never saves part of a list), because a merchant who typed a range and saw
+        // it quietly dropped would believe servers were allowed that are not.
+        var (entries, refused) = AllowedIpInput.Partition(request.AllowedIps);
+        if (refused.Count > 0)
+            return Bad(PortalErrorCodes.InvalidIpAddress,
+                $"'{refused[0]}' is not a single IP address. Enter each server's address in full; CIDR ranges are not supported.");
 
         var result = await registrar.UpdateAllowedIpsAsync(PortalTenant.MerchantId(http), entries, http.RequestAborted);
         if (result.IsFailure)
@@ -89,27 +90,10 @@ public static class PortalCredentialEndpoints
         await audit.LogAsync(
             PortalAuditActor.From(http).Entry(
                 PortalAuditActions.AllowedIpsUpdated, PortalAuditActions.EntityMerchant, null,
-                entries.Count == 0 ? "cleared" : $"allowedIps=[{string.Join(' ', entries)}]"),
+                entries.Count == 0 ? "cleared (API access blocked)" : $"allowedIps=[{string.Join(' ', entries)}]"),
             http.RequestAborted);
 
-        return Ok(new { allowedIps = entries });
-    }
-
-    /// <summary>Accepts a bare IP or a CIDR range. Deliberately permissive about which form the merchant uses,
-    /// strict about it actually parsing.</summary>
-    private static bool IsValidIpOrCidr(string value)
-    {
-        var slash = value.IndexOf('/');
-        if (slash < 0)
-            return IPAddress.TryParse(value, out _);
-
-        var address = value[..slash];
-        var prefix = value[(slash + 1)..];
-        if (!IPAddress.TryParse(address, out var parsed) || !int.TryParse(prefix, out var bits))
-            return false;
-
-        var maxBits = parsed.AddressFamily == System.Net.Sockets.AddressFamily.InterNetworkV6 ? 128 : 32;
-        return bits >= 0 && bits <= maxBits;
+        return Ok(new { allowedIps = entries, apiAccessBlocked = entries.Count == 0 });
     }
 
     // Thin delegations to the host-wide mapper (§7.1), so every response on this host carries an errorCode.

@@ -14,11 +14,11 @@ public static class TreasuryModuleExtensions
 {
     /// <summary>
     /// Registers the Treasury module: the hot-pool directory/provisioning (composed over Wallet + KeyManagement
-    /// Contracts — the host must register those) plus Treasury's own persistence for the cold wallet and the
-    /// reload aggregate. The reload service builds an unsigned tx via Blockchain's <c>ITransactionBuilder</c>,
-    /// which the host registers; a host that only reads (no builder) never calls <c>InitiateAsync</c>.
+    /// Contracts — the host must register those) plus Treasury's own persistence for the watch-only cold treasury
+    /// collection wallets. Nothing in this module builds, signs or broadcasts a transaction.
     /// </summary>
-    public static IServiceCollection AddTreasuryModule(this IServiceCollection services, string connectionString)
+    public static IServiceCollection AddTreasuryModule(
+        this IServiceCollection services, IConfiguration configuration, string connectionString)
     {
         services.AddDbContext<TreasuryDbContext>(options => options
             .UseSqlServer(connectionString, sql => sql.MigrationsHistoryTable(
@@ -31,12 +31,12 @@ public static class TreasuryModuleExtensions
         services.AddScoped<ITreasuryHotWalletDirectory, TreasuryHotWalletDirectory>();
         services.AddScoped<TreasuryHotWalletProvisioningService>();
 
-        // Cold wallet + reload (new persistence).
-        services.AddScoped<ITreasuryReloadRepository, TreasuryReloadRepository>();
+        // Cold collection wallets: watch-only, the destinations Sweep concentrates deposits into — one per
+        // (chain, kind), clean sweeps to the Safe wallet and flagged ones to the Danger wallet.
+        services.Configure<TreasuryScreeningOptions>(configuration.GetSection(TreasuryScreeningOptions.SectionName));
         services.AddScoped<ITreasuryColdWalletRepository, TreasuryColdWalletRepository>();
         services.AddScoped<ITreasuryColdWalletDirectory, TreasuryColdWalletDirectory>();
         services.AddScoped<ITreasuryColdWalletRegistrar, TreasuryColdWalletRegistrationService>();
-        services.AddScoped<ITreasuryReloadService, TreasuryReloadService>();
 
         return services;
     }

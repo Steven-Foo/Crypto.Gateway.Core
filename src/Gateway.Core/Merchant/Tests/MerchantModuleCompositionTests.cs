@@ -26,6 +26,7 @@ public sealed class MerchantModuleCompositionTests
             .Build();
 
         return new ServiceCollection()
+            .AddLogging() // every host registers logging; the request verifier logs refused callers
             .AddMerchantModule(configuration, DummyConnection)
             .BuildServiceProvider();
     }
