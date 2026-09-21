@@ -261,6 +261,69 @@ claim to be an allowlisted server.
 The gateway logs `Refused API call for merchant <code> from <address>: not on its IP allowlist (<n> entries).`. The
 address there is the one to add. `0 entries` means the list is empty.
 
+### The Cloudflare edge layer (Custom Rule) — the actual block
+
+This app-level check is one of three independent layers. Two are Cloudflare-side; only one of them actually blocks
+anything at the edge:
+
+| Layer | What it does | Where |
+|---|---|---|
+| IP Access Rules | Tells Cloudflare not to run its own CAPTCHA/bot challenges against an IP. **Does not block traffic.** | Legacy Firewall API. `CloudflareService.AddIpAsync`/`RemoveIpAsync` push here on every allowlist change. |
+| Custom Rule | The real gate: `Block` any request to `Cloudflare:CustomRuleHostname` whose IP isn't in the set. | Rulesets API. `CloudflareService.SyncCustomRuleAllowlistAsync` rewrites this rule's IP set on every allowlist change (`OpsMerchantEndpoints.UpdateAllowedIpsAsync`), from `IMerchantRepository.GetAllAllowedIpsAsync` — the full table, not just the merchant that changed. |
+| This app's own DB check | The backstop if the above two are ever misconfigured or bypassed. | `MerchantConfiguration.AllowsIp`, checked on every signed call. |
+
+**Config:** `Cloudflare:CustomRuleHostname` (e.g. `stagapi2.udigipay.com`) — leave empty to skip the Custom Rule sync
+even with `Cloudflare:Enabled=true` (IP Access Rules sync still runs on its own).
+
+**Two safety rules built into the sync, both deliberate:**
+- If the full allowed-IP set comes back **empty**, the sync is skipped rather than pushed — an empty
+  `ip.src in {}` would make "not in it" true for every caller, blocking all traffic to the hostname. Logged as a
+  warning, nothing is sent to Cloudflare.
+- The sync **never flips a rule from disabled to enabled**. A brand-new rule is created disabled
+  (`Merchant IP Allowlist (managed by CGC — do not edit manually)`); a human turns it on deliberately in the
+  dashboard once the IP set has been checked. A bug in the sync can leave the rule stale — it can never
+  suddenly start blocking live traffic on its own.
+
+**Fully automated, including the hostname condition** — the entire expression (`http.host eq "<hostname>" and not
+ip.src in ...`) is built and pushed by `SyncCustomRuleAllowlistAsync` in one call, whether creating the rule for
+the first time or updating it. **Not automated, by design:** the initial decision to flip a brand-new rule from
+disabled to enabled — that stays a manual, one-time dashboard action per hostname, so a human confirms the IP set
+looks right before it goes live.
+
+### Two sync modes: inline (size-limited) vs Lists (the real fix)
+
+`SyncCustomRuleAllowlistAsync` inlines every merchant's IP directly into the Custom Rule's expression
+(`ip.src in {1.2.3.4 5.6.7.8 ...}`) unless `Cloudflare:AccountId` **and** `Cloudflare:IpListName` are both set, in
+which case it switches to syncing a Cloudflare account-level **List** instead and the rule's expression becomes
+the short, fixed `ip.src in $list_name` — no per-expression size ceiling, because the IPs live in the List, not
+the rule. Same call site either way; the config decides which path runs.
+
+**Why the inline path can't scale, concretely.** Cloudflare rejects a Custom Rule expression past roughly 4KB.
+Each inlined IPv4 address costs about 16 characters, so the inline path holds roughly **~250 IPv4 addresses**
+before hitting that wall — at ~3 IPs/merchant, on the order of 80-90 merchants, not a distant number.
+`SyncCustomRuleAllowlistAsync` guards it anyway: it warns once the expression passes 3000 characters, and
+**refuses to push** (leaving the existing rule untouched) at 3800 — Cloudflare's own rejection is never the
+first sign of trouble.
+
+**Setting up the Lists mode:**
+
+1. The API token needs an **Account-level "Lists" Edit** permission (exact label may read "Account Filter Lists" —
+   search "Lists" when adding a permission to the token), *in addition to* the Zone-level ones the other two
+   Cloudflare features already need. This is an account-level grant, separate from Zone access — the earlier
+   "unable to load your lists" dashboard error was this same permission missing.
+2. Find the **Account ID** in the Cloudflare dashboard sidebar (different from Zone ID) → `Cloudflare:AccountId`.
+3. Pick a list name — lowercase letters/digits/underscore only, e.g. `merchant_ip_allowlist` →
+   `Cloudflare:IpListName`.
+4. On the next allowlist change, the code creates the list itself (first run) and keeps its contents in sync
+   automatically from then on — no manual list editing needed, same as the inline path today.
+
+**Item replacement is asynchronous** (a Cloudflare API characteristic, not a design choice here): the write
+returns an operation id immediately and Cloudflare applies it moments later. The sync polls for completion for up
+to 15 seconds before giving up; a timeout does **not** mean the write failed — it means this call couldn't
+confirm it in time, so (same rule as everywhere else in this service) the Custom Rule's expression is left
+untouched rather than pointed at a list that might not be updated yet. It will simply retry cleanly on the next
+allowlist change.
+
 ## 8. Treasury cold reload removed, and top-up verification on the Ops host
 
 The in-system cold reload (build a cold-treasury→hot-pool transfer, sign it client-side, broadcast it from the

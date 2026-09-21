@@ -95,6 +95,19 @@ public sealed class MerchantRepository(MerchantDbContext context) : IMerchantRep
             .Distinct(StringComparer.OrdinalIgnoreCase)];
     }
 
+    public async Task<IReadOnlyList<string>> GetAllAllowedIpsAsync(CancellationToken cancellationToken = default)
+    {
+        var csvs = await context.Configurations
+            .AsNoTracking()
+            .Where(c => c.AllowedIpsCsv != null)
+            .Select(c => c.AllowedIpsCsv!)
+            .ToListAsync(cancellationToken);
+
+        return [.. csvs
+            .SelectMany(csv => csv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
+            .Distinct(StringComparer.OrdinalIgnoreCase)];
+    }
+
     public Task<MerchantApiCredential?> FindActiveCredentialAsync(
         string apiKey,
         CancellationToken cancellationToken = default) =>

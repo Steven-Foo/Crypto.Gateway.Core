@@ -24,6 +24,11 @@ public interface IMerchantRepository
     /// add/remove to Cloudflare for an IP that's still needed by a different merchant sharing it.</summary>
     Task<IReadOnlyList<string>> GetAllAllowedIpsExceptAsync(Guid merchantId, CancellationToken cancellationToken = default);
 
+    /// <summary>Every IP any merchant currently has allowlisted, across the whole table. Used to rebuild the
+    /// Cloudflare Custom Rule's IP allowlist from scratch after any single merchant's list changes — the rule
+    /// has to name every merchant's IPs at once, not just the one that changed.</summary>
+    Task<IReadOnlyList<string>> GetAllAllowedIpsAsync(CancellationToken cancellationToken = default);
+
     /// <summary>Resolves a caller's API key to its credential for authentication. Active only.</summary>
     Task<MerchantApiCredential?> FindActiveCredentialAsync(string apiKey, CancellationToken cancellationToken = default);
 

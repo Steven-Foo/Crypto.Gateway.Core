@@ -207,6 +207,14 @@ public static class OpsMerchantEndpoints
         foreach (var ip in change.Removed.Where(ip => !otherIps.Contains(ip)))
             await cloudflare.RemoveIpAsync(ip, http.RequestAborted);
 
+        // The actual enforcement: rewrite the Custom Rule's IP set from the full, current table — only if
+        // something actually changed, since this is the call that can reach a rate limit on a busy day.
+        if (change.Added.Count > 0 || change.Removed.Count > 0)
+        {
+            var allIps = await repository.GetAllAllowedIpsAsync(http.RequestAborted);
+            await cloudflare.SyncCustomRuleAllowlistAsync(allIps, http.RequestAborted);
+        }
+
         var actor = AuditActor.From(http);
         await audit.LogAsync(new LogAuditEntryCommand(
             actor.StaffUserId, actor.Username, "merchant.allowed_ips_updated", "Merchant", id.ToString(),
