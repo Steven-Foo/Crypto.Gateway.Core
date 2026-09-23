@@ -141,6 +141,8 @@ public static class OpsMerchantBalanceEndpoints
                         direction = i.Direction,
                         amount = AmountConversion.ToDisplay(i.Amount, decimals),
                         amountBaseUnits = i.Amount.ToString(),
+                        balanceAfter = AmountConversion.ToDisplay(i.BalanceAfter, decimals),
+                        balanceAfterBaseUnits = i.BalanceAfter.ToString(),
                         assetId = i.AssetId,
                         coin = asset?.Symbol,
                         network = asset?.Chain.ToString(),

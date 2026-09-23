@@ -188,28 +188,79 @@ public sealed class LedgerQuery(LedgerDbContext context) : ILedgerQuery
                && (assetId == null || journal.AssetId == assetId)
                && (fromDate == null || journal.CreatedAt >= fromDate)
                && (toDate == null || journal.CreatedAt <= toDate)
-            select new { journal, entry };
+            select new { journal, entry, Seq = EF.Property<long>(journal, "Seq") };
 
         var totalCount = await query.CountAsync(cancellationToken);
 
+        // Ordered by Seq, not CreatedAt: Journal's clustered Seq is the authoritative, tie-free insertion
+        // order these append-only tables are built for (JournalMap.HasSeqClusteredIndex) — CreatedAt could in
+        // principle tie at the same instant, which would make BalanceAfter's per-row stepping below disagree
+        // with the displayed order. In practice this reorders nothing (Seq and CreatedAt move together). Seq
+        // is projected explicitly (EF.Property) rather than read off the entity afterward — a shadow
+        // property's value isn't retrievable once an AsNoTracking() query has materialized.
         var rows = await query
-            .OrderByDescending(x => x.journal.CreatedAt)
+            .OrderByDescending(x => x.Seq)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
             .ToListAsync(cancellationToken);
 
-        var items = rows
-            .Select(x => new MerchantBalanceChangeView(
+        // BalanceAfter: for each distinct asset on this page, start from the CURRENT cached balance and walk
+        // backward past every entry newer than the page (one query per asset) to reach the balance right after
+        // the page's newest row — then step backward through the page's own rows (already newest-first) to
+        // fill in the rest. Correct on any page and with multiple assets interleaved, because each asset's
+        // running total is tracked independently and never mixes with another asset's.
+        var runningByAsset = new Dictionary<Guid, BigInteger>();
+        foreach (var assetGroup in rows.GroupBy(x => x.journal.AssetId))
+        {
+            var currentBalance = await GetMerchantBalanceAsync(merchantId, assetGroup.Key, cancellationToken);
+            var newestSeqOnPage = assetGroup.Max(x => x.Seq);
+            var newerNet = await GetNetChangeSinceAsync(merchantId, assetGroup.Key, newestSeqOnPage, cancellationToken);
+            runningByAsset[assetGroup.Key] = currentBalance - newerNet;
+        }
+
+        var items = new List<MerchantBalanceChangeView>(rows.Count);
+        foreach (var x in rows) // still newest-first — the order BalanceAfter is stepped backward in
+        {
+            var isDebit = x.entry.IsDebit;
+            var amount = isDebit ? x.entry.Debit : x.entry.Credit;
+            var balanceAfter = runningByAsset[x.journal.AssetId];
+            runningByAsset[x.journal.AssetId] = isDebit ? balanceAfter + amount : balanceAfter - amount;
+
+            items.Add(new MerchantBalanceChangeView(
                 x.journal.Id,
                 x.journal.ReferenceType.ToString(),
                 x.journal.ReferenceId,
                 x.journal.AssetId,
                 x.journal.Description,
-                (x.entry.IsDebit ? EntryDirection.Debit : EntryDirection.Credit).ToString(),
-                x.entry.IsDebit ? x.entry.Debit : x.entry.Credit,
-                x.journal.CreatedAt))
-            .ToList();
+                (isDebit ? EntryDirection.Debit : EntryDirection.Credit).ToString(),
+                amount,
+                x.journal.CreatedAt,
+                balanceAfter));
+        }
 
         return (items, totalCount);
+    }
+
+    /// <summary>Net (credit − debit) of every entry against the merchant's liability account for
+    /// <paramref name="assetId"/> with <c>Seq</c> strictly greater than <paramref name="sinceSeqExclusive"/> —
+    /// i.e. everything that happened after a given point. Summed in memory, matching
+    /// <see cref="GetMerchantSettledBalanceAsync"/>: the money columns are BigInteger via a custom
+    /// <c>decimal(38,0)</c> mapping, which SUM cannot translate to SQL.</summary>
+    private async Task<BigInteger> GetNetChangeSinceAsync(
+        Guid merchantId, Guid assetId, long sinceSeqExclusive, CancellationToken cancellationToken)
+    {
+        var lines = await (
+            from account in context.Accounts.AsNoTracking()
+            where account.AccountType == AccountType.MerchantLiability
+               && account.OwnerType == OwnerType.Merchant
+               && account.OwnerId == merchantId
+               && account.AssetId == assetId
+            join entry in context.JournalEntries.AsNoTracking() on account.Id equals entry.AccountId
+            join journal in context.Journals.AsNoTracking() on entry.JournalId equals journal.Id
+            where EF.Property<long>(journal, "Seq") > sinceSeqExclusive
+            select new { entry.Debit, entry.Credit })
+            .ToListAsync(cancellationToken);
+
+        return lines.Aggregate(BigInteger.Zero, (sum, line) => sum + line.Credit - line.Debit);
     }
 }

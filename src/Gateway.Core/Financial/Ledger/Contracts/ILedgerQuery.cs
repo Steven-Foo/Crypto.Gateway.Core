@@ -25,6 +25,11 @@ public sealed record MerchantJournalView(
 /// <c>TreasuryAsset</c>/<c>FeeRevenue</c>) — that journal is deliberately excluded here, never shown as a
 /// zero-amount row. Every row returned genuinely changed <see cref="Amount"/> in the direction of
 /// <see cref="Direction"/>.
+///
+/// <para><see cref="BalanceAfter"/> is the merchant's running balance for <see cref="AssetId"/> immediately
+/// after this entry posted — computed working backward from the current cached balance, per asset, so it
+/// stays correct across pages and when multiple assets are interleaved on one page (an unfiltered query mixes
+/// every asset; each asset's running total is independent of the others').</para>
 /// </summary>
 public sealed record MerchantBalanceChangeView(
     Guid JournalId,
@@ -34,7 +39,8 @@ public sealed record MerchantBalanceChangeView(
     string Description,
     string Direction,
     BigInteger Amount,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+    BigInteger BalanceAfter);
 
 /// <summary>
 /// The Ledger module's public, read-only balance projection. A merchant's spendable balance is the

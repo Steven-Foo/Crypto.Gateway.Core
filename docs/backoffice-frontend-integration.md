@@ -896,6 +896,8 @@ Response `data` — same level as `page`/`pageSize`/`items`:
       "direction": "Debit",
       "amount": 1.0,
       "amountBaseUnits": "1000000",
+      "balanceAfter": 34.5,
+      "balanceAfterBaseUnits": "34500000",
       "assetId": "guid",
       "coin": "USDT",
       "network": "Tron",
@@ -922,6 +924,13 @@ Response `data` — same level as `page`/`pageSize`/`items`:
 `amount` is always positive (display decimal, §5); use `direction` (or `type`) to know whether it added or
 removed funds, e.g. render `direction == "Credit" ? "+" : "-"` in front of `amount`. `amountBaseUnits` is the
 exact integer string, same "watch this one" exception as §17 and this section's own balance field.
+
+**`balanceAfter`** is the merchant's running balance for that row's `assetId`, immediately after this entry
+posted — reading top to bottom (newest first) shows the balance stepping backward through time. It's correct
+on every page, not just the first, and each asset's running total is independent — if `chain`/`coin` are
+omitted and the merchant holds more than one asset, rows for different assets are interleaved and each keeps
+its own separate `balanceAfter` sequence rather than sharing one running total. `balanceAfterBaseUnits` is the
+exact integer string, same rounding caveat as `amountBaseUnits`.
 
 **Two things that trip people up:**
 - **A successful withdrawal shows only ONE row here, not two.** The money actually leaves the merchant's
