@@ -17,7 +17,7 @@ public sealed class MerchantUser : Entity<Guid>
 {
     private MerchantUser(
         Guid id, Guid merchantId, string username, string displayName, string passwordHash, Guid? roleId,
-        bool mustChangePassword, DateTimeOffset now) : base(id)
+        bool mustChangePassword, bool isPrimary, DateTimeOffset now) : base(id)
     {
         MerchantId = merchantId;
         Username = username;
@@ -25,6 +25,7 @@ public sealed class MerchantUser : Entity<Guid>
         PasswordHash = passwordHash;
         RoleId = roleId;
         MustChangePassword = mustChangePassword;
+        IsPrimary = isPrimary;
         Status = MerchantUserStatus.Active;
         CreatedAt = now;
     }
@@ -52,6 +53,16 @@ public sealed class MerchantUser : Entity<Guid>
     /// change-password step at first login.</summary>
     public bool MustChangePassword { get; private set; }
 
+    /// <summary>The merchant's original super-admin — the one account created when the merchant had zero
+    /// accounts (see <c>MerchantAccountService.CreateAsync</c>), set once here and never reassigned. A
+    /// filtered unique index (<c>MerchantId</c> WHERE <c>IsPrimary = 1</c>) guarantees at most one per
+    /// merchant at the database level, not just by application convention. It is the ONE account staff may
+    /// reset on the merchant's behalf (§ platform-side password reset is primary-only by design) and can
+    /// never itself be <see cref="SetStatus"/>-disabled — disabling it would mean silently redefining what
+    /// "the merchant's super-admin" refers to, which must be a deliberate act, not a side effect of an
+    /// ordinary account-disable action.</summary>
+    public bool IsPrimary { get; private set; }
+
     public MerchantUserStatus Status { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
 
@@ -59,7 +70,7 @@ public sealed class MerchantUser : Entity<Guid>
 
     public static Result<MerchantUser> Create(
         Guid merchantId, string username, string displayName, string passwordHash, Guid? roleId,
-        bool mustChangePassword, DateTimeOffset now)
+        bool mustChangePassword, bool isPrimary, DateTimeOffset now)
     {
         if (merchantId == Guid.Empty)
             return Result.Failure<MerchantUser>(MerchantUserErrors.MerchantRequired);
@@ -72,7 +83,8 @@ public sealed class MerchantUser : Entity<Guid>
 
         var name = string.IsNullOrWhiteSpace(displayName) ? username.Trim() : displayName.Trim();
         return Result.Success(new MerchantUser(
-            Guid.CreateVersion7(), merchantId, username.Trim(), name, passwordHash, roleId, mustChangePassword, now));
+            Guid.CreateVersion7(), merchantId, username.Trim(), name, passwordHash, roleId, mustChangePassword,
+            isPrimary, now));
     }
 
     /// <summary>Assigns (or clears) the account's role. The caller must have verified the role belongs to the
@@ -113,9 +125,13 @@ public sealed class MerchantUser : Entity<Guid>
     }
 
     /// <summary>Reversible. Login is refused while disabled (<see cref="CanLogIn"/>); existing sessions are not
-    /// proactively revoked (a later hardening step, mirroring StaffUser).</summary>
+    /// proactively revoked (a later hardening step, mirroring StaffUser). Refuses to disable the merchant's
+    /// <see cref="IsPrimary"/> account — see that property's doc for why.</summary>
     public Result SetStatus(MerchantUserStatus status)
     {
+        if (IsPrimary && status == MerchantUserStatus.Disabled)
+            return Result.Failure(MerchantUserErrors.CannotDisablePrimaryAccount);
+
         Status = status;
         return Result.Success();
     }

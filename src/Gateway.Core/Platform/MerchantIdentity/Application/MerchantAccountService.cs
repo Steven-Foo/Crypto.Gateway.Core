@@ -6,7 +6,11 @@ namespace CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Application
 
 public sealed record MerchantAccountView(
     Guid MerchantUserId, string Username, string DisplayName, Guid? RoleId, string? RoleName, string Status,
-    bool MustChangePassword, DateTimeOffset CreatedAt);
+    bool MustChangePassword, DateTimeOffset CreatedAt,
+    /// <summary>The merchant's original super-admin — see <c>MerchantUser.IsPrimary</c>. Platform staff may
+    /// only reset this one account's password; every other account is the merchant's own business, managed
+    /// inside its own portal.</summary>
+    bool IsPrimary = false);
 
 /// <summary>The generated one-time password, readable exactly once — at creation or reset. Never stored
 /// recoverably (only its PBKDF2 hash is), never logged.</summary>
@@ -24,12 +28,25 @@ public interface IMerchantAccountService
 
     Task<Result<IReadOnlyList<MerchantAccountView>>> ListAsync(Guid merchantId, CancellationToken cancellationToken = default);
 
+    /// <summary>The merchant's single primary/super-admin account — the ONE account platform staff may act on
+    /// via <see cref="ResetPrimaryPasswordAsync"/>. Null only if the merchant somehow has no accounts at all
+    /// (never provisioned, or every account predates the primary concept and the backfill missed it).</summary>
+    Task<Result<MerchantAccountView?>> GetPrimaryAsync(Guid merchantId, CancellationToken cancellationToken = default);
+
     Task<Result> SetStatusAsync(
         Guid merchantId, Guid targetUserId, Guid actingUserId, bool active, CancellationToken cancellationToken = default);
 
     Task<Result> AssignRoleAsync(Guid merchantId, Guid targetUserId, Guid? roleId, CancellationToken cancellationToken = default);
 
     Task<Result<MerchantAccountCredential>> ResetPasswordAsync(
+        Guid merchantId, Guid targetUserId, CancellationToken cancellationToken = default);
+
+    /// <summary>The platform-staff reset path — refuses (<see cref="MerchantUserErrors.OnlyPrimaryResettableByStaff"/>)
+    /// unless <paramref name="targetUserId"/> is the merchant's primary account, then defers to
+    /// <see cref="ResetPasswordAsync"/>. Deliberately a SEPARATE method from the plain reset above rather than a
+    /// flag on it: <see cref="ResetPasswordAsync"/> also serves the merchant's own admin resetting a teammate
+    /// inside the portal, which must stay unrestricted — only the platform-staff path is primary-only.</summary>
+    Task<Result<MerchantAccountCredential>> ResetPrimaryPasswordAsync(
         Guid merchantId, Guid targetUserId, CancellationToken cancellationToken = default);
 
     /// <summary>The signed-in user changing their OWN password — requires the current one, and clears the
@@ -59,10 +76,16 @@ public sealed class MerchantAccountService(
         if (roleId is { } id && await roles.FindByIdAsync(merchantId, id, cancellationToken) is null)
             return Result.Failure<MerchantAccountCredential>(MerchantUserErrors.RoleNotInTenant);
 
+        // The merchant's first-ever account (any status) becomes its permanent primary/super-admin — see
+        // MerchantUser.IsPrimary. The filtered unique index (MerchantId WHERE IsPrimary = 1) is the real
+        // race-safety arbiter; this check just makes the common case correct without any caller needing to
+        // know or care about it.
+        var isPrimary = (await users.ListAsync(merchantId, cancellationToken)).Count == 0;
+
         var temporaryPassword = passwordGenerator.Generate();
         var user = MerchantUser.Create(
             merchantId, normalised, displayName, hasher.Hash(temporaryPassword), roleId,
-            mustChangePassword: true, timeProvider.GetUtcNow());
+            mustChangePassword: true, isPrimary, timeProvider.GetUtcNow());
         if (user.IsFailure)
             return Result.Failure<MerchantAccountCredential>(user.Error!);
 
@@ -79,14 +102,28 @@ public sealed class MerchantAccountService(
         var roleNames = (await roles.ListAsync(merchantId, cancellationToken)).ToDictionary(r => r.Id, r => r.Name);
 
         IReadOnlyList<MerchantAccountView> views = accounts
-            .Select(u => new MerchantAccountView(
-                u.Id, u.Username, u.DisplayName, u.RoleId,
-                u.RoleId is { } rid ? roleNames.GetValueOrDefault(rid) : null,
-                u.Status.ToString(), u.MustChangePassword, u.CreatedAt))
+            .Select(u => ToView(u, roleNames))
             .ToList();
 
         return Result.Success(views);
     }
+
+    public async Task<Result<MerchantAccountView?>> GetPrimaryAsync(
+        Guid merchantId, CancellationToken cancellationToken = default)
+    {
+        var accounts = await users.ListAsync(merchantId, cancellationToken);
+        var primary = accounts.FirstOrDefault(u => u.IsPrimary);
+        if (primary is null)
+            return Result.Success<MerchantAccountView?>(null);
+
+        var roleNames = (await roles.ListAsync(merchantId, cancellationToken)).ToDictionary(r => r.Id, r => r.Name);
+        return Result.Success<MerchantAccountView?>(ToView(primary, roleNames));
+    }
+
+    private static MerchantAccountView ToView(MerchantUser u, IReadOnlyDictionary<Guid, string> roleNames) =>
+        new(u.Id, u.Username, u.DisplayName, u.RoleId,
+            u.RoleId is { } rid ? roleNames.GetValueOrDefault(rid) : null,
+            u.Status.ToString(), u.MustChangePassword, u.CreatedAt, u.IsPrimary);
 
     public async Task<Result> SetStatusAsync(
         Guid merchantId, Guid targetUserId, Guid actingUserId, bool active, CancellationToken cancellationToken = default)
@@ -106,7 +143,10 @@ public sealed class MerchantAccountService(
                 return Result.Failure(MerchantUserErrors.CannotDisableLastActiveAccount);
         }
 
-        user.SetStatus(active ? MerchantUserStatus.Active : MerchantUserStatus.Disabled);
+        var statusResult = user.SetStatus(active ? MerchantUserStatus.Active : MerchantUserStatus.Disabled);
+        if (statusResult.IsFailure)
+            return statusResult;
+
         await users.SaveChangesAsync(cancellationToken);
         return Result.Success();
     }
@@ -140,6 +180,19 @@ public sealed class MerchantAccountService(
 
         await users.SaveChangesAsync(cancellationToken);
         return Result.Success(new MerchantAccountCredential(user.Id, user.Username, temporaryPassword));
+    }
+
+    public async Task<Result<MerchantAccountCredential>> ResetPrimaryPasswordAsync(
+        Guid merchantId, Guid targetUserId, CancellationToken cancellationToken = default)
+    {
+        var user = await users.FindByIdAsync(merchantId, targetUserId, cancellationToken);
+        if (user is null)
+            return Result.Failure<MerchantAccountCredential>(MerchantUserErrors.NotFound);
+
+        if (!user.IsPrimary)
+            return Result.Failure<MerchantAccountCredential>(MerchantUserErrors.OnlyPrimaryResettableByStaff);
+
+        return await ResetPasswordAsync(merchantId, targetUserId, cancellationToken);
     }
 
     public async Task<Result> ChangeOwnPasswordAsync(

@@ -218,3 +218,51 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [merchantidentity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260923103509_AddMerchantUserPrimaryFlag'
+)
+BEGIN
+    ALTER TABLE [merchantidentity].[MerchantUser] ADD [IsPrimary] bit NOT NULL DEFAULT CAST(0 AS bit);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchantidentity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260923103509_AddMerchantUserPrimaryFlag'
+)
+BEGIN
+    EXEC(N'
+    ;WITH Ranked AS (
+        SELECT [Id],
+               ROW_NUMBER() OVER (PARTITION BY [MerchantId] ORDER BY [CreatedAt] ASC) AS [Rn]
+        FROM [merchantidentity].[MerchantUser]
+    )
+    UPDATE [u]
+    SET [u].[IsPrimary] = 1
+    FROM [merchantidentity].[MerchantUser] AS [u]
+    INNER JOIN [Ranked] ON [Ranked].[Id] = [u].[Id]
+    WHERE [Ranked].[Rn] = 1;
+    ');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchantidentity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260923103509_AddMerchantUserPrimaryFlag'
+)
+BEGIN
+    EXEC(N'CREATE UNIQUE INDEX [UX_MerchantUser_MerchantId_Primary] ON [merchantidentity].[MerchantUser] ([MerchantId]) WHERE [IsPrimary] = 1');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchantidentity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260923103509_AddMerchantUserPrimaryFlag'
+)
+BEGIN
+    INSERT INTO [merchantidentity].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260923103509_AddMerchantUserPrimaryFlag', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

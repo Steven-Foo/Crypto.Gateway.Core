@@ -1,3 +1,4 @@
+using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Domain;
 using CryptoPaymentEngine.SharedKernel;
@@ -44,6 +45,7 @@ public sealed class MerchantAuthService(
     IMerchantUserRepository userRepository,
     IMerchantUserSessionRepository sessionRepository,
     IMerchantRoleRepository roleRepository,
+    IMerchantDirectory merchants,
     IMerchantPasswordHasher passwordHasher,
     IMerchantSessionTokenGenerator tokenGenerator,
     IOptions<MerchantIdentityOptions> options,
@@ -63,6 +65,13 @@ public sealed class MerchantAuthService(
 
         if (!user.CanLogIn)
             return Result.Failure<MerchantLoginResult>(MerchantUserErrors.AccountDisabled);
+
+        // Merchant-level shutout — distinct from the account's own status above. A Frozen merchant leaves this
+        // untouched (its staff may still sign in); only Closed refuses. No merchant row at all is treated the
+        // same as closed rather than allowed through by default.
+        var merchant = await merchants.FindByIdAsync(user.MerchantId, cancellationToken);
+        if (merchant is null || !merchant.CanAccessPortal)
+            return Result.Failure<MerchantLoginResult>(MerchantUserErrors.MerchantClosed);
 
         // Resolve the tenant's role for this account. No role (or a role that has since been deleted) ⇒ no
         // permissions at all, so the user can sign in and see nothing rather than silently inheriting access.
@@ -104,6 +113,12 @@ public sealed class MerchantAuthService(
         var session = await sessionRepository.FindByTokenHashAsync(tokenGenerator.HashOf(rawToken), cancellationToken);
         if (session is null || !session.IsValid(timeProvider.GetUtcNow()))
             return Result.Failure<MerchantPrincipal>(MerchantUserErrors.SessionExpiredOrRevoked);
+
+        // Re-checked on every request, not just at login: closing a merchant must cut off an already-open
+        // session immediately rather than waiting for it to expire naturally.
+        var merchant = await merchants.FindByIdAsync(session.MerchantId, cancellationToken);
+        if (merchant is null || !merchant.CanAccessPortal)
+            return Result.Failure<MerchantPrincipal>(MerchantUserErrors.MerchantClosed);
 
         return Result.Success(new MerchantPrincipal(
             session.MerchantUserId, session.MerchantId, session.Username, session.DisplayName, session.PermissionCodes,

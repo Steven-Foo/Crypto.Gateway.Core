@@ -147,6 +147,36 @@ public sealed class MerchantDomainTests
         fromFrozen.Status.ShouldBe(MerchantStatus.Closed);
     }
 
+    [Fact]
+    public void Frozen_blocks_transacting_but_leaves_portal_access_alone()
+    {
+        var merchant = NewMerchant();
+        merchant.Freeze(Now).IsSuccess.ShouldBeTrue();
+
+        merchant.CanTransact.ShouldBeFalse();
+        merchant.CanAccessPortal.ShouldBeTrue(); // staff may still sign in to view reports/history
+    }
+
+    [Fact]
+    public void Closed_blocks_both_transacting_and_portal_access()
+    {
+        var merchant = NewMerchant();
+        merchant.Close(Now).IsSuccess.ShouldBeTrue();
+
+        merchant.CanTransact.ShouldBeFalse();
+        merchant.CanAccessPortal.ShouldBeFalse(); // full shutout, regardless of which account/role
+    }
+
+    [Fact]
+    public void Reactivating_a_closed_merchant_restores_portal_access()
+    {
+        var merchant = NewMerchant();
+        merchant.Close(Now);
+        merchant.Activate(Now).IsSuccess.ShouldBeTrue();
+
+        merchant.CanAccessPortal.ShouldBeTrue();
+    }
+
     // ── Allowed IPs ────────────────────────────────────────────────────────────
 
     [Fact]

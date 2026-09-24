@@ -26,7 +26,8 @@ public static class OpsResults
 
     /// <summary>
     /// Maps a domain <see cref="Error"/> to its HTTP status by <see cref="ErrorType"/>. This is the canonical
-    /// mapping for the whole host: NotFound → 404, Conflict → 409, Unauthorized → 401, everything else → 400.
+    /// mapping for the whole host: NotFound → 404, Conflict → 409, Unauthorized → 401, Forbidden → 403,
+    /// everything else → 400.
     /// </summary>
     public static IResult Fail(Error error) =>
         Results.Json(
@@ -55,6 +56,7 @@ public static class OpsResults
         ErrorType.NotFound => StatusCodes.Status404NotFound,
         ErrorType.Conflict => StatusCodes.Status409Conflict,
         ErrorType.Unauthorized => StatusCodes.Status401Unauthorized,
+        ErrorType.Forbidden => StatusCodes.Status403Forbidden,
         _ => StatusCodes.Status400BadRequest,
     };
 }

@@ -2,6 +2,7 @@
 
   <ItemGroup>
     <ProjectReference Include="../Domain/CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Domain.csproj" />
+    <ProjectReference Include="../../../Merchant/Contracts/CryptoPaymentEngine.Gateway.Core.Merchant.Contracts.csproj" />
     <ProjectReference Include="../../../../SharedKernel/CryptoPaymentEngine.SharedKernel/CryptoPaymentEngine.SharedKernel.csproj" />
   </ItemGroup>
 

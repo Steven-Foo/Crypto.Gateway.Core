@@ -94,6 +94,12 @@ public sealed partial class Merchant : Entity<Guid>
 
     public bool CanTransact => Status == MerchantStatus.Active;
 
+    /// <summary>Whether any of this merchant's portal accounts may sign in at all. False only when
+    /// <c>Closed</c> — <c>Frozen</c> blocks <see cref="CanTransact"/> but deliberately leaves portal login
+    /// alone, so a frozen merchant's staff can still sign in to view reports/history while unable to transact.
+    /// A closed merchant is a full shutout, regardless of role or which of its accounts is used.</summary>
+    public bool CanAccessPortal => Status != MerchantStatus.Closed;
+
     public static Result<Merchant> Create(
         string merchantCode,
         string name,

@@ -125,6 +125,15 @@ it you get **403**.
 > The login body accepts an **`otp`** field. **It is currently ignored — 2FA is not implemented anywhere in
 > this backend.** Do not build a UI that implies OTP protects anything.
 
+**Two merchant-level states affect login, and they're deliberately different — don't conflate them:**
+- **Frozen** (an admin risk-hold) does **not** block portal login. A frozen merchant's staff can still sign in
+  and view reports/history; only transacting (deposits, payouts, cash-outs) is blocked.
+- **Closed** blocks portal login entirely — `401 merchant_user.merchant_closed` — for **every** account under
+  that merchant, regardless of role. This is checked both at login and on **every** authenticated request
+  (`/auth/me` included), so an already-open session is cut off immediately the moment the merchant closes,
+  rather than staying valid until it naturally expires. Show this as "this merchant account has been closed,
+  contact support" — never as an ordinary session-expired message, since re-login will never succeed here.
+
 `mustChangePassword` is a **UX signal, not a security control** — the API does not block other calls while it
 is true. Show the change-password step, but do not treat it as enforcement.
 
@@ -522,6 +531,11 @@ Top-ups appear in the normal deposit history (`/transactions/payin`) once detect
 - Guards that will reject you, and should be reflected in the UI: you cannot disable **yourself**, and you
   cannot disable the tenant's **last active account** — otherwise a merchant could lock itself out of its own
   portal with no way back in except a platform-staff intervention.
+- **The account marked `isPrimary: true` in `GET /accounts` can never be disabled** —
+  `409 merchant_user.cannot_disable_primary_account`. It's the merchant's original super-admin (the account
+  created when the merchant first got its portal login), fixed permanently, and it's the ONE account platform
+  staff can reset on the merchant's behalf if it's ever locked out. Every other account is reset only from
+  inside this portal by one of its own admins. Hide or disable the "disable" control for that one row.
 - Usernames are **globally unique across all merchants** (a username resolves to exactly one tenant at login),
   so a collision is possible with a merchant you cannot see. Surface it as "username taken", nothing more.
 - **Disabling an account does not kill its live sessions** today — it is refused at next login. A filed gap.

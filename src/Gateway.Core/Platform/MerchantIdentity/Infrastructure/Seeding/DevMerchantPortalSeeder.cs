@@ -94,9 +94,15 @@ public sealed class DevMerchantPortalSeeder(
                 return;
             }
 
+            // Same rule as the production create path (MerchantAccountService.CreateAsync): this merchant's
+            // first-ever account becomes its permanent primary. Computed, not assumed, so seeding a SECOND
+            // dev login for a merchant that already has one (e.g. re-running with a changed username) can
+            // never collide with the filtered unique index.
+            var isPrimary = (await userRepository.ListAsync(merchant.MerchantId, cancellationToken)).Count == 0;
+
             var userResult = MerchantUser.Create(
                 merchant.MerchantId, seed.Username, seed.DisplayName, hasher.Hash(seed.Password), adminRoleId,
-                mustChangePassword: false, timeProvider.GetUtcNow());
+                mustChangePassword: false, isPrimary, timeProvider.GetUtcNow());
             if (userResult.IsFailure)
             {
                 logger.LogWarning("Dev merchant-portal seed skipped: {Error}.", userResult.Error!.Message);

@@ -738,8 +738,11 @@ No body. Response 200:
   merchant doesn't exist.
 
 ### `GET /api/v1/ops/merchants/{id}/portal-accounts` — `ops.merchants.manage`
-Lists this merchant's portal accounts — a merchant can have more than one (its own admin may have added
-teammates via the portal's self-service `POST /portal/accounts`), so staff need this before resetting one.
+**Staff see only the merchant's primary account here — never its teammates.** A merchant can have any number
+of portal accounts (its own admin may add teammates via `POST /portal/accounts`), but those are the merchant's
+own internal business, managed entirely inside its own portal; platform staff have neither visibility nor a
+reset path into them (deliberate — password reset is primary-only by design). Returns an empty `accounts`
+array only if the merchant somehow has no portal accounts at all — never more than one entry.
 
 Response 200:
 ```json
@@ -749,7 +752,8 @@ Response 200:
     "merchantId": "guid",
     "accounts": [
       { "merchantUserId": "guid", "username": "me00002", "displayName": "...", "roleId": "guid|null",
-        "roleName": "Admin|null", "status": "Active|Disabled", "mustChangePassword": true, "createdAt": "..." }
+        "roleName": "Admin|null", "status": "Active|Disabled", "mustChangePassword": true, "createdAt": "...",
+        "isPrimary": true }
     ]
   },
   "error": null
@@ -757,15 +761,26 @@ Response 200:
 ```
 
 ### `POST /api/v1/ops/merchants/{id}/portal-accounts/{accountId}/reset-password` — `ops.merchants.manage`
-Staff-triggered password reset — for when a merchant's admin is locked out and has nobody else inside its own
-portal to reset it for them. No body. **Invalidates the old password immediately.**
+Staff-triggered password reset of the merchant's **primary account only** — for when that admin is locked out
+and has nobody else inside its own portal to reset it for them. No body. **Invalidates the old password
+immediately.**
+
+**403 `merchant_user.only_primary_resettable_by_staff` for any other account id** — a teammate's password is
+the merchant's own business, reset by its own admin inside the portal, never by staff. This is enforced at the
+API regardless of what the UI shows (don't rely on only ever seeing the primary account's id in the list
+above to keep this safe — the backend refuses the other case too).
 
 Response 200:
 ```json
 { "isSuccess": true, "data": { "merchantId": "guid", "merchantUserId": "guid", "username": "me00002", "temporaryPassword": "string — shown once" }, "error": null }
 ```
 Same one-time-password treatment as everywhere else: shown exactly once, here, never recoverable afterward.
-404 if the account doesn't belong to this merchant.
+404 if the account doesn't belong to this merchant; 403 (as above) if it belongs to the merchant but isn't
+its primary account.
+
+**Note:** there is no staff-side way to disable a portal account at all today — only the merchant's own portal
+(`PATCH /portal/accounts/{id}/status`) can do that, and it refuses to disable the primary account specifically
+(see `docs/merchant-portal-frontend-integration.md`).
 
 **What "temporary" actually means for this password** (same for the bootstrap `portal-account` create above):
 it is a normal password, not a single-use code — it keeps working for every login until the merchant actually
@@ -800,6 +815,15 @@ merchant data (credentials, policies, settlement wallet, etc. are untouched, jus
 does **not** stop already-confirmed on-chain deposits from crediting the ledger (§14) — it only blocks new
 activity (deposit-address issuance, payouts, credential/config/policy changes — every one of those has its
 own independent guard rejecting a Closed merchant, separate from the status field itself).
+
+**`Frozen` vs `Closed` — deliberately different reach, not two names for the same thing:**
+- **Frozen**: blocks the merchant API (deposits/payouts/etc.) only. Its portal users can still sign in and
+  browse — reports, transaction history, balance — everything except transacting.
+- **Closed**: blocks the merchant API **and** the merchant portal, for every account under it regardless of
+  role. A merchant portal user gets `401 merchant_user.merchant_closed` on login, and — if already
+  signed in — on their very next request too (checked per-request, not just at login, so closing cuts an
+  open session off immediately rather than waiting for it to expire). Reopening (`active: true`/`false`
+  above) restores portal access along with API access.
 
 Response: `{ "merchantId": "guid", "status": "Closed" }`. 404 on an unknown `id`.
 

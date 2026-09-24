@@ -14,7 +14,13 @@ public sealed record MerchantSummary(
     int SettlementDelayDays = 0,
     /// <summary>Whether this merchant's user payouts wait for the merchant's own approver before the platform
     /// evaluates them. False (the default) is the long-standing behaviour every HMAC integration expects.</summary>
-    bool RequiresPayoutApproval = false);
+    bool RequiresPayoutApproval = false,
+    /// <summary>Whether any account under this merchant may sign in to the merchant portal at all — false only
+    /// when the merchant is <c>Closed</c>. Deliberately distinct from <see cref="CanTransact"/>: a <c>Frozen</c>
+    /// merchant cannot transact but its staff can still sign in to view reports; a <c>Closed</c> merchant is a
+    /// full shutout, checked at login AND on every subsequent request so an already-open session is cut off
+    /// immediately, not just at its next login.</summary>
+    bool CanAccessPortal = true);
 
 public interface IMerchantDirectory
 {

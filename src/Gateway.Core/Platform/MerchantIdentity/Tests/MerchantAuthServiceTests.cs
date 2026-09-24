@@ -1,3 +1,4 @@
+using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Application;
 using CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Domain;
 using CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Infrastructure.Persistence;
@@ -29,10 +30,32 @@ public sealed class MerchantAuthServiceTests : IAsyncLifetime
     private static MerchantIdentityDbContext Context() =>
         new(new DbContextOptionsBuilder<MerchantIdentityDbContext>().UseSqlServer(ConnectionString).Options);
 
-    private static MerchantAuthService Service(MerchantIdentityDbContext context, TimeProvider? clock = null) =>
+    private static MerchantAuthService Service(
+        MerchantIdentityDbContext context, TimeProvider? clock = null, IMerchantDirectory? merchants = null) =>
         new(new MerchantUserRepository(context), new MerchantUserSessionRepository(context),
-            new MerchantRoleRepository(context), new MerchantPasswordHasher(), new MerchantSessionTokenGenerator(),
+            new MerchantRoleRepository(context), merchants ?? new FakeMerchants(canAccessPortal: true),
+            new MerchantPasswordHasher(), new MerchantSessionTokenGenerator(),
             Options.Create(new MerchantIdentityOptions { SessionTtlHours = 8 }), clock ?? TimeProvider.System);
+
+    /// <summary>Every merchant is found and accessible by default — <c>canAccessPortal: false</c> is what the
+    /// closed-merchant tests below override to simulate a <c>Closed</c> merchant without needing the Merchant
+    /// module's own schema in this test's database.</summary>
+    private sealed class FakeMerchants(bool canAccessPortal) : IMerchantDirectory
+    {
+        public Task<MerchantSummary?> FindByIdAsync(Guid merchantId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<MerchantSummary?>(new MerchantSummary(
+                merchantId, "ACME", "Acme", null, CanTransact: true, CanAccessPortal: canAccessPortal));
+
+        public Task<MerchantSummary?> FindByCodeAsync(string merchantCode, CancellationToken cancellationToken = default) =>
+            Task.FromResult<MerchantSummary?>(null);
+
+        public Task<IReadOnlyDictionary<Guid, string>> GetNamesByIdsAsync(
+            IReadOnlyList<Guid> merchantIds, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyDictionary<Guid, string>>(new Dictionary<Guid, string>());
+
+        public Task<IReadOnlyList<Guid>> SearchIdsByNameAsync(string nameContains, CancellationToken cancellationToken = default) =>
+            Task.FromResult<IReadOnlyList<Guid>>([]);
+    }
 
     private static async Task<Guid> SeedRoleAsync(Guid merchantId, string name, params string[] permissions)
     {
@@ -48,7 +71,7 @@ public sealed class MerchantAuthServiceTests : IAsyncLifetime
         await using var context = Context();
         var user = MerchantUser.Create(
             merchantId, username, "Ops", new MerchantPasswordHasher().Hash(password), roleId,
-            mustChangePassword: false, DateTimeOffset.UtcNow).Value;
+            mustChangePassword: false, isPrimary: false, DateTimeOffset.UtcNow).Value;
         context.MerchantUsers.Add(user);
         await context.SaveChangesAsync(Ct);
     }
@@ -174,6 +197,39 @@ public sealed class MerchantAuthServiceTests : IAsyncLifetime
 
         await using var verify = Context();
         (await Service(verify, clock).ValidateAsync(token, Ct)).IsFailure.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Login_is_refused_when_the_merchant_is_closed()
+    {
+        var closedTenant = Guid.CreateVersion7();
+        await SeedUserAsync(closedTenant, "merchant005", "s3cret-password");
+
+        await using var context = Context();
+        var login = await Service(context, merchants: new FakeMerchants(canAccessPortal: false))
+            .LoginAsync(new MerchantLoginCommand("merchant005", "s3cret-password"), Ct);
+
+        login.IsFailure.ShouldBeTrue();
+        login.Error!.Code.ShouldBe(MerchantUserErrors.MerchantClosed.Code);
+    }
+
+    [Fact]
+    public async Task An_already_open_session_is_cut_off_the_moment_the_merchant_closes()
+    {
+        var tenant = Guid.CreateVersion7();
+        await SeedUserAsync(tenant, "merchant006", "s3cret-password");
+
+        await using var context = Context();
+        var token = (await Service(context, merchants: new FakeMerchants(canAccessPortal: true))
+            .LoginAsync(new MerchantLoginCommand("merchant006", "s3cret-password"), Ct)).Value.Token;
+
+        // The session is still perfectly valid (not expired/revoked) — only the merchant's own status changed,
+        // simulated here by validating against a directory that now reports it Closed.
+        await using var verify = Context();
+        var validated = await Service(verify, merchants: new FakeMerchants(canAccessPortal: false)).ValidateAsync(token, Ct);
+
+        validated.IsFailure.ShouldBeTrue();
+        validated.Error!.Code.ShouldBe(MerchantUserErrors.MerchantClosed.Code);
     }
 
     private sealed class FakeTimeProvider(DateTimeOffset now) : TimeProvider

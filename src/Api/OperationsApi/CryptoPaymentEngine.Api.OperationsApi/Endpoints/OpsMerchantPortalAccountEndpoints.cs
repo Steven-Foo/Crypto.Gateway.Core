@@ -45,23 +45,30 @@ public static class OpsMerchantPortalAccountEndpoints
             .RequirePermission(OpsPermissions.Merchants.Manage);
     }
 
-    /// <summary>Staff need this before a reset: a merchant can have more than one portal account (its own
-    /// admin may have added teammates), so staff must see which one to reset rather than guess.</summary>
+    /// <summary>Staff see only the merchant's primary/super-admin account here — never its teammates. A
+    /// merchant may have any number of accounts (its own admin may have added teammates), but those are the
+    /// merchant's own internal business, managed inside its own portal; platform staff have neither visibility
+    /// nor a reset path into them (§ platform-side password reset is primary-only by design). Returns an empty
+    /// list only if the merchant somehow has no accounts at all.</summary>
     private static async Task<IResult> ListPortalAccountsAsync(Guid id, IMerchantAccountService accounts, HttpContext http)
     {
-        var result = await accounts.ListAsync(id, http.RequestAborted);
-        return result.IsFailure
-            ? OpsResults.Fail(result.Error!)
-            : Results.Ok(new { isSuccess = true, data = new { merchantId = id, accounts = result.Value }, error = (string?)null, errorCode = (string?)null });
+        var result = await accounts.GetPrimaryAsync(id, http.RequestAborted);
+        if (result.IsFailure)
+            return OpsResults.Fail(result.Error!);
+
+        var primaryAccounts = result.Value is null ? Array.Empty<MerchantAccountView>() : [result.Value];
+        return Results.Ok(new { isSuccess = true, data = new { merchantId = id, accounts = primaryAccounts }, error = (string?)null, errorCode = (string?)null });
     }
 
-    /// <summary>Staff-triggered reset — for when a merchant's admin is locked out and has nobody else to reset
-    /// it from inside the portal itself. Invalidates the old password immediately; the new one-time password
-    /// is shown exactly once, here, same as account creation.</summary>
+    /// <summary>Staff-triggered reset of the merchant's PRIMARY account only — for when that admin is locked
+    /// out and has nobody else to reset it from inside the portal itself. Refuses (403) any other account id:
+    /// a teammate's password is the merchant's own business, reset by its own admin inside the portal, never
+    /// by staff. Invalidates the old password immediately; the new one-time password is shown exactly once,
+    /// here, same as account creation.</summary>
     private static async Task<IResult> ResetPortalAccountPasswordAsync(
         Guid id, Guid accountId, IMerchantAccountService accounts, IAuditLogger audit, HttpContext http)
     {
-        var result = await accounts.ResetPasswordAsync(id, accountId, http.RequestAborted);
+        var result = await accounts.ResetPrimaryPasswordAsync(id, accountId, http.RequestAborted);
         if (result.IsFailure)
             return OpsResults.Fail(result.Error!);
 

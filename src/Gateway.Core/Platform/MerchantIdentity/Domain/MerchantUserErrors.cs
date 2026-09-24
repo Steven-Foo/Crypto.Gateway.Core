@@ -16,6 +16,14 @@ public static class MerchantUserErrors
     public static readonly Error AccountDisabled =
         Error.Unauthorized("merchant_user.account_disabled", "This account has been disabled.");
 
+    /// <summary>The merchant itself is Closed — a full portal shutout, distinct from one account being
+    /// individually <see cref="AccountDisabled"/>. Applies to every account under the merchant regardless of
+    /// role, and is checked both at login and on every subsequent request (see
+    /// <c>MerchantAuthService.ValidateAsync</c>), so an already-open session is cut off immediately once the
+    /// merchant closes, not merely refused at its next login.</summary>
+    public static readonly Error MerchantClosed =
+        Error.Unauthorized("merchant_user.merchant_closed", "This merchant account has been closed.");
+
     public static readonly Error InvalidCredentials =
         Error.Unauthorized("merchant_user.invalid_credentials", "Invalid username or password.");
 
@@ -33,6 +41,18 @@ public static class MerchantUserErrors
 
     public static readonly Error CannotDisableLastActiveAccount =
         Error.Conflict("merchant_user.cannot_disable_last_active_account", "At least one active account must remain.");
+
+    public static readonly Error CannotDisablePrimaryAccount =
+        Error.Conflict("merchant_user.cannot_disable_primary_account", "The merchant's primary account cannot be disabled.");
+
+    /// <summary>Platform staff may reset ONLY the merchant's primary account — a teammate account is the
+    /// merchant's own internal business, reset by the merchant's own admin inside the portal, never by staff
+    /// (§ platform-side password reset is primary-only by design). Forbidden, not NotFound: the target account
+    /// genuinely exists, staff simply may not act on it this way.</summary>
+    public static readonly Error OnlyPrimaryResettableByStaff =
+        Error.Forbidden(
+            "merchant_user.only_primary_resettable_by_staff",
+            "Platform staff may only reset the merchant's primary account. Other accounts are managed by the merchant inside its own portal.");
 
     /// <summary>The requested role belongs to a different merchant (or does not exist). Surfaced identically
     /// either way so the response never confirms that another tenant's role id is real.</summary>
