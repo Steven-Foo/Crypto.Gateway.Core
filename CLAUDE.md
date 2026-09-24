@@ -813,8 +813,9 @@ return the SESSION's merchant (USDT balance, real TRON deposit address); a **`?m
 (still the caller's own tenant); cookie POST without `X-CSRF-Token` → 403, with → 200; logout revokes; unauth → 401. Tests:
 `MerchantAuthServiceTests` (4 — login issues a tenant-bound + CSRF session, validate surfaces the tenant, wrong-password
 == unknown-user, expiry). **Phase 2 — DONE** (see the next milestone). **No backend, not built**
-(the §9-style gaps, filed): dashboard (no aggregate), risk-events, reconcile (platform-only custody audit), reports, 2FA
-(the portal's login accepts an `otp` field but IGNORES it — 2FA is unimplemented).
+(the §9-style gaps, filed): dashboard (no aggregate), risk-events, reconcile (platform-only custody audit), reports.
+(2FA was on this list — the login `otp` field was accepted and IGNORED — and was **since built**; see the two-factor
+milestone at the end of this section.)
 
 
 **Merchant Portal API — Phase 2 (merchant RBAC + write actions) — BUILT, full suite green (726 passed, 8 expected
@@ -861,9 +862,9 @@ no-role ⇒ empty, disabled account refused) + new `MerchantTenantIsolationTests
 delete/reset merchant B's roles or accounts even knowing the exact id, a foreign role can never be assigned at
 creation or later, same-name roles across tenants, in-use role undeletable, self/last-account disable guards,
 change-own-password rules, global username uniqueness). Also folded the temp-password generator into a shared
-`SharedKernel.TemporaryPassword` primitive rather than adding a third copy. **Deferred:** 2FA (still unimplemented
-backend-wide — the login `otp` field remains ignored), a portal audit log of merchant-admin actions, and revoking a
-disabled account's live sessions (today it is refused at next login, mirroring the staff module).
+`SharedKernel.TemporaryPassword` primitive rather than adding a third copy. **Deferred:** a portal audit log of
+merchant-admin actions, and revoking a disabled account's live sessions (today it is refused at next login, mirroring
+the staff module). (2FA was deferred here too, and was **since built** — see the two-factor milestone.)
 
 **Two-party payout approval (merchant approver → platform staff) + single-approval platform gate — BUILT, full
 suite green (731 passed, 8 expected skips), HTTP-verified.** Closes the gap between the intended payout flow and
@@ -1072,8 +1073,9 @@ the merchant-portal API (`Api/MerchantPortalApi`) had **no integration doc at al
 actually blocked on (the UI team's REQ-4 was delivered long ago and they did not know). Covers the tenant-isolation
 rule (the merchant id comes only from the session, never a request param), cookie+CSRF auth, the permission catalog,
 the two-balance funds model (available vs settled/T+N), the two-party payout approval incl. reading
-`awaitingPlatformApproval`, and the honest gaps (2FA unimplemented and the login `otp` **ignored**; **no `errorCode`
-on this host** unlike Ops — branch on HTTP status). Also fixed real drift in
+`awaitingPlatformApproval`, and the honest gaps as they stood then (2FA unimplemented and the login `otp` **ignored**;
+**no `errorCode` on this host** unlike Ops). **Both claims are now stale** — the portal emits an `errorCode` on every
+failure, and 2FA is built; the doc was corrected 2026-09-23 (see the two-factor milestone). Also fixed real drift in
 **`docs/backoffice-frontend-integration.md`**: **13 endpoints existed but were undocumented** (all 5 merchant-terms
 setters, `/ops/reconciliation`, `/ops/sweeps`, both `/ops/energy/*`, all 4 `/ops/treasury/*`) — now written up as new
 §19–§22, and §23's "known gaps" list rewritten (it still claimed Treasury/Energy/Sweep/Reconciliation screens and
@@ -1750,6 +1752,107 @@ still count towards custody, and settlement-wallet multi/activate/retire persist
 `docs/address-screening.md` §16, `docs/backoffice-frontend-integration.md` §0a/§19/§20/§22/§22b.
 **Deferred:** nothing spends from the quarantine wallet (the key is not in the system, so any movement is a human
 act) and there is no per-source quarantine report; a balance swept before its address went bad is not re-routed.
+
+
+**Two-factor authentication — staff + merchant portal (2026-09-24) — BUILT, 1,132 tests green (1 known
+pre-existing Merchant failure), both hosts HTTP-verified, both `db/sql` scripts applied twice to clean databases.**
+Closes the oldest filed gap on both front ends. **TOTP (RFC 6238)**, so Google Authenticator / Authy / 1Password /
+Microsoft Authenticator all work off the same QR. Three parts, in the order they depend on each other: mandatory
+enrollment, a code at login, and **per-action code prompts chosen by an admin from the back office**.
+**No ledger impact** — 2FA decides whether an action is permitted, never what is posted. **No §10 key impact** — a
+TOTP secret authenticates a person, it never signs a transaction; it is still AES-256-GCM encrypted at rest.
+
+**Decisions the user made, and what each one bought.** (1) **Every staff and portal user enrols** ⇒ the login form
+can always ask for a code ⇒ **no half-authenticated login state at all**: login stays ONE call carrying
+username+password+code, deleting a challenge table, four endpoints, and the whole "a challenge token got treated as a
+session" bug class. (2) **A code per ACTION, not a time window** ⇒ no grant state on the session; an `X-2FA-Code`
+header per request. (3) **No replay guard** — a valid code is accepted for as long as TOTP says it is valid (its step
+±1); the alternative capped a staff member at **one guarded action per 30 seconds**, because the authenticator has no
+second code to give inside a step, which is how a control stops being used as designed. The residual risk is stated
+rather than hidden: an observed code is reusable for ≤90s, but it is not a credential on its own — the holder also
+needs a live session, its cookie, the CSRF token and the permission. (4) **Portal gets login 2FA only**, no guarded
+actions yet. (5) **Hand-rolled RFC 6238** over the BCL's `HMACSHA1` rather than a package: ~200 lines including the
+Base32 codec, and the RFC publishes official vectors, so it is *proven* rather than trusted (a dependency for
+arithmetic on the auth path is the worse trade, §11).
+
+**SharedKernel gained two primitives** (§4.8 — pure, no business rule): **`Totp`** (RFC 6238 + RFC 4648 Base32 +
+the `otpauth://` builder; verifies in constant time with no early exit, so neither the outcome nor *which* step
+matched is timing-visible) and **`AesGcmSecretBox`**, the AES-GCM algorithm lifted out of
+`Merchant.AesGcmSecretCipher` — which becomes a thin adapter over it, **blob format byte-identical so every merchant
+signing secret already in the database still decrypts**. Each identity module keeps its OWN port and its OWN key
+(§4.5): one compromise must not unlock both platform staff and every merchant's users.
+
+**Identity** (schema `identity`, migration `AddStaffTwoFactor`): `StaffTwoFactor` — **its own table, not columns on
+`StaffUser`**, because that row is read on every login and every account screen and a careless projection would leak
+the secret; `Status` Pending/Active/Disabled where **Pending grants nothing** (an interrupted setup must not leave an
+account believing it is protected); `StaffRecoveryCode` (ten, PBKDF2-hashed like a password, single-use);
+`TwoFactorPolicyVersion` — **append-only and config-floored, the same shape as `compliance.ScreeningPolicyVersion`**
+for the same reasons (an action taken last month must stay explainable; a fresh environment must boot with a defined
+posture; `source` distinguishes "nobody has chosen" from "someone chose exactly this"). `StaffSession` gained a
+nullable `TwoFactorMethod`, so the migration is additive and live sessions survive it. `MerchantIdentity` gets the
+mirror (`AddMerchantUserTwoFactor`), tenant-stamped on every row.
+
+**Forced enrollment is a STATE, not a policy anyone remembers.** An account with no active factor signs in but its
+session reaches only the enrollment routes + `/auth/me` + `/auth/logout`; everything else is
+`403 ops.two_factor_enrollment_required`. Refusing the login outright would **deadlock** — enrollment happens over an
+authenticated session, so an account that cannot log in can never enrol. Confirming **upgrades the current session in
+place**: dropping a new user back on a login form the instant setup succeeds, to type a code from an app they just
+installed, is exactly where people conclude the setup failed.
+
+**Guarded actions.** `GuardedActions` is a **host-owned catalog** (exactly the `OpsPermissions` precedent): the codes
+name capabilities across Treasury/Withdrawal/Merchant/Compliance and **Identity must not know those modules exist**
+(§4.5) — it stores and compares opaque strings. That is also what makes it expandable: a new guarded action is a
+const, a catalog entry and one `.RequireTwoFactor(...)` on the route — no schema change, no Identity change, and the
+settings screen picks it up with no frontend change. **An action code is not a permission code**: a permission asks
+*may this role do it at all*, a guarded action asks *must this person prove themselves again now*. Applied
+**permission first, 2FA second** — no point demanding a code for something the caller may not do, and doing so would
+confirm the action exists to someone with no access. 15 actions seeded across 37 routes.
+
+**The self-protection invariant:** `ops.security.two-factor-policy` is **permanently guarded, absent from the
+guardable list, and forced into every saved version on both the read and write paths.** Without it the control
+unlocks itself — anyone on a stolen admin session unticks everything. Same reasoning that makes the shipped sanctions
+designations add-only. The literal is shared with Identity, which cannot reference the host, so a test pins the two
+equal. Admin reset of someone else's factor is guarded too: account recovery is the standard way around a second
+factor.
+
+**A recovery code signs you in; it never clears a guarded action** (`ops.two_factor_recovery_not_accepted`) —
+otherwise the control degrades to "whoever holds the printout". **Codes are never logged** (neither host logs request
+headers; a reverse proxy must exclude `X-2FA-Code` — `docs/ec2-staging.md` §9.6). Lockout is a deliberately generous
+10 consecutive failures / 15 minutes, because retry IS the designed behaviour and a control that locks people out on
+ordinary typos gets routed around.
+
+**Three defects found while building, all by exercising rather than by the type system.** (1) The guarded-action
+**drift guard** — a test asserting every catalog entry is actually enforced on a route — caught a route guarded by an
+unrelated action with no permission behind it, i.e. a settings checkbox that would have silently stopped requiring a
+code; recovery-code regeneration now verifies unconditionally in its handler. (2) A missing code at login returned
+**400, not 401**: a SPA routes 401 to "show this on the sign-in form" and 400 to "my request is malformed", so a
+mistyped code went down the wrong path. (3) The portal's login field is `otp` while Ops uses `code` — that
+inconsistency would have hit the frontend, so the portal now accepts **both** (`code` preferred, `otp` kept so
+existing clients need no change).
+
+**HTTP-verified on booted hosts — 58 checks on Ops, 29 on the portal — with the authenticator codes generated by an
+INDEPENDENT RFC 6238 implementation**, so server and test agree only if both match the spec, which is what actually
+makes a real authenticator work. Proven end to end: the restricted unenrolled session (and `/auth/me` still
+explaining why); Pending granting nothing; a wrong confirm activating nothing; the in-place session upgrade; the
+policy save being itself guarded and forcing its own action back in when omitted; a guarded top-up answering
+`ops.two_factor_required` naming the action, then `two_factor.invalid_code` **without running the handler**, then
+succeeding; a code reused inside its window; ±1 step accepted and ±3 refused; an unguarded read unaffected; an
+unknown action refused with `ops.unknown_guarded_action`; login distinguishing `two_factor.code_required` /
+`two_factor.invalid_code` / `ops.invalid_credentials` as three outcomes; and a recovery code working once, for login
+only. Portal side adds the tenant-scoped reset and a distinct authenticator label.
+
+**Deployment is BREAKING — `docs/ec2-staging.md` §9.** Each host **refuses to start** without its AES key
+(deliberate: never store a secret it cannot protect), so a deploy without that config is a dead box, not a degraded
+one; everyone is forced through setup at first sign-in, so the UIs must ship the setup screen in the same release.
+That section carries key generation, the enrollment-coverage query, the lockout/recovery runbook (including the
+deliberate absence of a back door and the DBA action if every admin is locked out), and the proxy logging rule.
+Docs: `docs/two-factor-authentication.md` (the design, with every decision and its alternatives),
+`backoffice-frontend-integration.md` §3b/§3c + a regenerated §0a route table now carrying a **2FA column** across all
+99 routes, and `merchant-portal-frontend-integration.md` §3b. **Deferred:** WebAuthn/passkeys (the `code` field is the
+seam), per-role or per-amount thresholds ("2FA only above 10,000 USDT" — turns a string match into a rule engine),
+trusted-device remembering (materially weakens login 2FA), merchant-side guarded actions, and revoking a user's live
+sessions on a factor reset (refused at next login, matching how a disabled account already behaves — worth fixing for
+both at once).
 
 
 Every other module in the map is a placeholder in this doc, not yet on disk — scaffold a module

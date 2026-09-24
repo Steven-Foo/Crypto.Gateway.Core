@@ -7,6 +7,8 @@
 
   <ItemGroup>
     <ProjectReference Include="../../Api/MerchantGateway/CryptoPaymentEngine.Api.MerchantGateway/CryptoPaymentEngine.Api.MerchantGateway.csproj" />
+    <!-- For the guarded-action drift guard: the test enumerates the real GuardedActions catalog. -->
+    <ProjectReference Include="../../Api/OperationsApi/CryptoPaymentEngine.Api.OperationsApi/CryptoPaymentEngine.Api.OperationsApi.csproj" />
   </ItemGroup>
 
   <ItemGroup>

@@ -57,9 +57,32 @@ public sealed class MerchantSessionAuthMiddleware(RequestDelegate next)
             }
         }
 
+        // Forced enrollment: an account with no active second factor gets in, but its session may reach only
+        // the routes that let it finish enrolling. Refusing the login outright instead would deadlock —
+        // enrollment happens over an authenticated session, so an account that cannot log in can never
+        // enroll. This is what makes "every portal user is enrolled" a state rather than a policy.
+        if (!result.Value.TwoFactorEnrolled && !IsEnrollmentPath(path))
+        {
+            await Forbid(
+                context,
+                Endpoints.PortalErrorCodes.TwoFactorEnrollmentRequired,
+                "Finish setting up two-factor authentication before using the portal.");
+            return;
+        }
+
         context.Items[PrincipalItem] = result.Value;
         await next(context);
     }
+
+    /// <summary>
+    /// The only routes an unenrolled session may reach. <c>/auth/me</c> and <c>/auth/logout</c> are included
+    /// deliberately: the SPA calls <c>me</c> on load to restore its CSRF token and read
+    /// <c>twoFactorEnrolled</c>, and someone must always be able to sign out of a half-set-up session.
+    /// </summary>
+    private static bool IsEnrollmentPath(string path) =>
+        path.StartsWith("/api/v1/portal/auth/2fa", StringComparison.OrdinalIgnoreCase) ||
+        path.Equals("/api/v1/portal/auth/me", StringComparison.OrdinalIgnoreCase) ||
+        path.Equals("/api/v1/portal/auth/logout", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsUnsafeMethod(string method) =>
         !(HttpMethods.IsGet(method) || HttpMethods.IsHead(method) || HttpMethods.IsOptions(method) || HttpMethods.IsTrace(method));

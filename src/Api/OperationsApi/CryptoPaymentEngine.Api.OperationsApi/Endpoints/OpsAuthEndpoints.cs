@@ -21,9 +21,22 @@ public static class OpsAuthEndpoints
         IHostEnvironment env,
         HttpContext http)
     {
-        var result = await auth.LoginAsync(new LoginCommand(request.Username, request.Password), http.RequestAborted);
+        var result = await auth.LoginAsync(
+            new LoginCommand(request.Username, request.Password, request.Code), http.RequestAborted);
+
         if (result.IsFailure)
-            return OpsResults.Unauthorized(OpsErrorCodes.InvalidCredentials, result.Error!.Message);
+        {
+            // A two-factor failure keeps its OWN code (two_factor.code_required, two_factor.invalid_code,
+            // two_factor.locked_out) rather than collapsing into ops.invalid_credentials. The client has to
+            // tell "your password was wrong, start again" from "your code was wrong, the password was fine"
+            // — the second re-prompts for a code, and flattening them would force a full re-login on every
+            // mistyped digit. It leaks nothing new: the caller already supplied a correct password to reach
+            // this point.
+            var error = result.Error!;
+            return error.Code.StartsWith("two_factor.", StringComparison.Ordinal)
+                ? OpsResults.Fail(error)
+                : OpsResults.Unauthorized(OpsErrorCodes.InvalidCredentials, error.Message);
+        }
 
         // Set the httpOnly session cookie (the UI's cookie mode reads nothing from the body but this). We ALSO
         // return `token` so the UI's interim bearer mode keeps working from one login endpoint (§12) — a client
@@ -41,6 +54,12 @@ public static class OpsAuthEndpoints
                 username = result.Value.Username,
                 role = result.Value.RoleName,
                 permissions = result.Value.Permissions,
+                // False => this session may reach ONLY the enrollment routes. Returned so the SPA can route
+                // straight to the QR screen, rather than discovering the restriction one failed call at a time.
+                twoFactorEnrolled = result.Value.TwoFactorEnrolled,
+                // "RecoveryCode" signs in but cannot authorise a guarded action — worth nudging the user to
+                // re-enroll now rather than letting them find out at the worst possible moment.
+                twoFactorMethod = result.Value.TwoFactorMethod?.ToString(),
             },
             error = (string?)null, errorCode = (string?)null,
         });
@@ -78,6 +97,10 @@ public static class OpsAuthEndpoints
                 role = principal.RoleName,
                 permissions = principal.Permissions,
                 csrfToken = principal.CsrfToken,
+                // Survives a page refresh, which the login response does not — this is where the SPA learns
+                // on load that it must finish enrollment before anything else will answer.
+                twoFactorEnrolled = principal.TwoFactorEnrolled,
+                authenticatorProven = principal.AuthenticatorProven,
             },
             error = (string?)null, errorCode = (string?)null,
         });

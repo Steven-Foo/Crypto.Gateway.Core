@@ -55,17 +55,33 @@ public sealed class MerchantUserSession : Entity<Guid>
             ? []
             : PermissionCodesCsv.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
+    /// <summary>Which factor proved this session at login, or null for a session issued before 2FA existed
+    /// (or by an account still being forced through enrollment). Stored as its name, so adding a method
+    /// later is not a migration.</summary>
+    public MerchantTwoFactorMethod? TwoFactorMethod { get; private set; }
+
+    /// <summary>True when an authenticator app proved this session, rather than a printed fallback.</summary>
+    public bool AuthenticatorProven => TwoFactorMethod == Domain.MerchantTwoFactorMethod.Totp;
+
     public bool IsValid(DateTimeOffset now) => RevokedAt is null && now < ExpiresAt;
 
     public static MerchantUserSession Issue(
         Guid merchantUserId, Guid merchantId, string username, string displayName, string tokenHash, string csrfToken,
-        IReadOnlyCollection<string> permissionCodes, TimeSpan ttl, DateTimeOffset now)
+        IReadOnlyCollection<string> permissionCodes, TimeSpan ttl, DateTimeOffset now,
+        MerchantTwoFactorMethod? twoFactorMethod = null)
     {
         var csv = permissionCodes.Count == 0 ? null : string.Join(',', permissionCodes);
         return new MerchantUserSession(
             Guid.CreateVersion7(), merchantUserId, merchantId, username, displayName, tokenHash, csrfToken, csv,
-            now.Add(ttl), now);
+            now.Add(ttl), now)
+        {
+            TwoFactorMethod = twoFactorMethod,
+        };
     }
+
+    /// <summary>Lifts the enrollment restriction on this session, once its owner has just confirmed
+    /// enrollment — so they land in the portal rather than back on a login form.</summary>
+    public void MarkAuthenticatorProven() => TwoFactorMethod = Domain.MerchantTwoFactorMethod.Totp;
 
     /// <summary>Idempotent — revoking an already-revoked session keeps the original revocation time.</summary>
     public Result Revoke(DateTimeOffset now)
@@ -73,4 +89,14 @@ public sealed class MerchantUserSession : Entity<Guid>
         RevokedAt ??= now;
         return Result.Success();
     }
+}
+
+/// <summary>How a portal session proved its second factor.</summary>
+public enum MerchantTwoFactorMethod
+{
+    /// <summary>An authenticator app code.</summary>
+    Totp = 1,
+
+    /// <summary>A single-use printed fallback. Signs in; nothing more is gated on it in this phase.</summary>
+    RecoveryCode = 2,
 }

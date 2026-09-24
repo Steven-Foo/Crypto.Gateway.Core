@@ -24,21 +24,31 @@ public static class OpsTreasuryEndpoints
         app.MapGet("/api/v1/ops/treasury/hot-pool", HotPoolAsync).RequirePermission(OpsPermissions.Treasury.Manage);
 
         app.MapGet("/api/v1/ops/treasury/cold-wallets", ListColdAsync).RequirePermission(OpsPermissions.Treasury.Manage);
-        app.MapPost("/api/v1/ops/treasury/cold-wallets", RegisterColdAsync).RequirePermission(OpsPermissions.Treasury.Manage);
+        app.MapPost("/api/v1/ops/treasury/cold-wallets", RegisterColdAsync).RequirePermission(OpsPermissions.Treasury.Manage)
+            .RequireTwoFactor(GuardedActions.TreasuryColdWallet);
 
         // The original singular path, kept so screens already built against it keep working. Same handler.
-        app.MapPost("/api/v1/ops/treasury/cold-wallet", RegisterColdAsync).RequirePermission(OpsPermissions.Treasury.Manage);
+        app.MapPost("/api/v1/ops/treasury/cold-wallet", RegisterColdAsync).RequirePermission(OpsPermissions.Treasury.Manage)
+            .RequireTwoFactor(GuardedActions.TreasuryColdWallet);
 
+        // Activate and retire decide WHERE every future sweep lands, so they are guarded like registration.
         app.MapPost("/api/v1/ops/treasury/cold-wallets/{walletId:guid}/activate", ActivateColdAsync)
-            .RequirePermission(OpsPermissions.Treasury.Manage);
+            .RequirePermission(OpsPermissions.Treasury.Manage)
+            .RequireTwoFactor(GuardedActions.TreasuryColdWallet);
         app.MapPost("/api/v1/ops/treasury/cold-wallets/{walletId:guid}/retire", RetireColdAsync)
-            .RequirePermission(OpsPermissions.Treasury.Manage);
+            .RequirePermission(OpsPermissions.Treasury.Manage)
+            .RequireTwoFactor(GuardedActions.TreasuryColdWallet);
+
+        // Re-screening is deliberately NOT guarded: it changes no destination and moves nothing, it only
+        // refreshes a verdict. Making an operator produce a code to look something up is how a control
+        // becomes the thing people work around.
         app.MapPost("/api/v1/ops/treasury/cold-wallets/{walletId:guid}/re-screen", ReScreenColdAsync)
             .RequirePermission(OpsPermissions.Treasury.Manage);
 
         // Records company funds an admin has ALREADY moved into a hot wallet from a company wallet outside
         // platform custody, after on-chain verification. Nothing is sent from here.
-        app.MapPost("/api/v1/ops/treasury/top-up", RecordTopUpAsync).RequirePermission(OpsPermissions.Treasury.Manage);
+        app.MapPost("/api/v1/ops/treasury/top-up", RecordTopUpAsync).RequirePermission(OpsPermissions.Treasury.Manage)
+            .RequireTwoFactor(GuardedActions.TreasuryTopUp);
     }
 
     /// <summary>Lists the hot-pool wallets so the operator can see which one needs a top-up. The signing

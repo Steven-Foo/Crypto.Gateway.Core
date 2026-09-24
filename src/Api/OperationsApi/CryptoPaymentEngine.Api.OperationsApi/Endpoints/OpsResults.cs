@@ -123,6 +123,26 @@ public static class OpsErrorCodes
     public const string PermissionDenied = "ops.permission_denied";
     public const string InvalidCredentials = "ops.invalid_credentials";
 
+    // ── two-factor ──
+    // A guarded action was called without an X-2FA-Code header. The body's `data.action` names what is being
+    // protected, so the prompt can say why. This is the code a client interceptor branches on to open the
+    // dialog and replay the original request.
+    public const string TwoFactorRequired = "ops.two_factor_required";
+
+    // The session has not finished enrolling: it may reach the enrollment routes and nothing else.
+    public const string TwoFactorEnrollmentRequired = "ops.two_factor_enrollment_required";
+
+    // Fail-closed backstop on a guarded action for an account holding no active factor.
+    public const string TwoFactorNotEnrolled = "ops.two_factor_not_enrolled";
+
+    // The session was proved by a single-use recovery code, which signs in but never authorises a guarded
+    // action (§ StaffRecoveryCode).
+    public const string TwoFactorRecoveryNotAccepted = "ops.two_factor_recovery_not_accepted";
+
+    // A saved policy named an action this host does not enforce — refused, because a checkbox that guards
+    // nothing reads as protection that is not there.
+    public const string UnknownGuardedAction = "ops.unknown_guarded_action";
+
     // ── request validation ──
     public const string InvalidChain = "ops.invalid_chain";
     public const string InvalidStatus = "ops.invalid_status";

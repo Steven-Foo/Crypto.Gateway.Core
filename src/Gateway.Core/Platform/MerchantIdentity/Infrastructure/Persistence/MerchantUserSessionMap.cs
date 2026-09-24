@@ -22,6 +22,10 @@ public sealed class MerchantUserSessionMap : IEntityTypeConfiguration<MerchantUs
         builder.Property(s => s.CsrfToken).IsUnicode(false).HasMaxLength(128).IsRequired();
         builder.Property(s => s.PermissionCodesCsv).IsUnicode(false).HasMaxLength(2048);
 
+        // Nullable and stored as its name, so the migration is additive and live sessions survive it.
+        builder.Property(s => s.TwoFactorMethod).HasConversion<string>().IsUnicode(false).HasMaxLength(16);
+
+        builder.Ignore(s => s.AuthenticatorProven);
         builder.Ignore(s => s.PermissionCodes);
         builder.Ignore(s => s.DomainEvents);
 

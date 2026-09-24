@@ -35,6 +35,7 @@ public sealed class MerchantAuthServiceTests : IAsyncLifetime
         new(new MerchantUserRepository(context), new MerchantUserSessionRepository(context),
             new MerchantRoleRepository(context), merchants ?? new FakeMerchants(canAccessPortal: true),
             new MerchantPasswordHasher(), new MerchantSessionTokenGenerator(),
+            TwoFactor(context),
             Options.Create(new MerchantIdentityOptions { SessionTtlHours = 8 }), clock ?? TimeProvider.System);
 
     /// <summary>Every merchant is found and accessible by default — <c>canAccessPortal: false</c> is what the
@@ -56,6 +57,19 @@ public sealed class MerchantAuthServiceTests : IAsyncLifetime
         public Task<IReadOnlyList<Guid>> SearchIdsByNameAsync(string nameContains, CancellationToken cancellationToken = default) =>
             Task.FromResult<IReadOnlyList<Guid>>([]);
     }
+
+    /// <summary>The real service over the same context. These tests exercise accounts that have NOT
+    /// enrolled, which is the forced-enrollment path: login succeeds and issues a restricted session.</summary>
+    private static MerchantTwoFactorService TwoFactor(MerchantIdentityDbContext context) =>
+        new(new MerchantTwoFactorRepository(context),
+            new AesGcmMerchantTwoFactorSecretCipher(Options.Create(new MerchantTwoFactorSecretOptions
+            {
+                CurrentKeyVersion = 1,
+                Keys = { [1] = Convert.ToBase64String(Enumerable.Repeat((byte)0x2A, 32).ToArray()) },
+            })),
+            Options.Create(new MerchantIdentityOptions()),
+            TimeProvider.System,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<MerchantTwoFactorService>.Instance);
 
     private static async Task<Guid> SeedRoleAsync(Guid merchantId, string name, params string[] permissions)
     {

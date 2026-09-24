@@ -266,3 +266,93 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [merchantidentity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260924090557_AddMerchantUserTwoFactor'
+)
+BEGIN
+    ALTER TABLE [merchantidentity].[MerchantUserSession] ADD [TwoFactorMethod] varchar(16) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchantidentity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260924090557_AddMerchantUserTwoFactor'
+)
+BEGIN
+    CREATE TABLE [merchantidentity].[MerchantUserRecoveryCode] (
+        [Id] uniqueidentifier NOT NULL,
+        [MerchantUserId] uniqueidentifier NOT NULL,
+        [MerchantId] uniqueidentifier NOT NULL,
+        [CodeHash] varchar(256) NOT NULL,
+        [CreatedAt] datetimeoffset NOT NULL,
+        [UsedAt] datetimeoffset NULL,
+        [Seq] bigint NOT NULL IDENTITY,
+        CONSTRAINT [PK_MerchantUserRecoveryCode] PRIMARY KEY NONCLUSTERED ([Id])
+    );
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchantidentity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260924090557_AddMerchantUserTwoFactor'
+)
+BEGIN
+    CREATE TABLE [merchantidentity].[MerchantUserTwoFactor] (
+        [Id] uniqueidentifier NOT NULL,
+        [MerchantUserId] uniqueidentifier NOT NULL,
+        [MerchantId] uniqueidentifier NOT NULL,
+        [SecretCiphertext] varchar(512) NOT NULL,
+        [Status] varchar(16) NOT NULL,
+        [CreatedAt] datetimeoffset NOT NULL,
+        [EnrolledAt] datetimeoffset NULL,
+        [FailedAttempts] int NOT NULL,
+        [LockedUntil] datetimeoffset NULL,
+        [RowVersion] rowversion NULL,
+        CONSTRAINT [PK_MerchantUserTwoFactor] PRIMARY KEY ([Id])
+    );
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchantidentity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260924090557_AddMerchantUserTwoFactor'
+)
+BEGIN
+    CREATE INDEX [IX_MerchantUserRecoveryCode_MerchantUserId_UsedAt] ON [merchantidentity].[MerchantUserRecoveryCode] ([MerchantUserId], [UsedAt]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchantidentity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260924090557_AddMerchantUserTwoFactor'
+)
+BEGIN
+    CREATE UNIQUE CLUSTERED INDEX [IX_MerchantUserRecoveryCode_Seq] ON [merchantidentity].[MerchantUserRecoveryCode] ([Seq]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchantidentity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260924090557_AddMerchantUserTwoFactor'
+)
+BEGIN
+    CREATE INDEX [IX_MerchantUserTwoFactor_MerchantId_MerchantUserId] ON [merchantidentity].[MerchantUserTwoFactor] ([MerchantId], [MerchantUserId]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchantidentity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260924090557_AddMerchantUserTwoFactor'
+)
+BEGIN
+    CREATE UNIQUE INDEX [IX_MerchantUserTwoFactor_MerchantUserId] ON [merchantidentity].[MerchantUserTwoFactor] ([MerchantUserId]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchantidentity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260924090557_AddMerchantUserTwoFactor'
+)
+BEGIN
+    INSERT INTO [merchantidentity].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260924090557_AddMerchantUserTwoFactor', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

@@ -17,8 +17,10 @@ public static class OpsWithdrawalApprovalEndpoints
 {
     public static void MapOpsWithdrawalApprovalApi(this IEndpointRouteBuilder app)
     {
-        app.MapPost("/api/v1/ops/withdrawals/{withdrawalId:guid}/approve", ApproveAsync).RequirePermission(OpsPermissions.Withdrawals.Approve);
-        app.MapPost("/api/v1/ops/withdrawals/{withdrawalId:guid}/reject", RejectAsync).RequirePermission(OpsPermissions.Withdrawals.Approve);
+        app.MapPost("/api/v1/ops/withdrawals/{withdrawalId:guid}/approve", ApproveAsync).RequirePermission(OpsPermissions.Withdrawals.Approve)
+            .RequireTwoFactor(GuardedActions.WithdrawalApprove);
+        app.MapPost("/api/v1/ops/withdrawals/{withdrawalId:guid}/reject", RejectAsync).RequirePermission(OpsPermissions.Withdrawals.Approve)
+            .RequireTwoFactor(GuardedActions.WithdrawalApprove);
     }
 
     private static async Task<IResult> ApproveAsync(

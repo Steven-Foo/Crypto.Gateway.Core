@@ -39,8 +39,10 @@ public static class OpsMerchantEndpoints
         app.MapPut("/api/v1/ops/merchants/{id:guid}/profile", UpdateProfileAsync).RequirePermission(OpsPermissions.Merchants.Manage);
         app.MapPatch("/api/v1/ops/merchants/{id:guid}/status", SetStatusAsync).RequirePermission(OpsPermissions.Merchants.Manage);
         app.MapPost("/api/v1/ops/merchants/{id:guid}/close", CloseMerchantAsync).RequirePermission(OpsPermissions.Merchants.Manage);
-        app.MapPost("/api/v1/ops/merchants/{id:guid}/regenerate-key", RegenerateKeyAsync).RequirePermission(OpsPermissions.Merchants.RotateKey);
-        app.MapPut("/api/v1/ops/merchants/{id:guid}/allowed-ips", UpdateAllowedIpsAsync).RequirePermission(OpsPermissions.Merchants.Manage);
+        app.MapPost("/api/v1/ops/merchants/{id:guid}/regenerate-key", RegenerateKeyAsync).RequirePermission(OpsPermissions.Merchants.RotateKey)
+            .RequireTwoFactor(GuardedActions.MerchantCredential);
+        app.MapPut("/api/v1/ops/merchants/{id:guid}/allowed-ips", UpdateAllowedIpsAsync).RequirePermission(OpsPermissions.Merchants.Manage)
+            .RequireTwoFactor(GuardedActions.MerchantAllowedIps);
     }
 
     private static async Task<IResult> ListMerchantsAsync(

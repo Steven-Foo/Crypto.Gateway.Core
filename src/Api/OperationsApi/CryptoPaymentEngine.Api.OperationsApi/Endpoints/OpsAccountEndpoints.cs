@@ -18,10 +18,14 @@ public static class OpsAccountEndpoints
         app.MapGet("/api/v1/ops/accounts", ListAsync).RequirePermission(OpsPermissions.Accounts.View);
         app.MapGet("/api/v1/ops/accounts/{id:guid}", GetAsync).RequirePermission(OpsPermissions.Accounts.View);
 
-        app.MapPost("/api/v1/ops/accounts", CreateAsync).RequirePermission(OpsPermissions.Accounts.Manage);
-        app.MapPatch("/api/v1/ops/accounts/{id:guid}/status", SetStatusAsync).RequirePermission(OpsPermissions.Accounts.Manage);
-        app.MapPatch("/api/v1/ops/accounts/{id:guid}/role", ChangeRoleAsync).RequirePermission(OpsPermissions.Accounts.Manage);
-        app.MapPost("/api/v1/ops/accounts/{id:guid}/reset-password", ResetPasswordAsync).RequirePermission(OpsPermissions.Accounts.Manage);
+        app.MapPost("/api/v1/ops/accounts", CreateAsync).RequirePermission(OpsPermissions.Accounts.Manage)
+            .RequireTwoFactor(GuardedActions.AccountsManage);
+        app.MapPatch("/api/v1/ops/accounts/{id:guid}/status", SetStatusAsync).RequirePermission(OpsPermissions.Accounts.Manage)
+            .RequireTwoFactor(GuardedActions.AccountsManage);
+        app.MapPatch("/api/v1/ops/accounts/{id:guid}/role", ChangeRoleAsync).RequirePermission(OpsPermissions.Accounts.Manage)
+            .RequireTwoFactor(GuardedActions.AccountsManage);
+        app.MapPost("/api/v1/ops/accounts/{id:guid}/reset-password", ResetPasswordAsync).RequirePermission(OpsPermissions.Accounts.Manage)
+            .RequireTwoFactor(GuardedActions.AccountsManage);
     }
 
     private static async Task<IResult> ListAsync(IStaffAccountService accounts, HttpContext http, int page = 1, int pageSize = 50)

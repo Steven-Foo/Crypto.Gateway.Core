@@ -62,9 +62,33 @@ public sealed class StaffBearerAuthMiddleware(RequestDelegate next)
             }
         }
 
+        // Forced enrollment: an account with no active second factor gets in, but its session may reach only
+        // the routes that let it finish enrolling. Refusing the login outright instead would deadlock —
+        // enrollment happens over an authenticated session, so an account that cannot log in can never
+        // enroll. This is what makes "every staff member is enrolled" a state rather than a policy someone
+        // has to remember.
+        if (!result.Value.TwoFactorEnrolled && !IsEnrollmentPath(path))
+        {
+            await Forbid(
+                context,
+                "Finish setting up two-factor authentication before using the back office.",
+                OpsErrorCodes.TwoFactorEnrollmentRequired);
+            return;
+        }
+
         context.Items[PrincipalItem] = result.Value;
         await next(context);
     }
+
+    /// <summary>
+    /// The only routes an unenrolled session may reach. <c>/auth/me</c> and <c>/auth/logout</c> are included
+    /// deliberately: the SPA calls <c>me</c> on load to restore its CSRF token and read
+    /// <c>twoFactorEnrolled</c>, and someone must always be able to sign out of a half-set-up session.
+    /// </summary>
+    private static bool IsEnrollmentPath(string path) =>
+        path.StartsWith("/api/v1/ops/auth/2fa", StringComparison.OrdinalIgnoreCase) ||
+        path.Equals("/api/v1/ops/auth/me", StringComparison.OrdinalIgnoreCase) ||
+        path.Equals("/api/v1/ops/auth/logout", StringComparison.OrdinalIgnoreCase);
 
     private static bool IsUnsafeMethod(string method) =>
         !(HttpMethods.IsGet(method) || HttpMethods.IsHead(method) || HttpMethods.IsOptions(method) || HttpMethods.IsTrace(method));
@@ -88,12 +112,12 @@ public sealed class StaffBearerAuthMiddleware(RequestDelegate next)
             new { isSuccess = false, error = message, errorCode = OpsErrorCodes.Unauthenticated });
     }
 
-    private static Task Forbid(HttpContext context, string message)
+    /// <summary>403 with an explicit code. Defaults to the CSRF code because that was this method's only
+    /// caller before forced enrollment; permission denials still go through <c>StaffAuthorization</c>.</summary>
+    private static Task Forbid(HttpContext context, string message, string? errorCode = null)
     {
         context.Response.StatusCode = StatusCodes.Status403Forbidden;
-        // Forbid is only reached on a CSRF failure here (permission denials go through StaffAuthorization),
-        // so the code is specific enough for a client to retry with a refreshed token rather than re-login.
         return context.Response.WriteAsJsonAsync(
-            new { isSuccess = false, error = message, errorCode = OpsErrorCodes.CsrfInvalid });
+            new { isSuccess = false, error = message, errorCode = errorCode ?? OpsErrorCodes.CsrfInvalid });
     }
 }

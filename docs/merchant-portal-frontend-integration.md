@@ -103,7 +103,7 @@ it you get **403**.
 ### `POST /api/v1/portal/auth/login` — the only unauthenticated endpoint
 
 ```json
-{ "username": "merchant001", "password": "..." }
+{ "username": "merchant001", "password": "...", "code": "418392" }
 ```
 
 ```json
@@ -117,13 +117,30 @@ it you get **403**.
     "username": "merchant001",
     "displayName": "Dev Merchant Ops",
     "permissions": ["*"],
-    "mustChangePassword": false
+    "mustChangePassword": false,
+    "twoFactorEnrolled": true,
+    "twoFactorMethod": "Totp"
   }
 }
 ```
 
-> The login body accepts an **`otp`** field. **It is currently ignored — 2FA is not implemented anywhere in
-> this backend.** Do not build a UI that implies OTP protects anything.
+> **The `otp` field now works.** It was accepted and ignored before two-factor existed, which earlier versions
+> of this document recorded as a gap. It is still accepted under that name so a client already sending it needs
+> no change; **`code` is the preferred spelling** because the Ops host calls it that, and one name across both
+> hosts is worth more than tidiness. Send either — `code` wins if both are present.
+
+**Two-factor is mandatory for every portal user — read §3b before building the login screen.** The failure
+codes are distinct and drive different UI:
+
+| `errorCode` | Status | What the UI does |
+| --- | --- | --- |
+| `merchantidentity.invalid_credentials` | 401 | "Wrong username or password." Clear the password. |
+| `portal_two_factor.code_required` | 401 | Enrolled, no code sent. Show the code field and resubmit. |
+| `portal_two_factor.invalid_code` | 401 | The password was fine — keep it, clear only the code. |
+| `portal_two_factor.locked_out` | 401 | Too many wrong codes. Wait ~15 minutes. |
+
+`twoFactorEnrolled: false` means the user has not set up an authenticator, and **the session they just
+received can reach nothing but the enrollment endpoints** — route straight to the QR screen (§3b).
 
 **Two merchant-level states affect login, and they're deliberately different — don't conflate them:**
 - **Frozen** (an admin risk-hold) does **not** block portal login. A frozen merchant's staff can still sign in
@@ -153,8 +170,56 @@ is true. Show the change-password step, but do not treat it as enforcement.
 Revokes the session server-side and clears the cookie. Safe to call without a valid session.
 
 ### `GET /api/v1/portal/auth/me`
-Returns `merchantId`, `merchantUserId`, `username`, `displayName`, `permissions`, `csrfToken`. **Call this on
-app boot** to restore session state and re-obtain the CSRF token.
+Returns `merchantId`, `merchantUserId`, `username`, `displayName`, `permissions`, `csrfToken` and
+`twoFactorEnrolled`. **Call this on app boot** to restore session state, re-obtain the CSRF token, and learn
+whether the user still has to finish two-factor setup — the login response does not survive a page refresh,
+this does.
+
+---
+
+## 3b. Two-factor authentication — every portal user enrols
+
+**Mandatory, and enforced as a state rather than a policy.** A user with no active factor can sign in, but
+the session they get **can only reach the enrollment endpoints**; everything else returns
+**403 `portal.two_factor_enrollment_required`**.
+
+Any TOTP app works — Google Authenticator, Authy, 1Password, Microsoft Authenticator all read the same QR.
+
+**This phase is login only.** Unlike the back office, the portal has **no per-action code prompts**: a
+merchant user proves themselves once, at sign-in, and nothing else asks again. There is no guarded-action
+policy on this host and nothing sends an `X-2FA-Code` header.
+
+### The flow
+
+```
+POST /auth/login  { username, password }     -> 200, twoFactorEnrolled: false   (restricted session)
+POST /auth/2fa/enroll                        -> 200 { provisioningUri, secret }
+     render provisioningUri as a QR IN THE BROWSER; show `secret` for manual entry
+POST /auth/2fa/enroll/confirm  { code }      -> 200 { enrolled: true, recoveryCodes: [...10] }
+     the CURRENT session is upgraded in place — no re-login. Continue into the portal.
+```
+
+| Route | Gate | Notes |
+| --- | --- | --- |
+| `GET /api/v1/portal/auth/2fa/status` | any session | `{ enrolled, status, enrolledAt, recoveryCodesRemaining, lockedOut }`. `status` is `Pending` / `Active` / `Disabled`; **`Pending` grants nothing**. |
+| `POST /api/v1/portal/auth/2fa/enroll` | any session | Returns `provisioningUri` + `secret` **once**. Re-callable while unfinished (issues a fresh secret); **409 `portal_two_factor.already_enrolled`** once active. |
+| `POST /api/v1/portal/auth/2fa/enroll/confirm` | any session | `{ code }`. Returns the 10 recovery codes **once**. |
+| `POST /api/v1/portal/auth/2fa/recovery-codes` | any session | `{ code }` — an authenticator code is **always** required here. Replaces the set and invalidates the previous ten immediately. |
+| `POST /api/v1/portal/accounts/{id}/2fa/reset` | `portal.accounts.manage` | A merchant admin recovering one of their **own** users' lost devices, without involving platform staff. Tenant-scoped: another merchant's id reads as not found. |
+
+**Rules that affect your UI**
+
+- **Render the QR client-side** from `provisioningUri`. There is no server-rendered QR image.
+- **The secret and the recovery codes are each shown exactly once.** Nothing returns them again. Force an
+  "I have saved these" acknowledgement before navigating away.
+- **Re-enrolling while active is refused** (`409`). Re-scanning onto a new device from a live session is how
+  an account gets taken over; recovery goes through a recovery code or an admin reset, both of which are
+  recorded in the activity log.
+- A **recovery code** is accepted in the login `code` field, is **single-use**, and signs the user in. After
+  a recovery-code sign-in (`twoFactorMethod: "RecoveryCode"`), prompt them to reset and re-enrol.
+- After ~10 consecutive wrong codes the factor locks for 15 minutes.
+- The authenticator entry is labelled for the **merchant** issuer, deliberately distinct from the staff one,
+  so someone holding both logins can tell the two entries apart.
 
 ---
 
@@ -602,13 +667,13 @@ Read-only — nothing exposes a way to edit or delete an entry.
 
 | Gap | Status |
 |---|---|
-| **2FA / OTP** | Not implemented anywhere in the backend. The login `otp` field is accepted and ignored. |
+| **2FA / OTP** | **Done (2026-09-23)** — mandatory enrollment + a code at login (§3b). The `otp` field now works; `code` is the preferred name. **Per-action code prompts are deliberately NOT on this host** — that is the back office's model, and bringing it here (payout approval being the obvious first candidate) is its own piece of work. |
 | **`errorCode` on failures** | **Done** — every response carries one, `portal.*` for host validation and `<module>.*` for business rules (§2). |
 | **Dashboard / aggregates** | No portal endpoint. The Ops dashboard is platform-wide and is not exposed here. |
 | **Paging** | **Done.** Transaction history and `/addresses` are paged. Accounts and roles return in full — bounded by headcount, so paging them would add UI work for no benefit. |
 | **Merchant notification when a payout awaits approval** | **Done** — a `pending_merchant_approval` webhook fires for portal-submitted payouts (§8.4). Merchants with no registered callback URL still need to poll. |
 | **Portal audit log** | **Done** — `GET /portal/activity` (§9.5). |
-| **Revoking a disabled account's live sessions** | Refused at next login only. |
+| **Revoking a disabled account's live sessions** | Refused at next login only. The same applies to a two-factor reset: the user's existing session keeps working until it expires. |
 | **Editing the settlement wallet** | Deliberately staff-only, permanently. Not a gap — a security control. |
 
 ---

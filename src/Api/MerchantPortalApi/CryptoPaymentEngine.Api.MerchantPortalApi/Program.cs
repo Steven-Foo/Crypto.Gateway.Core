@@ -118,5 +118,6 @@ app.MapPortalCredentialApi();
 app.MapPortalMoneyOutApi();
 app.MapPortalTopUpApi();
 app.MapPortalActivityApi();
+app.MapPortalTwoFactorApi();
 
 app.Run();

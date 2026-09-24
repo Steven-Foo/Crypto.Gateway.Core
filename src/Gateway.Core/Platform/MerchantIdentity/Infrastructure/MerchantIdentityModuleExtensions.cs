@@ -39,6 +39,18 @@ public static class MerchantIdentityModuleExtensions
         services.AddScoped<IMerchantRoleService, MerchantRoleService>();
         services.AddScoped<IMerchantAccountService, MerchantAccountService>();
 
+        // Two-factor: registered unconditionally, with no enable switch. Gating registration on
+        // configuration would let an enrolled account silently stop being asked for a code after a settings
+        // change, and a control that can be turned off by omission is one nobody can rely on.
+        services.Configure<MerchantTwoFactorSecretOptions>(
+            configuration.GetSection(MerchantTwoFactorSecretOptions.SectionName));
+        services.AddScoped<IMerchantTwoFactorRepository, MerchantTwoFactorRepository>();
+
+        // Singleton: it decodes and validates its keys once, at composition, so a host with a missing or
+        // malformed key refuses to start rather than failing mid-enrollment.
+        services.AddSingleton<IMerchantTwoFactorSecretCipher, AesGcmMerchantTwoFactorSecretCipher>();
+        services.AddScoped<IMerchantTwoFactorService, MerchantTwoFactorService>();
+
         return services;
     }
 

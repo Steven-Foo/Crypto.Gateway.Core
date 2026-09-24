@@ -23,8 +23,10 @@ public static class OpsMerchantBalanceEndpoints
 {
     public static void MapOpsMerchantBalanceApi(this IEndpointRouteBuilder app)
     {
-        app.MapPost("/api/v1/ops/merchants/{id:guid}/balance/credit", CreditAsync).RequirePermission(OpsPermissions.Balances.Adjust);
-        app.MapPost("/api/v1/ops/merchants/{id:guid}/balance/debit", DebitAsync).RequirePermission(OpsPermissions.Balances.Adjust);
+        app.MapPost("/api/v1/ops/merchants/{id:guid}/balance/credit", CreditAsync).RequirePermission(OpsPermissions.Balances.Adjust)
+            .RequireTwoFactor(GuardedActions.BalanceAdjust);
+        app.MapPost("/api/v1/ops/merchants/{id:guid}/balance/debit", DebitAsync).RequirePermission(OpsPermissions.Balances.Adjust)
+            .RequireTwoFactor(GuardedActions.BalanceAdjust);
         app.MapGet("/api/v1/ops/merchants/{id:guid}/balance/history", HistoryAsync).RequirePermission(OpsPermissions.Merchants.View);
     }
 

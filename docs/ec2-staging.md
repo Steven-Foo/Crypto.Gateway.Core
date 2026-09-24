@@ -358,3 +358,121 @@ runs as Development, give it the same chain settings as the gateway, in its `app
 
 Before this build, top-up recording could not work at all under Staging or Production on the Ops host: no
 verifier was registered outside its Development block.
+
+---
+
+## 9. Two-factor authentication (2026-09-23) — a breaking deploy, plan it
+
+Two-factor is **mandatory** for every Ops staff account and every merchant-portal user. This build changes
+how both hosts start and how everyone signs in. Read this before deploying it.
+
+### 9.1 Each host refuses to start without an encryption key
+
+TOTP secrets are encrypted at rest (AES-256-GCM). A host with no configured key **throws at startup** rather
+than storing a secret it cannot protect — deliberate, but it means a deploy without this config is a dead
+box, not a degraded one.
+
+Generate one key per host (they must differ — one compromise should not unlock both platform staff and every
+merchant's users):
+
+```powershell
+# 32 random bytes, base64 — run twice, once per host.
+[Convert]::ToBase64String((1..32 | ForEach-Object { Get-Random -Maximum 256 } | ForEach-Object { [byte]$_ }))
+```
+
+For anything beyond a throwaway box prefer a cryptographic source:
+
+```powershell
+$b = [byte[]]::new(32); [System.Security.Cryptography.RandomNumberGenerator]::Fill($b); [Convert]::ToBase64String($b)
+```
+
+`OperationsApi\appsettings.Local.json`:
+
+```json
+"Identity": {
+  "TwoFactor": {
+    "Issuer": "CryptoPaymentEngine",
+    "Secrets": { "CurrentKeyVersion": 1, "Keys": { "1": "<base64 32 bytes>" } }
+  }
+}
+```
+
+`MerchantPortalApi\appsettings.Local.json`:
+
+```json
+"MerchantIdentity": {
+  "TwoFactorIssuer": "CryptoPaymentEngine Merchant",
+  "TwoFactor": {
+    "Secrets": { "CurrentKeyVersion": 1, "Keys": { "1": "<a DIFFERENT base64 32 bytes>" } }
+  }
+}
+```
+
+**Back these keys up before anyone enrols.** Losing a key makes every enrolled secret on that host
+undecryptable, and every user has to re-enrol. The key rotates without re-encryption — the version travels
+inside each stored blob — so add a `"2"` and bump `CurrentKeyVersion` when rotating, and keep `"1"` until
+every secret has been re-written.
+
+`Issuer` is the label an authenticator shows. Changing it later only renames *new* entries; anyone already
+enrolled keeps whatever they scanned.
+
+### 9.2 Everyone is forced through enrollment on first sign-in after the deploy
+
+There is no grace period and no exemption. An account with no active factor can sign in, but its session
+reaches **only** the enrollment endpoints; everything else answers
+`403 ops.two_factor_enrollment_required` (portal: `portal.two_factor_enrollment_required`).
+
+Consequences to plan for:
+
+- **Tell staff before the deploy**, and make sure they have an authenticator app installed. Google
+  Authenticator, Authy, 1Password and Microsoft Authenticator all work.
+- **The admin-portal and merchant-portal UIs must ship the setup screen in the same release.** Without it,
+  a user signs in and every subsequent call 403s with nothing on screen explaining why.
+- Each user is shown **ten recovery codes exactly once** at the end of setup. They are the only way back in
+  from a lost phone short of an admin reset. Say so plainly on the screen.
+
+### 9.3 Check who is enrolled
+
+```sql
+SELECT u.Username,
+       CASE WHEN f.Status = 'Active' THEN 'enrolled' ELSE ISNULL(f.Status, 'never started') END AS TwoFactor,
+       f.EnrolledAt
+FROM [identity].[StaffUser] u
+LEFT JOIN [identity].[StaffTwoFactor] f ON f.StaffUserId = u.Id
+WHERE u.Status = 'Active'
+ORDER BY TwoFactor, u.Username;
+```
+
+The portal equivalent uses `merchantidentity.MerchantUser` / `merchantidentity.MerchantUserTwoFactor`.
+
+### 9.4 Recovering a locked-out person
+
+- **Lost phone, has recovery codes:** they sign in with one in the code field (single-use), then re-enrol.
+- **Lost phone, no codes left:** another admin calls `POST /ops/accounts/{id}/2fa/reset` (needs
+  `ops.accounts.manage` *and* their own code). The account is unenrolled and set up again at next sign-in.
+  A merchant admin can do the same for their own users via `POST /portal/accounts/{id}/2fa/reset`.
+- **Too many wrong codes:** the factor locks for 15 minutes after ~10 consecutive failures. Usually this is
+  a phone whose clock has drifted — only ±30 seconds of skew is accepted. Check the device's time setting
+  before resetting anything.
+- **If every admin is locked out at once**, there is no back door by design. Recovery is a DBA action:
+  delete the row from `identity.StaffTwoFactor` for one account, which forces it back through enrollment.
+  Treat that as an incident and record it.
+
+### 9.5 Guarded actions
+
+Once staff are enrolled, an admin picks which actions additionally demand a **fresh code per use**, in
+Settings → Guarded actions (`PUT /ops/two-factor/policy`). Platform-wide: every staff member is then
+prompted for that action.
+
+Nothing is guarded by default except the policy screen itself, which is **always** guarded and cannot be
+switched off — otherwise anyone on a stolen admin session could untick everything. Start with the
+money-touching ones: top-ups, balance adjustments, settlement wallets, payout approval.
+
+The merchant portal has **no** guarded actions in this phase — its users prove themselves at sign-in only.
+
+### 9.6 Do not log the code
+
+A valid code stays usable for its own 30-second window (codes are verified, not consumed), so one sitting in
+a log is usable by whoever can read that log. Neither host logs request headers, but **if you put IIS ARR or
+any reverse proxy in front, exclude the `X-2FA-Code` header from its access log**, alongside `Authorization`
+and `Cookie`.

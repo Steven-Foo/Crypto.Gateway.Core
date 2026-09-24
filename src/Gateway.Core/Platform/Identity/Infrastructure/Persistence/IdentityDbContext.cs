@@ -13,6 +13,9 @@ public sealed class IdentityDbContext(DbContextOptions<IdentityDbContext> option
     public DbSet<StaffUser> StaffUsers => Set<StaffUser>();
     public DbSet<StaffSession> StaffSessions => Set<StaffSession>();
     public DbSet<Role> Roles => Set<Role>();
+    public DbSet<StaffTwoFactor> StaffTwoFactors => Set<StaffTwoFactor>();
+    public DbSet<StaffRecoveryCode> StaffRecoveryCodes => Set<StaffRecoveryCode>();
+    public DbSet<TwoFactorPolicyVersion> TwoFactorPolicyVersions => Set<TwoFactorPolicyVersion>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -20,5 +23,8 @@ public sealed class IdentityDbContext(DbContextOptions<IdentityDbContext> option
         modelBuilder.ApplyConfiguration(new StaffUserMap());
         modelBuilder.ApplyConfiguration(new StaffSessionMap());
         modelBuilder.ApplyConfiguration(new RoleMap());
+        modelBuilder.ApplyConfiguration(new StaffTwoFactorMap());
+        modelBuilder.ApplyConfiguration(new StaffRecoveryCodeMap());
+        modelBuilder.ApplyConfiguration(new TwoFactorPolicyVersionMap());
     }
 }

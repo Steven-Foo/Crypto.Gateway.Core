@@ -56,6 +56,46 @@ namespace CryptoPaymentEngine.Gateway.Core.Platform.Identity.Infrastructure.Pers
                     b.ToTable("Role", "identity");
                 });
 
+            modelBuilder.Entity("CryptoPaymentEngine.Gateway.Core.Platform.Identity.Domain.StaffRecoveryCode", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("CodeHash")
+                        .IsRequired()
+                        .HasMaxLength(256)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(256)");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<long>("Seq")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Seq"));
+
+                    b.Property<Guid>("StaffUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset?>("UsedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.HasKey("Id");
+
+                    SqlServerKeyBuilderExtensions.IsClustered(b.HasKey("Id"), false);
+
+                    b.HasIndex("Seq")
+                        .IsUnique();
+
+                    SqlServerIndexBuilderExtensions.IsClustered(b.HasIndex("Seq"));
+
+                    b.HasIndex("StaffUserId", "UsedAt");
+
+                    b.ToTable("StaffRecoveryCode", "identity");
+                });
+
             modelBuilder.Entity("CryptoPaymentEngine.Gateway.Core.Platform.Identity.Domain.StaffSession", b =>
                 {
                     b.Property<Guid>("Id")
@@ -104,6 +144,11 @@ namespace CryptoPaymentEngine.Gateway.Core.Platform.Identity.Infrastructure.Pers
                         .IsUnicode(false)
                         .HasColumnType("varchar(128)");
 
+                    b.Property<string>("TwoFactorMethod")
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
                     b.Property<string>("Username")
                         .IsRequired()
                         .HasMaxLength(64)
@@ -124,6 +169,51 @@ namespace CryptoPaymentEngine.Gateway.Core.Platform.Identity.Infrastructure.Pers
                         .IsUnique();
 
                     b.ToTable("StaffSession", "identity");
+                });
+
+            modelBuilder.Entity("CryptoPaymentEngine.Gateway.Core.Platform.Identity.Domain.StaffTwoFactor", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<DateTimeOffset>("CreatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<DateTimeOffset?>("EnrolledAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<int>("FailedAttempts")
+                        .HasColumnType("int");
+
+                    b.Property<DateTimeOffset?>("LockedUntil")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<byte[]>("RowVersion")
+                        .IsConcurrencyToken()
+                        .ValueGeneratedOnAddOrUpdate()
+                        .HasColumnType("rowversion");
+
+                    b.Property<string>("SecretCiphertext")
+                        .IsRequired()
+                        .HasMaxLength(512)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(512)");
+
+                    b.Property<Guid>("StaffUserId")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("Status")
+                        .IsRequired()
+                        .HasMaxLength(16)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(16)");
+
+                    b.HasKey("Id");
+
+                    b.HasIndex("StaffUserId")
+                        .IsUnique();
+
+                    b.ToTable("StaffTwoFactor", "identity");
                 });
 
             modelBuilder.Entity("CryptoPaymentEngine.Gateway.Core.Platform.Identity.Domain.StaffUser", b =>
@@ -160,6 +250,49 @@ namespace CryptoPaymentEngine.Gateway.Core.Platform.Identity.Infrastructure.Pers
                         .IsUnique();
 
                     b.ToTable("StaffUser", "identity");
+                });
+
+            modelBuilder.Entity("CryptoPaymentEngine.Gateway.Core.Platform.Identity.Domain.TwoFactorPolicyVersion", b =>
+                {
+                    b.Property<Guid>("Id")
+                        .HasColumnType("uniqueidentifier");
+
+                    b.Property<string>("GuardedActionsCsv")
+                        .IsRequired()
+                        .HasMaxLength(4000)
+                        .IsUnicode(false)
+                        .HasColumnType("varchar(4000)");
+
+                    b.Property<string>("Note")
+                        .HasMaxLength(512)
+                        .HasColumnType("nvarchar(512)");
+
+                    b.Property<long>("Seq")
+                        .ValueGeneratedOnAdd()
+                        .HasColumnType("bigint");
+
+                    SqlServerPropertyBuilderExtensions.UseIdentityColumn(b.Property<long>("Seq"));
+
+                    b.Property<DateTimeOffset>("UpdatedAt")
+                        .HasColumnType("datetimeoffset");
+
+                    b.Property<string>("UpdatedBy")
+                        .IsRequired()
+                        .HasMaxLength(128)
+                        .HasColumnType("nvarchar(128)");
+
+                    b.HasKey("Id");
+
+                    SqlServerKeyBuilderExtensions.IsClustered(b.HasKey("Id"), false);
+
+                    b.HasIndex("Seq")
+                        .IsUnique();
+
+                    SqlServerIndexBuilderExtensions.IsClustered(b.HasIndex("Seq"));
+
+                    b.HasIndex("UpdatedAt");
+
+                    b.ToTable("TwoFactorPolicyVersion", "identity");
                 });
 
             modelBuilder.Entity("CryptoPaymentEngine.Infrastructure.Outbox.OutboxMessage", b =>

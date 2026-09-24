@@ -37,12 +37,16 @@ public static class OpsMerchantPortalAccountEndpoints
 
     public static void MapOpsMerchantPortalAccountApi(this IEndpointRouteBuilder app)
     {
+        // Both writes hand someone access to a merchant's money-out screens, and the generated password comes
+        // back in the response — so they are guardable alongside the other access-granting actions.
         app.MapPost("/api/v1/ops/merchants/{id:guid}/portal-account", CreatePortalAccountAsync)
-            .RequirePermission(OpsPermissions.Merchants.Manage);
+            .RequirePermission(OpsPermissions.Merchants.Manage)
+            .RequireTwoFactor(GuardedActions.MerchantPortalAccount);
         app.MapGet("/api/v1/ops/merchants/{id:guid}/portal-accounts", ListPortalAccountsAsync)
             .RequirePermission(OpsPermissions.Merchants.Manage);
         app.MapPost("/api/v1/ops/merchants/{id:guid}/portal-accounts/{accountId:guid}/reset-password", ResetPortalAccountPasswordAsync)
-            .RequirePermission(OpsPermissions.Merchants.Manage);
+            .RequirePermission(OpsPermissions.Merchants.Manage)
+            .RequireTwoFactor(GuardedActions.MerchantPortalAccount);
     }
 
     /// <summary>Staff see only the merchant's primary/super-admin account here — never its teammates. A

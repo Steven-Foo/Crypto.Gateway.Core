@@ -88,6 +88,11 @@ public static class PortalErrorCodes
     public const string CsrfInvalid = "portal.csrf_invalid";
     public const string PermissionDenied = "portal.permission_denied";
 
+    // The session has not finished enrolling: it may reach the enrollment routes and nothing else. A SPA
+    // must be able to tell this from a permission denial — one means "set up your authenticator", the other
+    // means "ask your admin", and they are completely different screens.
+    public const string TwoFactorEnrollmentRequired = "portal.two_factor_enrollment_required";
+
     // ── request validation ──
     public const string InvalidChain = "portal.invalid_chain";
     public const string InvalidAsset = "portal.invalid_asset";

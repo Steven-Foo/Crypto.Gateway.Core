@@ -21,10 +21,14 @@ public static class OpsRoleEndpoints
 
         app.MapGet("/api/v1/ops/roles", ListAsync).RequirePermission(OpsPermissions.Roles.View);
         app.MapGet("/api/v1/ops/roles/{id:guid}", GetAsync).RequirePermission(OpsPermissions.Roles.View);
-        app.MapPost("/api/v1/ops/roles", CreateAsync).RequirePermission(OpsPermissions.Roles.Manage);
-        app.MapPut("/api/v1/ops/roles/{id:guid}", UpdateDetailsAsync).RequirePermission(OpsPermissions.Roles.Manage);
-        app.MapPut("/api/v1/ops/roles/{id:guid}/permissions", SetPermissionsAsync).RequirePermission(OpsPermissions.Roles.Manage);
-        app.MapDelete("/api/v1/ops/roles/{id:guid}", DeleteAsync).RequirePermission(OpsPermissions.Roles.Manage);
+        app.MapPost("/api/v1/ops/roles", CreateAsync).RequirePermission(OpsPermissions.Roles.Manage)
+            .RequireTwoFactor(GuardedActions.RolesManage);
+        app.MapPut("/api/v1/ops/roles/{id:guid}", UpdateDetailsAsync).RequirePermission(OpsPermissions.Roles.Manage)
+            .RequireTwoFactor(GuardedActions.RolesManage);
+        app.MapPut("/api/v1/ops/roles/{id:guid}/permissions", SetPermissionsAsync).RequirePermission(OpsPermissions.Roles.Manage)
+            .RequireTwoFactor(GuardedActions.RolesManage);
+        app.MapDelete("/api/v1/ops/roles/{id:guid}", DeleteAsync).RequirePermission(OpsPermissions.Roles.Manage)
+            .RequireTwoFactor(GuardedActions.RolesManage);
     }
 
     private static IResult GetPermissionCatalog() =>

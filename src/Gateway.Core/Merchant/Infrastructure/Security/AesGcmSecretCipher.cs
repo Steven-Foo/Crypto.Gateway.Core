@@ -1,27 +1,24 @@
-using System.Buffers.Binary;
-using System.Security.Cryptography;
-using System.Text;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Application.Abstractions;
+using CryptoPaymentEngine.SharedKernel;
 using Microsoft.Extensions.Options;
 
 namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Security;
 
 /// <summary>
-/// AES-256-GCM at-rest protection for merchant signing secrets. This is <b>real</b> encryption, not a
-/// dev placeholder: a fresh 96-bit nonce per call makes ciphertexts non-deterministic, and the GCM
-/// authentication tag makes any tampering a decrypt failure rather than a silent wrong value.
+/// Merchant's adapter over <see cref="AesGcmSecretBox"/> — this module's <see cref="ISecretCipher"/> port
+/// bound to the keys in <see cref="SigningSecretOptions"/>.
 ///
-/// The blob is <c>base64( version[4] ‖ nonce[12] ‖ tag[16] ‖ ciphertext )</c>. The version travels with
-/// the data so a rotated key still decrypts old blobs. Key bytes come from <see cref="SigningSecretOptions"/>
-/// today and a KMS-backed source later — the same seam, with no re-encryption or schema change (§10).
+/// <para>The algorithm itself moved to the SharedKernel primitive when the identity modules needed the same
+/// at-rest protection for TOTP secrets and could not reference this module (§4.5). The blob format is
+/// unchanged — <c>base64( version[4] ‖ nonce[12] ‖ tag[16] ‖ ciphertext )</c> — so every secret already
+/// stored still decrypts.</para>
+///
+/// <para>What stays here is the part that is Merchant's: which keys exist, which version is current, and the
+/// configuration section they are read from. Key bytes come from configuration today and a KMS-backed source
+/// later, at this same seam, with no re-encryption or schema change (§10).</para>
 /// </summary>
 public sealed class AesGcmSecretCipher : ISecretCipher
 {
-    private const int VersionSize = 4;
-    private const int NonceSize = 12; // 96-bit GCM nonce (standard)
-    private const int TagSize = 16;   // 128-bit GCM tag (max)
-    private const int KeySize = 32;   // AES-256
-
     private readonly Dictionary<int, byte[]> _keys;
     private readonly int _currentVersion;
 
@@ -38,82 +35,15 @@ public sealed class AesGcmSecretCipher : ISecretCipher
                 $"{SigningSecretOptions.SectionName}: no key configured for CurrentKeyVersion {value.CurrentKeyVersion}.");
         }
 
-        _keys = value.Keys.ToDictionary(k => k.Key, k => DecodeKey(k.Value));
+        _keys = value.Keys.ToDictionary(
+            k => k.Key,
+            k => AesGcmSecretBox.DecodeKey(k.Value, SigningSecretOptions.SectionName));
         _currentVersion = value.CurrentKeyVersion;
     }
 
-    public string Protect(string plaintext)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(plaintext);
+    public string Protect(string plaintext) =>
+        AesGcmSecretBox.Protect(plaintext, _currentVersion, _keys[_currentVersion]);
 
-        var key = _keys[_currentVersion];
-        var plainBytes = Encoding.UTF8.GetBytes(plaintext);
-
-        var blob = new byte[VersionSize + NonceSize + TagSize + plainBytes.Length];
-        BinaryPrimitives.WriteInt32BigEndian(blob, _currentVersion);
-
-        var nonce = blob.AsSpan(VersionSize, NonceSize);
-        RandomNumberGenerator.Fill(nonce);
-        var tag = blob.AsSpan(VersionSize + NonceSize, TagSize);
-        var cipher = blob.AsSpan(VersionSize + NonceSize + TagSize);
-
-        using var aes = new AesGcm(key, TagSize);
-        aes.Encrypt(nonce, plainBytes, cipher, tag);
-
-        return Convert.ToBase64String(blob);
-    }
-
-    public string Unprotect(string protectedBlob)
-    {
-        ArgumentException.ThrowIfNullOrEmpty(protectedBlob);
-
-        byte[] blob;
-        try
-        {
-            blob = Convert.FromBase64String(protectedBlob);
-        }
-        catch (FormatException ex)
-        {
-            throw new CryptographicException("Protected secret is not valid base64.", ex);
-        }
-
-        if (blob.Length < VersionSize + NonceSize + TagSize)
-            throw new CryptographicException("Protected secret is malformed.");
-
-        var version = BinaryPrimitives.ReadInt32BigEndian(blob);
-        if (!_keys.TryGetValue(version, out var key))
-            throw new CryptographicException($"No signing-secret key configured for version {version}.");
-
-        var nonce = blob.AsSpan(VersionSize, NonceSize);
-        var tag = blob.AsSpan(VersionSize + NonceSize, TagSize);
-        var cipher = blob.AsSpan(VersionSize + NonceSize + TagSize);
-        var plain = new byte[cipher.Length];
-
-        // Throws AuthenticationTagMismatchException (a CryptographicException) if tampered.
-        using var aes = new AesGcm(key, TagSize);
-        aes.Decrypt(nonce, cipher, tag, plain);
-
-        return Encoding.UTF8.GetString(plain);
-    }
-
-    private static byte[] DecodeKey(string configured)
-    {
-        if (string.IsNullOrWhiteSpace(configured))
-            throw new InvalidOperationException($"{SigningSecretOptions.SectionName}: key must not be empty.");
-
-        byte[] key;
-        try
-        {
-            key = Convert.FromBase64String(configured);
-        }
-        catch (FormatException)
-        {
-            throw new InvalidOperationException($"{SigningSecretOptions.SectionName}: key must be base64-encoded.");
-        }
-
-        if (key.Length != KeySize)
-            throw new InvalidOperationException($"{SigningSecretOptions.SectionName}: key must be {KeySize} bytes (AES-256).");
-
-        return key;
-    }
+    public string Unprotect(string protectedBlob) =>
+        AesGcmSecretBox.Unprotect(protectedBlob, version => _keys.GetValueOrDefault(version));
 }

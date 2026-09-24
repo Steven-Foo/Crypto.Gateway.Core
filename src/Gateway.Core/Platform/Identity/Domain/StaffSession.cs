@@ -62,6 +62,20 @@ public sealed class StaffSession : Entity<Guid>
     public DateTimeOffset ExpiresAt { get; private set; }
     public DateTimeOffset? RevokedAt { get; private set; }
 
+    /// <summary>
+    /// Which second factor proved this session at login, or null for a session issued before 2FA existed (or
+    /// by an account still being forced through enrollment).
+    ///
+    /// <para>It is recorded because a guarded action must be able to refuse a session that only ever proved
+    /// itself with a recovery code (§ <see cref="StaffRecoveryCode"/>) — a printed fallback signs you in, it
+    /// does not authorise moving money. It is also what the audit trail attributes an action to.</para>
+    /// </summary>
+    public TwoFactorMethod? TwoFactorMethod { get; private set; }
+
+    /// <summary>True when this session was proved by an authenticator app, which is the only method a
+    /// guarded action accepts.</summary>
+    public bool AuthenticatorProven => TwoFactorMethod == Domain.TwoFactorMethod.Totp;
+
     public IReadOnlyList<string> PermissionCodes =>
         string.IsNullOrWhiteSpace(PermissionCodesCsv)
             ? []
@@ -71,12 +85,25 @@ public sealed class StaffSession : Entity<Guid>
 
     public static StaffSession Issue(
         Guid staffUserId, string username, string tokenHash, string csrfToken, Guid roleId, string roleName,
-        IReadOnlyCollection<string> permissionCodes, TimeSpan ttl, DateTimeOffset now)
+        IReadOnlyCollection<string> permissionCodes, TimeSpan ttl, DateTimeOffset now,
+        TwoFactorMethod? twoFactorMethod = null)
     {
         var csv = permissionCodes.Count == 0 ? null : string.Join(',', permissionCodes);
         return new StaffSession(
-            Guid.CreateVersion7(), staffUserId, username, tokenHash, csrfToken, roleId, roleName, csv, now.Add(ttl), now);
+            Guid.CreateVersion7(), staffUserId, username, tokenHash, csrfToken, roleId, roleName, csv, now.Add(ttl), now)
+        {
+            TwoFactorMethod = twoFactorMethod,
+        };
     }
+
+    /// <summary>
+    /// Records that this session has now completed enrollment, upgrading it in place.
+    ///
+    /// <para>The alternative — forcing a re-login after scanning the QR — is worse than it sounds: it lands
+    /// a brand-new user back on a login form immediately after setup, to type a code from an app they have
+    /// only just added, which is exactly where people conclude the setup failed.</para>
+    /// </summary>
+    public void MarkAuthenticatorProven() => TwoFactorMethod = Domain.TwoFactorMethod.Totp;
 
     /// <summary>Idempotent — revoking an already-revoked session keeps the original revocation time.</summary>
     public Result Revoke(DateTimeOffset now)
@@ -84,4 +111,15 @@ public sealed class StaffSession : Entity<Guid>
         RevokedAt ??= now;
         return Result.Success();
     }
+}
+
+/// <summary>How a session proved its second factor. Stored as a string, so adding a method later (WebAuthn,
+/// say) is not a migration.</summary>
+public enum TwoFactorMethod
+{
+    /// <summary>An authenticator app code. The only method a guarded action accepts.</summary>
+    Totp = 1,
+
+    /// <summary>A single-use printed fallback. Good enough to sign in, never enough to move money.</summary>
+    RecoveryCode = 2,
 }

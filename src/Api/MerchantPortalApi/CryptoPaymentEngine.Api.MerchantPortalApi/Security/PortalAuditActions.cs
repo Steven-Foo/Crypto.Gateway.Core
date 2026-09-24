@@ -32,4 +32,9 @@ public static class PortalAuditActions
 
     public const string PayoutApproved = "portal.payout.approved";
     public const string PayoutRejected = "portal.payout.rejected";
+
+    public const string TwoFactorEnrollmentStarted = "portal.two_factor.enrollment_started";
+    public const string TwoFactorEnrolled = "portal.two_factor.enrolled";
+    public const string TwoFactorRecoveryCodesRegenerated = "portal.two_factor.recovery_codes_regenerated";
+    public const string TwoFactorReset = "portal.two_factor.reset";
 }

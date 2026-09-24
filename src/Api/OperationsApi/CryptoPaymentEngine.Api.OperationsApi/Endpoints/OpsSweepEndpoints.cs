@@ -34,9 +34,11 @@ public static class OpsSweepEndpoints
         app.MapGet("/api/v1/ops/sweeps/settings", SettingsAsync).RequirePermission(OpsPermissions.Sweep.View);
 
         app.MapPut("/api/v1/ops/sweeps/settings/{chain}", UpdateSettingsAsync)
-            .RequirePermission(OpsPermissions.Sweep.Manage);
+            .RequirePermission(OpsPermissions.Sweep.Manage)
+            .RequireTwoFactor(GuardedActions.SweepSettings);
         app.MapPost("/api/v1/ops/sweeps/scan/{chain}", RequestScanAsync)
-            .RequirePermission(OpsPermissions.Sweep.Manage);
+            .RequirePermission(OpsPermissions.Sweep.Manage)
+            .RequireTwoFactor(GuardedActions.SweepSettings);
     }
 
     /// <summary>

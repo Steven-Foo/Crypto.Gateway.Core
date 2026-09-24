@@ -25,16 +25,19 @@ public static class OpsMerchantSettlementActionEndpoints
     public static void MapOpsMerchantSettlementActionApi(this IEndpointRouteBuilder app)
     {
         app.MapPost("/api/v1/ops/withdrawals/{withdrawalId:guid}/audit-approve", AuditApproveAsync)
-            .RequirePermission(OpsPermissions.Withdrawals.Approve);
+            .RequirePermission(OpsPermissions.Withdrawals.Approve)
+            .RequireTwoFactor(GuardedActions.WithdrawalApprove);
 
         app.MapPost("/api/v1/ops/withdrawals/{withdrawalId:guid}/audit-reject", AuditRejectAsync)
-            .RequirePermission(OpsPermissions.Withdrawals.Approve);
+            .RequirePermission(OpsPermissions.Withdrawals.Approve)
+            .RequireTwoFactor(GuardedActions.WithdrawalApprove);
 
         // Recording the payment is a FINANCE action, not an approval one — deliberately gated on the manage
         // code rather than approve, so the person who signs a settlement off need not be the one who can
         // declare it paid.
         app.MapPost("/api/v1/ops/withdrawals/{withdrawalId:guid}/record-settlement", RecordSettlementAsync)
-            .RequirePermission(OpsPermissions.Withdrawals.Manage);
+            .RequirePermission(OpsPermissions.Withdrawals.Manage)
+            .RequireTwoFactor(GuardedActions.WithdrawalSettlement);
     }
 
     private static async Task<IResult> AuditApproveAsync(

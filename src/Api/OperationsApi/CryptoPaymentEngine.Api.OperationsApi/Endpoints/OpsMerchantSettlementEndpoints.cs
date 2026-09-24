@@ -21,24 +21,33 @@ public static class OpsMerchantSettlementEndpoints
     public static void MapOpsMerchantSettlementApi(this IEndpointRouteBuilder app)
     {
         app.MapPut("/api/v1/ops/merchants/{id:guid}/settlement-period", SetSettlementPeriodAsync).RequirePermission(OpsPermissions.Merchants.Manage);
-        app.MapPut("/api/v1/ops/merchants/{id:guid}/settlement-wallet", SetSettlementWalletAsync).RequirePermission(OpsPermissions.Merchants.Manage);
+        // Every settlement-wallet write decides where a merchant's earnings are paid, which is exactly the
+        // change a compromised staff session would make. Guarded as one action.
+        app.MapPut("/api/v1/ops/merchants/{id:guid}/settlement-wallet", SetSettlementWalletAsync)
+            .RequirePermission(OpsPermissions.Merchants.Manage)
+            .RequireTwoFactor(GuardedActions.MerchantSettlementWallet);
 
         // A merchant may keep several cash-out addresses on file per chain; exactly one is paid. Adding and
         // activating are separate acts, so an address can be whitelisted and screened before it is used.
         app.MapPost("/api/v1/ops/merchants/{id:guid}/settlement-wallets", AddSettlementWalletAsync)
-            .RequirePermission(OpsPermissions.Merchants.Manage);
+            .RequirePermission(OpsPermissions.Merchants.Manage)
+            .RequireTwoFactor(GuardedActions.MerchantSettlementWallet);
         app.MapPost("/api/v1/ops/merchants/{id:guid}/settlement-wallets/{walletId:guid}/activate", ActivateSettlementWalletAsync)
-            .RequirePermission(OpsPermissions.Merchants.Manage);
+            .RequirePermission(OpsPermissions.Merchants.Manage)
+            .RequireTwoFactor(GuardedActions.MerchantSettlementWallet);
         app.MapPost("/api/v1/ops/merchants/{id:guid}/settlement-wallets/{walletId:guid}/retire", RetireSettlementWalletAsync)
-            .RequirePermission(OpsPermissions.Merchants.Manage);
+            .RequirePermission(OpsPermissions.Merchants.Manage)
+            .RequireTwoFactor(GuardedActions.MerchantSettlementWallet);
 
         // Turns the merchant's OWN payout-approval stage on/off. Merchants.Manage rather than Fees.Manage:
         // it controls the merchant's process, not its pricing.
-        app.MapPut("/api/v1/ops/merchants/{id:guid}/payout-approval", SetPayoutApprovalAsync).RequirePermission(OpsPermissions.Merchants.Manage);
+        app.MapPut("/api/v1/ops/merchants/{id:guid}/payout-approval", SetPayoutApprovalAsync).RequirePermission(OpsPermissions.Merchants.Manage)
+            .RequireTwoFactor(GuardedActions.MerchantRiskControls);
         app.MapPut("/api/v1/ops/merchants/{id:guid}/withdrawal-cap", SetWithdrawalCapAsync).RequirePermission(OpsPermissions.Fees.Manage);
         app.MapPut("/api/v1/ops/merchants/{id:guid}/withdrawal-limits", SetWithdrawalLimitsAsync).RequirePermission(OpsPermissions.Fees.Manage);
         app.MapPut("/api/v1/ops/merchants/{id:guid}/deposit-limits", SetDepositLimitsAsync).RequirePermission(OpsPermissions.Fees.Manage);
-        app.MapPut("/api/v1/ops/merchants/{id:guid}/approval-threshold", SetApprovalThresholdAsync).RequirePermission(OpsPermissions.Fees.Manage);
+        app.MapPut("/api/v1/ops/merchants/{id:guid}/approval-threshold", SetApprovalThresholdAsync).RequirePermission(OpsPermissions.Fees.Manage)
+            .RequireTwoFactor(GuardedActions.MerchantRiskControls);
     }
 
     /// <summary>

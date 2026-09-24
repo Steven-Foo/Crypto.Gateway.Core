@@ -21,6 +21,11 @@ public sealed class StaffSessionMap : IEntityTypeConfiguration<StaffSession>
         builder.Property(s => s.RoleName).HasMaxLength(64).IsRequired();
         builder.Property(s => s.PermissionCodesCsv).IsUnicode(false).HasMaxLength(2048);
 
+        // Nullable and stored as its name: null covers both a session issued before 2FA existed and one
+        // still being forced through enrollment, so the migration is additive and live sessions survive it.
+        builder.Property(s => s.TwoFactorMethod).HasConversion<string>().IsUnicode(false).HasMaxLength(16);
+
+        builder.Ignore(s => s.AuthenticatorProven);
         builder.Ignore(s => s.PermissionCodes);
         builder.Ignore(s => s.DomainEvents);
 

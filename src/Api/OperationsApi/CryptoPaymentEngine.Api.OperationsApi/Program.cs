@@ -187,6 +187,7 @@ app.UseCors();
 app.UseMiddleware<StaffBearerAuthMiddleware>();
 
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
+app.MapOpsTwoFactorApi();
 app.MapOpsAuthApi();
 app.MapOpsRoleApi();
 app.MapOpsAccountApi();

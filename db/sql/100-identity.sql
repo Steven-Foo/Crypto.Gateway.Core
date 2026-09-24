@@ -135,38 +135,6 @@ COMMIT;
 GO
 
 BEGIN TRANSACTION;
-
--- ============================================================================================
--- MANUAL PATCH (diverges from `dotnet ef migrations script` output — regenerating this file will
--- silently drop this block; re-append it from git history, same convention as 50-ledger.sql's
--- hand-appended DENY block, db/README.md).
---
--- Why: the EF-generated migration below drops the old StaffUser/StaffSession `Role` nvarchar
--- column ("Admin"/"Viewer") and adds a NOT NULL `StaffUser.RoleId` defaulted to the all-zero GUID,
--- then adds an FK StaffUser.RoleId -> Role.Id against a brand-new EMPTY Role table. On a database
--- with zero StaffUser rows that's harmless. On a database with existing staff accounts it is not:
--- the FK add fails (no Role row exists for the zero-GUID yet), and even if it didn't, every
--- existing account would silently end up with ZERO permissions post-migration (fail-closed lockout,
--- not a crash) since nothing maps the old Admin/Viewer flag onto the new permission-code model.
---
--- Fix: snapshot each StaffUser's old Role value here, before it's dropped, so it can be mapped onto
--- real Admin/Viewer rows further below instead of the zero-GUID placeholder.
--- ============================================================================================
-IF NOT EXISTS (
-    SELECT * FROM [identity].[__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20260818035956_AddRolesAndPermissions'
-)
-BEGIN
-    -- Global temp table (##) so it survives past this EXEC's own scope and into the later block below
-    -- (a local # created inside EXEC(...) is dropped the instant the EXEC call returns). The [Role]
-    -- column reference is wrapped in dynamic SQL so it's resolved at execution time, not batch-compile
-    -- time — otherwise re-running this idempotent script AFTER the column is gone would fail to even
-    -- compile this statement, IF guard or not (column binding against an existing table is NOT deferred
-    -- in T-SQL the way object/table existence is).
-    IF OBJECT_ID('tempdb..##LegacyStaffRole') IS NOT NULL DROP TABLE ##LegacyStaffRole;
-    EXEC(N'SELECT [Id], [Role] AS [OldRole] INTO ##LegacyStaffRole FROM [identity].[StaffUser];');
-END;
-
 IF NOT EXISTS (
     SELECT * FROM [identity].[__EFMigrationsHistory]
     WHERE [MigrationId] = N'20260818035956_AddRolesAndPermissions'
@@ -251,33 +219,6 @@ BEGIN
     );
 END;
 
--- MANUAL PATCH (see the block above) — seed the two roles the old binary model implied, matching
--- DevStaffSeeder's own "Admin = wildcard" convention, then map every existing StaffUser onto the
--- correct one instead of the zero-GUID placeholder. Must run before the FK add below.
-IF NOT EXISTS (
-    SELECT * FROM [identity].[__EFMigrationsHistory]
-    WHERE [MigrationId] = N'20260818035956_AddRolesAndPermissions'
-)
-BEGIN
-    DECLARE @now datetimeoffset = SYSDATETIMEOFFSET();
-    DECLARE @adminRoleId uniqueidentifier = NEWID();
-    DECLARE @viewerRoleId uniqueidentifier = NEWID();
-
-    INSERT INTO [identity].[Role] ([Id], [Name], [Description], [PermissionCodesCsv], [CreatedAt], [UpdatedAt])
-    VALUES
-        (@adminRoleId, N'Admin', N'Full access — every permission, present and future (migrated from the legacy Admin flag).', N'*', @now, @now),
-        (@viewerRoleId, N'Viewer', N'Read-only access across every screen (migrated from the legacy Viewer flag).',
-         N'ops.merchants.view,ops.fees.view,ops.deposits.view,ops.withdrawals.view,ops.transactions.view,ops.roles.view,ops.accounts.view,ops.audit.view,ops.wallets.view',
-         @now, @now);
-
-    UPDATE su
-    SET su.[RoleId] = CASE WHEN lr.[OldRole] = N'Admin' THEN @adminRoleId ELSE @viewerRoleId END
-    FROM [identity].[StaffUser] su
-    INNER JOIN ##LegacyStaffRole lr ON lr.[Id] = su.[Id];
-
-    IF OBJECT_ID('tempdb..##LegacyStaffRole') IS NOT NULL DROP TABLE ##LegacyStaffRole;
-END;
-
 IF NOT EXISTS (
     SELECT * FROM [identity].[__EFMigrationsHistory]
     WHERE [MigrationId] = N'20260818035956_AddRolesAndPermissions'
@@ -351,6 +292,118 @@ IF NOT EXISTS (
 BEGIN
     INSERT INTO [identity].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
     VALUES (N'20260820084841_AddStaffSessionCsrfToken', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [identity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260923033648_AddStaffTwoFactor'
+)
+BEGIN
+    ALTER TABLE [identity].[StaffSession] ADD [TwoFactorMethod] varchar(16) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [identity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260923033648_AddStaffTwoFactor'
+)
+BEGIN
+    CREATE TABLE [identity].[StaffRecoveryCode] (
+        [Id] uniqueidentifier NOT NULL,
+        [StaffUserId] uniqueidentifier NOT NULL,
+        [CodeHash] varchar(256) NOT NULL,
+        [CreatedAt] datetimeoffset NOT NULL,
+        [UsedAt] datetimeoffset NULL,
+        [Seq] bigint NOT NULL IDENTITY,
+        CONSTRAINT [PK_StaffRecoveryCode] PRIMARY KEY NONCLUSTERED ([Id])
+    );
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [identity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260923033648_AddStaffTwoFactor'
+)
+BEGIN
+    CREATE TABLE [identity].[StaffTwoFactor] (
+        [Id] uniqueidentifier NOT NULL,
+        [StaffUserId] uniqueidentifier NOT NULL,
+        [SecretCiphertext] varchar(512) NOT NULL,
+        [Status] varchar(16) NOT NULL,
+        [CreatedAt] datetimeoffset NOT NULL,
+        [EnrolledAt] datetimeoffset NULL,
+        [FailedAttempts] int NOT NULL,
+        [LockedUntil] datetimeoffset NULL,
+        [RowVersion] rowversion NULL,
+        CONSTRAINT [PK_StaffTwoFactor] PRIMARY KEY ([Id])
+    );
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [identity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260923033648_AddStaffTwoFactor'
+)
+BEGIN
+    CREATE TABLE [identity].[TwoFactorPolicyVersion] (
+        [Id] uniqueidentifier NOT NULL,
+        [GuardedActionsCsv] varchar(4000) NOT NULL,
+        [Note] nvarchar(512) NULL,
+        [UpdatedBy] nvarchar(128) NOT NULL,
+        [UpdatedAt] datetimeoffset NOT NULL,
+        [Seq] bigint NOT NULL IDENTITY,
+        CONSTRAINT [PK_TwoFactorPolicyVersion] PRIMARY KEY NONCLUSTERED ([Id])
+    );
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [identity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260923033648_AddStaffTwoFactor'
+)
+BEGIN
+    CREATE UNIQUE CLUSTERED INDEX [IX_StaffRecoveryCode_Seq] ON [identity].[StaffRecoveryCode] ([Seq]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [identity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260923033648_AddStaffTwoFactor'
+)
+BEGIN
+    CREATE INDEX [IX_StaffRecoveryCode_StaffUserId_UsedAt] ON [identity].[StaffRecoveryCode] ([StaffUserId], [UsedAt]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [identity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260923033648_AddStaffTwoFactor'
+)
+BEGIN
+    CREATE UNIQUE INDEX [IX_StaffTwoFactor_StaffUserId] ON [identity].[StaffTwoFactor] ([StaffUserId]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [identity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260923033648_AddStaffTwoFactor'
+)
+BEGIN
+    CREATE UNIQUE CLUSTERED INDEX [IX_TwoFactorPolicyVersion_Seq] ON [identity].[TwoFactorPolicyVersion] ([Seq]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [identity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260923033648_AddStaffTwoFactor'
+)
+BEGIN
+    CREATE INDEX [IX_TwoFactorPolicyVersion_UpdatedAt] ON [identity].[TwoFactorPolicyVersion] ([UpdatedAt]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [identity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260923033648_AddStaffTwoFactor'
+)
+BEGIN
+    INSERT INTO [identity].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260923033648_AddStaffTwoFactor', N'10.0.9');
 END;
 
 COMMIT;

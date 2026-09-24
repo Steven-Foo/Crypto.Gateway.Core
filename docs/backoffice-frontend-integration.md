@@ -41,7 +41,7 @@ see section 23. It takes a minute and is worth it — several screens are unread
 origin, never `*`, so if your dev server picks a different port the browser will refuse every call. Add yours
 to `Cors:AllowedOrigins` in the Ops host's `appsettings.Development.json`.
 
-### The five things that will bite you
+### The six things that will bite you
 
 1. **Check `isSuccess`, not the HTTP status alone.** Both are meaningful; the envelope is the contract.
 2. **Branch on `errorCode`, never on `error`.** The prose is display text and gets reworded.
@@ -49,12 +49,16 @@ to `Cors:AllowedOrigins` in the Ops host's `appsettings.Development.json`.
 4. **Rates are percent on the wire, basis points internally.** Send percent. Section 5.
 5. **Money crosses as a display decimal AND an exact base-unit string.** Render the decimal, compare and
    total the integer. Section 5.
+6. **Two-factor is mandatory, and some actions demand a code per use.** Login takes a `code`; a session that
+   has not enrolled can reach nothing but the setup endpoints; and any of 37 routes may answer
+   `403 ops.two_factor_required`, at which point you prompt for a code and **replay the same request** with
+   an `X-2FA-Code` header. Sections 3b and 3c — build it early, it is one interceptor.
 
 ### A client that gets all five right
 
-Copy this. It is the whole contract in about forty lines, and it was run against a live host exactly as
-printed — login, an authenticated read, session restore, a CSRF-carrying write, a typed 404, and the 401
-redirect path all behave as shown.
+Copy this. It is the whole contract in about sixty lines, and it was run against a live host exactly as
+printed — login, an authenticated read, session restore, a CSRF-carrying write, a typed 404, the 401
+redirect path, and the two-factor prompt-and-replay all behave as shown.
 
 ```ts
 const BASE = 'http://localhost:54001/api/v1/ops';
@@ -81,7 +85,11 @@ declare function redirectToLogin(): void;
 let csrfToken: string | null = null;
 export const setCsrfToken = (t: string | null) => { csrfToken = t; };
 
-export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
+// Yours to supply: open a modal asking for the 6-digit authenticator code. Resolve to the code, or to null
+// if the user cancels. `action` is the guarded action's code, so the prompt can say WHAT it is protecting.
+declare function promptForTwoFactorCode(action: string): Promise<string | null>;
+
+export async function api<T>(path: string, init: RequestInit = {}, twoFactorCode?: string): Promise<T> {
   const method = (init.method ?? 'GET').toUpperCase();
   const unsafe = !['GET', 'HEAD', 'OPTIONS'].includes(method);
 
@@ -92,6 +100,8 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
     headers: {
       'Content-Type': 'application/json',
       ...(unsafe && csrfToken ? { 'X-CSRF-Token': csrfToken } : {}),
+      // Sent only on a replay after a 403 ops.two_factor_required — never cached and never pre-emptive.
+      ...(twoFactorCode ? { 'X-2FA-Code': twoFactorCode } : {}),
       ...init.headers,
     },
   });
@@ -101,7 +111,21 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 
   if (!body.isSuccess) {
     // 401 means the session is gone: send the user to login rather than showing an error toast.
-    if (res.status === 401) redirectToLogin();
+    if (res.status === 401 && body.errorCode === 'ops.unauthenticated') redirectToLogin();
+
+    // This account has not finished two-factor setup: its session can reach nothing else (section 3b).
+    if (body.errorCode === 'ops.two_factor_enrollment_required') {
+      throw new ApiError(body.errorCode, body.error ?? 'Two-factor setup required', res.status);
+    }
+
+    // A guarded action. Prompt once, then REPLAY the identical request with the code (section 3c).
+    // The guard runs before the handler, so the refused call changed nothing — there is nothing to undo.
+    if (body.errorCode === 'ops.two_factor_required' && !twoFactorCode) {
+      const action = (body.data as { action?: string } | null)?.action ?? 'this action';
+      const code = await promptForTwoFactorCode(action);
+      if (code) return api<T>(path, init, code);
+    }
+
     throw new ApiError(body.errorCode ?? 'unknown', body.error ?? 'Request failed', res.status);
   }
 
@@ -109,14 +133,26 @@ export async function api<T>(path: string, init: RequestInit = {}): Promise<T> {
 }
 ```
 
+Note the 401 handling is narrowed to `ops.unauthenticated`. A wrong authenticator code is also a 401
+(`two_factor.invalid_code`), and bouncing the user to the login screen for a typo would lose whatever they
+were doing.
+
 Login, which is where the CSRF token comes from:
 
 ```ts
-const session = await api<{ token: string; csrfToken: string; permissions: string[] }>(
+const session = await api<{
+  token: string; csrfToken: string; permissions: string[];
+  twoFactorEnrolled: boolean; twoFactorMethod: 'Totp' | 'RecoveryCode' | null;
+}>(
   '/auth/login',
-  { method: 'POST', body: JSON.stringify({ username, password }) },
+  // `code` is the authenticator code, or a recovery code. Required once the account is enrolled.
+  { method: 'POST', body: JSON.stringify({ username, password, code }) },
 );
 setCsrfToken(session.csrfToken);
+
+// Not yet enrolled: this session can reach ONLY the two-factor setup endpoints. Go there now rather than
+// letting the user discover it as a 403 on whatever they click first (section 3b).
+if (!session.twoFactorEnrolled) routeToTwoFactorSetup();
 ```
 
 On a page reload the cookie survives but the in-memory token does not. Call `GET /auth/me` on boot: it
@@ -137,100 +173,118 @@ Generated from the endpoint source, so it cannot drift from what the host actual
 is the section in this document that describes the payload.
 
 `{id}` stands for a GUID path parameter. `_any session_` means any authenticated staff member, with no
-specific permission — used only for login, the session endpoints, and the two landing-page reads where
-gating would hand a new account a blank screen.
+specific permission — used only for login, the session endpoints, two-factor enrollment, and the two
+landing-page reads where gating would hand a new account a blank screen.
 
-| Method | Route | Permission | §  |
-|---|---|---|---|
-| GET | `/api/v1/ops/accounts` | `ops.accounts.view` | 7 |
-| POST | `/api/v1/ops/accounts` | `ops.accounts.manage` | 7 |
-| GET | `/api/v1/ops/accounts/{id}` | `ops.accounts.view` | 7 |
-| POST | `/api/v1/ops/accounts/{id}/reset-password` | `ops.accounts.manage` | 7 |
-| PATCH | `/api/v1/ops/accounts/{id}/role` | `ops.accounts.manage` | 7 |
-| PATCH | `/api/v1/ops/accounts/{id}/status` | `ops.accounts.manage` | 7 |
-| GET | `/api/v1/ops/audit` | `ops.audit.view` | 8 |
-| POST | `/api/v1/ops/auth/login` | _any session_ | 3 |
-| POST | `/api/v1/ops/auth/logout` | _any session_ | 3 |
-| GET | `/api/v1/ops/auth/me` | _any session_ | 3 |
-| POST | `/api/v1/ops/callbacks/{type}/{referenceId}/resend` | `ops.callbacks.manage` | 16 |
-| GET | `/api/v1/ops/compliance/addresses` | `ops.compliance.view` | 22b |
-| POST | `/api/v1/ops/compliance/deposit-addresses/screen` | `ops.compliance.manage` | 22b |
-| GET | `/api/v1/ops/compliance/policy` | `ops.compliance.view` | 22b |
-| PUT | `/api/v1/ops/compliance/policy` | `ops.compliance.manage` | 22b |
-| GET | `/api/v1/ops/compliance/policy/history` | `ops.compliance.view` | 22b |
-| GET | `/api/v1/ops/compliance/screenings` | `ops.compliance.view` | 22b |
-| GET | `/api/v1/ops/compliance/screenings/{screeningId}` | `ops.compliance.view` | 22b |
-| POST | `/api/v1/ops/compliance/screenings/latest` | `ops.compliance.view` | 22b |
-| POST | `/api/v1/ops/compliance/screenings/re-screen` | `ops.compliance.manage` | 22b |
-| GET | `/api/v1/ops/dashboard` | _any session_ | 16b |
-| GET | `/api/v1/ops/energy/operations` | `ops.energy.view` | 22 |
-| GET | `/api/v1/ops/energy/resources` | `ops.energy.view` | 22 |
-| GET | `/api/v1/ops/merchants` | `ops.merchants.view` | 9 |
-| POST | `/api/v1/ops/merchants` | `ops.merchants.manage` | 9 |
-| GET | `/api/v1/ops/merchants/{id}` | `ops.merchants.view` | 9 |
-| GET | `/api/v1/ops/merchants/{id}/allowed-ips` | `ops.merchants.view` | 9 |
-| PUT | `/api/v1/ops/merchants/{id}/allowed-ips` | `ops.merchants.manage` | 9 |
-| PUT | `/api/v1/ops/merchants/{id}/approval-threshold` | `ops.fees.manage` | 9 |
-| POST | `/api/v1/ops/merchants/{id}/balance/credit` | `ops.balances.adjust` | 9 |
-| POST | `/api/v1/ops/merchants/{id}/balance/debit` | `ops.balances.adjust` | 9 |
-| GET | `/api/v1/ops/merchants/{id}/balance/history` | `ops.merchants.view` | 9 |
-| POST | `/api/v1/ops/merchants/{id}/close` | `ops.merchants.manage` | 9 |
-| PUT | `/api/v1/ops/merchants/{id}/deposit-limits` | `ops.fees.manage` | 9 |
-| GET | `/api/v1/ops/merchants/{id}/fees` | `ops.fees.view` | 9 |
-| PUT | `/api/v1/ops/merchants/{id}/fees` | `ops.fees.manage` | 9 |
-| GET | `/api/v1/ops/merchants/default-fees` | `ops.fees.view` | 9 |
-| PUT | `/api/v1/ops/merchants/default-fees` | `ops.fees.manage` | 9 |
-| PUT | `/api/v1/ops/merchants/{id}/payout-approval` | `ops.merchants.manage` | 9 |
-| PUT | `/api/v1/ops/merchants/{id}/profile` | `ops.merchants.manage` | 9 |
-| POST | `/api/v1/ops/merchants/{id}/regenerate-key` | `ops.merchants.rotate-key` | 9 |
-| PUT | `/api/v1/ops/merchants/{id}/settlement-period` | `ops.merchants.manage` | 9 |
-| PUT | `/api/v1/ops/merchants/{id}/settlement-wallet` | `ops.merchants.manage` | 9 |
-| POST | `/api/v1/ops/merchants/{id}/settlement-wallets` | `ops.merchants.manage` | 19 |
-| POST | `/api/v1/ops/merchants/{id}/settlement-wallets/{walletId}/activate` | `ops.merchants.manage` | 19 |
-| POST | `/api/v1/ops/merchants/{id}/settlement-wallets/{walletId}/retire` | `ops.merchants.manage` | 19 |
-| PATCH | `/api/v1/ops/merchants/{id}/status` | `ops.merchants.manage` | 9 |
-| PUT | `/api/v1/ops/merchants/{id}/withdrawal-cap` | `ops.fees.manage` | 9 |
-| PUT | `/api/v1/ops/merchants/{id}/withdrawal-limits` | `ops.fees.manage` | 9 |
-| GET | `/api/v1/ops/merchants/next-code` | `ops.merchants.view` | 9 |
-| POST | `/api/v1/ops/payment-intents/{reference}/fail` | `ops.deposits.manage` | 12 |
-| GET | `/api/v1/ops/permissions` | `ops.roles.view` | 3 |
-| GET | `/api/v1/ops/reconciliation` | _any session_ | 16b |
-| GET | `/api/v1/ops/roles` | `ops.roles.view` | 6 |
-| POST | `/api/v1/ops/roles` | `ops.roles.manage` | 6 |
-| DELETE | `/api/v1/ops/roles/{id}` | `ops.roles.manage` | 6 |
-| GET | `/api/v1/ops/roles/{id}` | `ops.roles.view` | 6 |
-| PUT | `/api/v1/ops/roles/{id}` | `ops.roles.manage` | 6 |
-| PUT | `/api/v1/ops/roles/{id}/permissions` | `ops.roles.manage` | 6 |
-| GET | `/api/v1/ops/settlement-activity` | `ops.treasury.manage` | 20b |
-| GET | `/api/v1/ops/sweeps` | `ops.sweep.view` | 22 |
-| GET | `/api/v1/ops/sweeps/policies` | `ops.sweep.view` | 22 |
-| POST | `/api/v1/ops/sweeps/scan/{chain}` | `ops.sweep.manage` | 22 |
-| GET | `/api/v1/ops/sweeps/settings` | `ops.sweep.view` | 22 |
-| PUT | `/api/v1/ops/sweeps/settings/{chain}` | `ops.sweep.manage` | 22 |
-| GET | `/api/v1/ops/transactions` | `ops.transactions.view` | 13 |
-| GET | `/api/v1/ops/transactions/deposits` | `ops.deposits.view` | 13 |
-| GET | `/api/v1/ops/transactions/deposits/{systemOrderNumber}` | `ops.deposits.view` | 13 |
-| GET | `/api/v1/ops/transactions/withdrawals` | `ops.withdrawals.view` | 13 |
-| GET | `/api/v1/ops/transactions/withdrawals/{systemOrderNumber}` | `ops.withdrawals.view` | 13 |
-| POST | `/api/v1/ops/treasury/cold-wallet` | `ops.treasury.manage` | 20 |
-| GET | `/api/v1/ops/treasury/cold-wallets` | `ops.treasury.manage` | 20 |
-| POST | `/api/v1/ops/treasury/cold-wallets` | `ops.treasury.manage` | 20 |
-| POST | `/api/v1/ops/treasury/cold-wallets/{walletId}/activate` | `ops.treasury.manage` | 20 |
-| POST | `/api/v1/ops/treasury/cold-wallets/{walletId}/re-screen` | `ops.treasury.manage` | 20 |
-| POST | `/api/v1/ops/treasury/cold-wallets/{walletId}/retire` | `ops.treasury.manage` | 20 |
-| GET | `/api/v1/ops/treasury/hot-pool` | `ops.treasury.manage` | 20 |
-| POST | `/api/v1/ops/treasury/top-up` | `ops.treasury.manage` | 20 |
-| GET | `/api/v1/ops/wallets` | `ops.wallets.view` | 11 |
-| GET | `/api/v1/ops/wallets/{id}` | `ops.wallets.view` | 11 |
-| POST | `/api/v1/ops/wallets/{id}/resume` | `ops.wallets.manage` | 11 |
-| POST | `/api/v1/ops/wallets/{id}/suspend` | `ops.wallets.manage` | 11 |
-| POST | `/api/v1/ops/withdrawals/{withdrawalId}/approve` | `ops.withdrawals.approve` | 14 |
-| POST | `/api/v1/ops/withdrawals/{withdrawalId}/audit-approve` | `ops.withdrawals.approve` | 14 |
-| POST | `/api/v1/ops/withdrawals/{withdrawalId}/audit-reject` | `ops.withdrawals.approve` | 14 |
-| POST | `/api/v1/ops/withdrawals/{withdrawalId}/cancel` | `ops.withdrawals.manage` | 14 |
-| POST | `/api/v1/ops/withdrawals/{withdrawalId}/record-settlement` | `ops.withdrawals.manage` | 14 |
-| POST | `/api/v1/ops/withdrawals/{withdrawalId}/reject` | `ops.withdrawals.approve` | 14 |
-| POST | `/api/v1/ops/withdrawals/{withdrawalId}/release` | `ops.withdrawals.manage` | 14 |
+**The `2FA` column** marks a route that can demand a fresh authenticator code in the `X-2FA-Code` header —
+*if* an admin has marked that action as guarded in the back office (§3c). It is not a fixed property of the
+route: the platform-wide policy decides, and it can change at any time. Treat every `yes` row as "may return
+`403 ops.two_factor_required` at any moment", and handle it in one place rather than per screen — §3c shows
+the interceptor that covers all 37 of them and every one added later.
+
+| Method | Route | Permission | 2FA | §  |
+|---|---|---|---|---|
+| GET | `/api/v1/ops/accounts` | `ops.accounts.view` |  | 7 |
+| POST | `/api/v1/ops/accounts` | `ops.accounts.manage` | yes | 7 |
+| GET | `/api/v1/ops/accounts/{id:guid}` | `ops.accounts.view` |  | 7 |
+| POST | `/api/v1/ops/accounts/{id:guid}/2fa/reset` | `ops.accounts.manage` | yes | 3b |
+| POST | `/api/v1/ops/accounts/{id:guid}/reset-password` | `ops.accounts.manage` | yes | 7 |
+| PATCH | `/api/v1/ops/accounts/{id:guid}/role` | `ops.accounts.manage` | yes | 7 |
+| PATCH | `/api/v1/ops/accounts/{id:guid}/status` | `ops.accounts.manage` | yes | 7 |
+| GET | `/api/v1/ops/audit` | `ops.audit.view` |  | 8 |
+| POST | `/api/v1/ops/auth/2fa/enroll` | _any session_ |  | 3b |
+| POST | `/api/v1/ops/auth/2fa/enroll/confirm` | _any session_ |  | 3b |
+| POST | `/api/v1/ops/auth/2fa/recovery-codes` | _any session_ |  | 3b |
+| GET | `/api/v1/ops/auth/2fa/status` | _any session_ |  | 3b |
+| POST | `/api/v1/ops/auth/login` | _any session_ |  | 3 |
+| POST | `/api/v1/ops/auth/logout` | _any session_ |  | 3 |
+| GET | `/api/v1/ops/auth/me` | _any session_ |  | 3 |
+| POST | `/api/v1/ops/callbacks/{type}/{referenceId:guid}/resend` | `ops.callbacks.manage` |  | 16 |
+| GET | `/api/v1/ops/compliance/addresses` | `ops.compliance.view` |  | 22b |
+| POST | `/api/v1/ops/compliance/deposit-addresses/screen` | `ops.compliance.manage` |  | 22b |
+| GET | `/api/v1/ops/compliance/policy` | `ops.compliance.view` |  | 22b |
+| PUT | `/api/v1/ops/compliance/policy` | `ops.compliance.manage` | yes | 22b |
+| GET | `/api/v1/ops/compliance/policy/history` | `ops.compliance.view` |  | 22b |
+| GET | `/api/v1/ops/compliance/screenings` | `ops.compliance.view` |  | 22b |
+| GET | `/api/v1/ops/compliance/screenings/{screeningId:guid}` | `ops.compliance.view` |  | 22b |
+| POST | `/api/v1/ops/compliance/screenings/latest` | `ops.compliance.view` |  | 22b |
+| POST | `/api/v1/ops/compliance/screenings/re-screen` | `ops.compliance.manage` |  | 22b |
+| GET | `/api/v1/ops/dashboard` | _any session_ |  | 16b |
+| GET | `/api/v1/ops/energy/operations` | `ops.energy.view` |  | 22 |
+| GET | `/api/v1/ops/energy/resources` | `ops.energy.view` |  | 22 |
+| GET | `/api/v1/ops/merchants` | `ops.merchants.view` |  | 9 |
+| POST | `/api/v1/ops/merchants` | `ops.merchants.manage` |  | 9 |
+| GET | `/api/v1/ops/merchants/{id:guid}` | `ops.merchants.view` |  | 9 |
+| GET | `/api/v1/ops/merchants/{id:guid}/allowed-ips` | `ops.merchants.view` |  | 9 |
+| PUT | `/api/v1/ops/merchants/{id:guid}/allowed-ips` | `ops.merchants.manage` | yes | 9 |
+| PUT | `/api/v1/ops/merchants/{id:guid}/approval-threshold` | `ops.fees.manage` | yes | 9 |
+| POST | `/api/v1/ops/merchants/{id:guid}/balance/credit` | `ops.balances.adjust` | yes | 9 |
+| POST | `/api/v1/ops/merchants/{id:guid}/balance/debit` | `ops.balances.adjust` | yes | 9 |
+| GET | `/api/v1/ops/merchants/{id:guid}/balance/history` | `ops.merchants.view` |  | 9 |
+| POST | `/api/v1/ops/merchants/{id:guid}/close` | `ops.merchants.manage` |  | 9 |
+| PUT | `/api/v1/ops/merchants/{id:guid}/deposit-limits` | `ops.fees.manage` |  | 9 |
+| GET | `/api/v1/ops/merchants/{id:guid}/fees` | `ops.fees.view` |  | 9 |
+| PUT | `/api/v1/ops/merchants/{id:guid}/fees` | `ops.fees.manage` |  | 9 |
+| PUT | `/api/v1/ops/merchants/{id:guid}/payout-approval` | `ops.merchants.manage` | yes | 9 |
+| POST | `/api/v1/ops/merchants/{id:guid}/portal-account` | `ops.merchants.manage` | yes | 9 |
+| GET | `/api/v1/ops/merchants/{id:guid}/portal-accounts` | `ops.merchants.manage` |  | 9 |
+| POST | `/api/v1/ops/merchants/{id:guid}/portal-accounts/{accountId:guid}/reset-password` | `ops.merchants.manage` | yes | 9 |
+| PUT | `/api/v1/ops/merchants/{id:guid}/profile` | `ops.merchants.manage` |  | 9 |
+| POST | `/api/v1/ops/merchants/{id:guid}/regenerate-key` | `ops.merchants.rotate-key` | yes | 9 |
+| PUT | `/api/v1/ops/merchants/{id:guid}/settlement-period` | `ops.merchants.manage` |  | 9 |
+| PUT | `/api/v1/ops/merchants/{id:guid}/settlement-wallet` | `ops.merchants.manage` | yes | 9 |
+| POST | `/api/v1/ops/merchants/{id:guid}/settlement-wallets` | `ops.merchants.manage` | yes | 19 |
+| POST | `/api/v1/ops/merchants/{id:guid}/settlement-wallets/{walletId:guid}/activate` | `ops.merchants.manage` | yes | 19 |
+| POST | `/api/v1/ops/merchants/{id:guid}/settlement-wallets/{walletId:guid}/retire` | `ops.merchants.manage` | yes | 19 |
+| PATCH | `/api/v1/ops/merchants/{id:guid}/status` | `ops.merchants.manage` |  | 9 |
+| PUT | `/api/v1/ops/merchants/{id:guid}/withdrawal-cap` | `ops.fees.manage` |  | 9 |
+| PUT | `/api/v1/ops/merchants/{id:guid}/withdrawal-limits` | `ops.fees.manage` |  | 9 |
+| GET | `/api/v1/ops/merchants/default-fees` | `ops.fees.view` |  | 9 |
+| PUT | `/api/v1/ops/merchants/default-fees` | `ops.fees.manage` |  | 9 |
+| GET | `/api/v1/ops/merchants/next-code` | `ops.merchants.view` |  | 9 |
+| POST | `/api/v1/ops/payment-intents/{reference:guid}/fail` | `ops.deposits.manage` |  | 12 |
+| GET | `/api/v1/ops/permissions` | `ops.roles.view` |  | 3 |
+| GET | `/api/v1/ops/reconciliation` | _any session_ |  | 16b |
+| GET | `/api/v1/ops/roles` | `ops.roles.view` |  | 6 |
+| POST | `/api/v1/ops/roles` | `ops.roles.manage` | yes | 6 |
+| DELETE | `/api/v1/ops/roles/{id:guid}` | `ops.roles.manage` | yes | 6 |
+| GET | `/api/v1/ops/roles/{id:guid}` | `ops.roles.view` |  | 6 |
+| PUT | `/api/v1/ops/roles/{id:guid}` | `ops.roles.manage` | yes | 6 |
+| PUT | `/api/v1/ops/roles/{id:guid}/permissions` | `ops.roles.manage` | yes | 6 |
+| GET | `/api/v1/ops/settlement-activity` | `ops.treasury.manage` |  | 20b |
+| GET | `/api/v1/ops/sweeps` | `ops.sweep.view` |  | 22 |
+| GET | `/api/v1/ops/sweeps/policies` | `ops.sweep.view` |  | 22 |
+| POST | `/api/v1/ops/sweeps/scan/{chain}` | `ops.sweep.manage` | yes | 22 |
+| GET | `/api/v1/ops/sweeps/settings` | `ops.sweep.view` |  | 22 |
+| PUT | `/api/v1/ops/sweeps/settings/{chain}` | `ops.sweep.manage` | yes | 22 |
+| GET | `/api/v1/ops/transactions` | `ops.transactions.view` |  | 13 |
+| GET | `/api/v1/ops/transactions/deposits` | `ops.deposits.view` |  | 13 |
+| GET | `/api/v1/ops/transactions/deposits/{systemOrderNumber:guid}` | `ops.deposits.view` |  | 13 |
+| GET | `/api/v1/ops/transactions/withdrawals` | `ops.withdrawals.view` |  | 13 |
+| GET | `/api/v1/ops/transactions/withdrawals/{systemOrderNumber:guid}` | `ops.withdrawals.view` |  | 13 |
+| POST | `/api/v1/ops/treasury/cold-wallet` | `ops.treasury.manage` | yes | 20 |
+| GET | `/api/v1/ops/treasury/cold-wallets` | `ops.treasury.manage` |  | 20 |
+| POST | `/api/v1/ops/treasury/cold-wallets` | `ops.treasury.manage` | yes | 20 |
+| POST | `/api/v1/ops/treasury/cold-wallets/{walletId:guid}/activate` | `ops.treasury.manage` | yes | 20 |
+| POST | `/api/v1/ops/treasury/cold-wallets/{walletId:guid}/re-screen` | `ops.treasury.manage` |  | 20 |
+| POST | `/api/v1/ops/treasury/cold-wallets/{walletId:guid}/retire` | `ops.treasury.manage` | yes | 20 |
+| GET | `/api/v1/ops/treasury/hot-pool` | `ops.treasury.manage` |  | 20 |
+| POST | `/api/v1/ops/treasury/top-up` | `ops.treasury.manage` | yes | 20 |
+| GET | `/api/v1/ops/two-factor/actions` | `ops.roles.view` |  | 3c |
+| GET | `/api/v1/ops/two-factor/policy` | `ops.roles.view` |  | 3c |
+| PUT | `/api/v1/ops/two-factor/policy` | `ops.roles.manage` | yes | 3c |
+| GET | `/api/v1/ops/two-factor/policy/history` | `ops.roles.view` |  | 3c |
+| GET | `/api/v1/ops/wallets` | `ops.wallets.view` |  | 11 |
+| GET | `/api/v1/ops/wallets/{id:guid}` | `ops.wallets.view` |  | 11 |
+| POST | `/api/v1/ops/wallets/{id:guid}/resume` | `ops.wallets.manage` |  | 11 |
+| POST | `/api/v1/ops/wallets/{id:guid}/suspend` | `ops.wallets.manage` |  | 11 |
+| POST | `/api/v1/ops/withdrawals/{withdrawalId:guid}/approve` | `ops.withdrawals.approve` | yes | 14 |
+| POST | `/api/v1/ops/withdrawals/{withdrawalId:guid}/audit-approve` | `ops.withdrawals.approve` | yes | 14 |
+| POST | `/api/v1/ops/withdrawals/{withdrawalId:guid}/audit-reject` | `ops.withdrawals.approve` | yes | 14 |
+| POST | `/api/v1/ops/withdrawals/{withdrawalId:guid}/cancel` | `ops.withdrawals.manage` | yes | 14 |
+| POST | `/api/v1/ops/withdrawals/{withdrawalId:guid}/record-settlement` | `ops.withdrawals.manage` | yes | 14 |
+| POST | `/api/v1/ops/withdrawals/{withdrawalId:guid}/reject` | `ops.withdrawals.approve` | yes | 14 |
+| POST | `/api/v1/ops/withdrawals/{withdrawalId:guid}/release` | `ops.withdrawals.manage` | yes | 14 |
 
 ---
 
@@ -240,13 +294,15 @@ Each row lists everything that screen needs. Later rows depend on earlier ones e
 
 | # | Screen | Endpoints | Notes |
 |---|---|---|---|
-| 1 | Login + session shell | `POST /auth/login`, `GET /auth/me`, `POST /auth/logout` | Nothing else works until the cookie, CSRF token and permission-driven nav are right. |
+| 1 | Login + session shell | `POST /auth/login`, `GET /auth/me`, `POST /auth/logout` | Nothing else works until the cookie, CSRF token and permission-driven nav are right. The login form needs a **code** field (section 3b). |
+| 1b | Two-factor setup + the code prompt | `/auth/2fa/*` | **Build this second, before any other screen.** Two-factor is mandatory: until a user enrols, every other endpoint returns 403. The one `X-2FA-Code` interceptor in section 3c then covers every guarded action forever. |
 | 2 | Dashboard | `GET /dashboard`, `GET /reconciliation` | No permission gate. Degrades when Mongo is down — see section 16b, and render `null` counts as unknown, never as zero. |
 | 3 | Merchants list + detail | `GET /merchants`, `GET /merchants/{id}` | The spine of the product. Detail carries settlement wallets with their screening verdicts. |
 | 4 | Merchant terms | fees, limits, caps, settlement-period, approval-threshold | Section 19. All percent-on-the-wire. |
 | 5 | Transactions | `GET /transactions/deposits`, `.../withdrawals`, detail endpoints | Section 12-13. Use the effective-status vocabulary in section 18. |
 | 6 | Withdrawal approvals | `POST /withdrawals/{id}/approve`, `/reject`, `/release`, `/cancel` | The first screen that moves money. Read section 13 carefully. |
-| 7 | Roles + accounts | sections 6 and 7 | Needed before anyone but the seeded admin can use the portal. |
+| 7 | Roles + accounts | sections 6 and 7 | Needed before anyone but the seeded admin can use the portal. Includes the admin two-factor reset (section 3b). |
+| 7b | Guarded-action settings | `/two-factor/actions`, `/two-factor/policy` | Section 3c. Which actions demand a code, platform-wide. |
 | 8 | Wallets, sweeps, energy, reconciliation | sections 11, 21, 22 | Read-only operational views. |
 | 9 | Treasury | section 20 | Hot-pool balances and top-up recording. Nothing on this screen sends funds. |
 | 10 | Compliance | section 22b | Screening evidence, the policy settings screen, and the deposit-address sweep. |
@@ -297,6 +353,14 @@ Codes come from two places:
 | `ops.invalid_credentials` | 401 | Login failed |
 | `ops.csrf_invalid` | 403 | Cookie-authenticated unsafe method without a matching `X-CSRF-Token` |
 | `ops.permission_denied` | 403 | Valid session, missing the route's permission code |
+| `ops.two_factor_required` | 403 | A guarded action with no `X-2FA-Code` header. `data.action` names it (§3c) |
+| `ops.two_factor_enrollment_required` | 403 | The session has not finished two-factor setup — send them to §3b |
+| `ops.two_factor_recovery_not_accepted` | 403 | Signed in with a recovery code; guarded actions need the authenticator |
+| `ops.two_factor_not_enrolled` | 403 | Guarded action, no active factor (fail-closed backstop) |
+| `ops.unknown_guarded_action` | 400 | A saved policy named an action this host does not enforce |
+| `two_factor.code_required` | 401 | Login: the account is enrolled and sent no code |
+| `two_factor.invalid_code` | 401 | Wrong or expired authenticator code (login or a guarded action) |
+| `two_factor.locked_out` | 403 | Too many wrong codes; the factor is locked for ~15 minutes |
 | `ops.not_found` | 404 | A single-record detail lookup matched nothing |
 | `ops.invalid_chain` | 400 | Unparseable `chain` / `network` |
 | `ops.invalid_status` | 400 | Unknown `status` filter value |
@@ -362,7 +426,11 @@ for the browser to send/receive the cookie; the dev server seeds the Vite origin
 
 Request:
 ```json
-{ "username": "string, required, max 64", "password": "string, required, max 256" }
+{
+  "username": "string, required, max 64",
+  "password": "string, required, max 256",
+  "code": "string, 6-digit authenticator code OR a recovery code. Required once enrolled (see 3b)."
+}
 ```
 
 Response 200:
@@ -375,13 +443,29 @@ Response 200:
     "expiresAt": "2026-08-19T18:00:00+00:00",
     "username": "admin",
     "role": "Admin",
-    "permissions": ["*"]
+    "permissions": ["*"],
+    "twoFactorEnrolled": true,
+    "twoFactorMethod": "Totp"
   },
   "error": null
 }
 ```
-A successful login also sets the httpOnly `cpe_ops_session` cookie (`Set-Cookie`). Response 401 on bad
-credentials: `{ "isSuccess": false, "error": "..." }`.
+A successful login also sets the httpOnly `cpe_ops_session` cookie (`Set-Cookie`).
+
+**Two-factor is mandatory — read §3b before building the login screen.** The failure codes differ and drive
+different UI:
+
+| `errorCode` | Status | What the UI does |
+| --- | --- | --- |
+| `ops.invalid_credentials` | 401 | "Wrong username or password." Clear the password field. |
+| `two_factor.code_required` | 401 | The account is enrolled and sent no code. Show the code field and resubmit. |
+| `two_factor.invalid_code` | 401 | The password was fine — keep it, clear only the code field, let them retype. |
+| `two_factor.locked_out` | 401 | Too many wrong codes. Tell them to wait ~15 minutes. |
+
+`twoFactorEnrolled: false` means the account has not finished setting up an authenticator, and **the session
+it just received can reach only the enrollment endpoints** — send the user straight to the QR screen (§3b).
+`twoFactorMethod` is `"Totp"` or `"RecoveryCode"`; a recovery-code session works but cannot perform guarded
+actions, so prompt the user to re-enroll.
 
 Session TTL defaults to **8 hours** (server-configured, `StaffAuthOptions.SessionTtlHours`). There is no
 refresh-token flow — when the session expires, every request 401s and the frontend must send the user back
@@ -404,11 +488,18 @@ Call this on app load / after login to know what to render.
     "username": "admin",
     "role": "Admin",
     "permissions": ["*"],
-    "csrfToken": "opaque CSRF token — re-obtain here after a refresh (cookie mode)"
+    "csrfToken": "opaque CSRF token — re-obtain here after a refresh (cookie mode)",
+    "twoFactorEnrolled": true,
+    "authenticatorProven": true
   },
   "error": null
 }
 ```
+
+`twoFactorEnrolled` survives a page refresh, which the login response does not — **this is where the SPA
+learns on load that it must finish enrollment before anything else will answer** (§3b).
+`authenticatorProven` is false when the session was signed in with a recovery code; guarded actions (§3c)
+refuse such a session.
 
 ### The permission model — read this carefully, it drives every screen's visibility
 
@@ -457,6 +548,219 @@ The full, current list (also use this endpoint at runtime — don't hardcode, th
 | `ops.balances.adjust` | Manually credit/debit a merchant's ledger balance — granted to the Admin role only by default (see §9a) |
 
 ---
+
+## 3b. Two-factor authentication — enrollment (every staff account, no exceptions)
+
+**Every staff account must enrol an authenticator app.** This is enforced as a state, not a policy someone
+remembers: an account with no active factor can sign in, but the session it gets **can only reach the
+enrollment endpoints**. Everything else returns **403 `ops.two_factor_enrollment_required`**.
+
+Any TOTP app works — Google Authenticator, Authy, 1Password, Microsoft Authenticator — they all read the
+same QR code.
+
+### The flow you have to build
+
+```
+POST /auth/login  { username, password }        -> 200, twoFactorEnrolled: false
+                                                   (session issued, but restricted)
+        |
+        v  route straight to the setup screen; do NOT wait to discover this via a 403
+POST /auth/2fa/enroll                           -> 200 { provisioningUri, secret }
+        |
+        v  render provisioningUri as a QR code IN THE BROWSER; show `secret` for manual entry
+POST /auth/2fa/enroll/confirm  { code }         -> 200 { enrolled: true, recoveryCodes: [...10] }
+        |
+        v  show the 10 recovery codes ONCE, force an "I have saved these" acknowledgement
+   the CURRENT session is upgraded in place — no re-login. Go to the dashboard.
+```
+
+The session upgrade is deliberate: dropping a brand-new user back on a login form the instant setup
+succeeds, to type a code from an app they have only just installed, is exactly where people conclude the
+setup failed.
+
+### `GET /api/v1/ops/auth/2fa/status` — any session
+
+```json
+{ "isSuccess": true,
+  "data": { "enrolled": true, "status": "Active", "enrolledAt": "2026-09-23T10:20:00+00:00",
+            "recoveryCodesRemaining": 10, "lockedOut": false },
+  "error": null, "errorCode": null }
+```
+
+`status` is `"Pending"` (QR shown, first code never entered), `"Active"`, or `"Disabled"` (an admin reset
+it). **`Pending` grants nothing** — treat it as not enrolled and resume the setup flow.
+
+### `POST /api/v1/ops/auth/2fa/enroll` — any session, no body
+
+```json
+{ "isSuccess": true,
+  "data": {
+    "provisioningUri": "otpauth://totp/CryptoPaymentEngine%20(dev)%3Aadmin?secret=JBSWY...&issuer=...&algorithm=SHA1&digits=6&period=30",
+    "secret": "JBSWY3DPEHPK3PXP"
+  },
+  "error": null, "errorCode": null }
+```
+
+- **Render the QR client-side** from `provisioningUri` (any JS QR library). The URI is never sent anywhere
+  else, and there is no server-rendered QR image endpoint.
+- Show `secret` too, for a user whose camera will not cooperate.
+- **Returned once.** There is no endpoint that gives it back. If the user loses the setup before confirming,
+  call `/enroll` again — it issues a *fresh* secret and invalidates the previous one.
+- Calling `/enroll` when already `Active` returns **409 `two_factor.already_enrolled`**. That is deliberate:
+  re-scanning onto a new device from a live session is how an account gets taken over. A user who lost their
+  device signs in with a recovery code, or asks an admin to reset them.
+
+### `POST /api/v1/ops/auth/2fa/enroll/confirm` — any session
+
+Request: `{ "code": "418392" }`
+
+```json
+{ "isSuccess": true,
+  "data": { "enrolled": true,
+            "recoveryCodes": ["7KQ4-2WFM-...", "... 10 in total"] },
+  "error": null, "errorCode": null }
+```
+
+**The recovery codes are shown exactly once.** Nothing returns them again. Make the user confirm they have
+saved them before you navigate away.
+
+Failures: `401 two_factor.invalid_code` (wrong or expired — let them retype),
+`403 two_factor.locked_out`, `404 two_factor.enrollment_not_started` (call `/enroll` first).
+
+### `POST /api/v1/ops/auth/2fa/recovery-codes` — replace the set
+
+Request: `{ "code": "418392" }` (an authenticator code — **always required here**, regardless of policy,
+because this replaces a credential).
+
+Returns a fresh `recoveryCodes` array and **invalidates the previous ten immediately**. Warn the user.
+
+### `POST /api/v1/ops/accounts/{id}/2fa/reset` — admin clears someone else's
+
+Requires `ops.accounts.manage` **and** a code (this action is guarded — see §3c). The target account is
+unenrolled and forced back through setup at its next sign-in. Audited.
+
+### Recovery codes — what they can and cannot do
+
+A recovery code is accepted **in the login `code` field** and signs the user in. It is **single-use**.
+
+It does **not** authorise a guarded action (§3c): such a session gets
+`403 ops.two_factor_recovery_not_accepted`. Recovery codes exist so a lost phone does not lock someone out
+of the back office — they are not a factor a person deliberately carries at the moment they move money.
+After a recovery-code sign-in, prompt the user to reset and re-enrol.
+
+---
+
+## 3c. Guarded actions — a code per sensitive action
+
+An admin chooses, in the back office, **which actions require a fresh authenticator code**. The choice is
+**platform-wide**: once an action is guarded, *every* staff member must produce their own code to perform it.
+
+### The one flow that covers every guarded action, forever
+
+```
+POST /ops/treasury/top-up          (no special header)
+  -> 403 { errorCode: "ops.two_factor_required", data: { action: "ops.treasury.top-up" } }
+
+  ... open a modal, ask for the 6-digit code ...
+
+POST /ops/treasury/top-up          X-2FA-Code: 418392
+  -> 200
+```
+
+**Build this once as an HTTP-client interceptor**, not per screen: catch `ops.two_factor_required`, prompt,
+**replay the original request** with the `X-2FA-Code` header. Every action added to the catalog later then
+works with no frontend change at all.
+
+`data.action` names what is being protected, so the prompt can say *why* a code is being asked for.
+
+### Rules that affect your UI
+
+- **The code goes in the `X-2FA-Code` header**, never the body. No request model changes.
+- **A refused code means the action did not happen.** The check runs before the handler, so there is nothing
+  half-done to reconcile — just let the user retype.
+- **A valid code is reusable while it is valid** (its own 30-second window, ±30s for clock drift). Working
+  through a queue of approvals does not mean waiting for a new code on every row. Codes are *verified*, not
+  consumed.
+- **Do not cache the code.** It is a per-action prompt by design; holding it in memory to auto-fill later
+  requests defeats the control the operator asked for.
+- After ~10 consecutive wrong codes the factor locks for 15 minutes (`403 ops.two_factor_locked`).
+
+### Failure codes on a guarded action
+
+| `errorCode` | Status | Meaning |
+| --- | --- | --- |
+| `ops.two_factor_required` | 403 | No `X-2FA-Code` header. `data.action` says what is guarded. Prompt and replay. |
+| `two_factor.invalid_code` | 401 | Wrong or expired code. Keep the form, clear the code, let them retype. |
+| `two_factor.locked_out` | 403 | Too many wrong codes. |
+| `ops.two_factor_recovery_not_accepted` | 403 | This session signed in with a recovery code. They must sign in with the authenticator. |
+| `ops.two_factor_not_enrolled` | 403 | No active factor (should be unreachable — enrollment is forced). |
+
+### `GET /api/v1/ops/two-factor/actions` — what the settings screen renders (`ops.roles.view`)
+
+```json
+{ "isSuccess": true,
+  "data": {
+    "actions": [
+      { "code": "ops.treasury.top-up", "group": "Treasury", "label": "Record a hot-wallet top-up" },
+      { "code": "ops.withdrawals.approve", "group": "Withdrawals", "label": "Approve or reject a payout" }
+      // ... 15 in total at the time of writing, across the groups
+      //     Treasury · Withdrawals · Merchants · Sweep · Compliance · Staff.
+      // Render from the response, never from a hardcoded list — the catalog grows.
+    ],
+    "alwaysGuarded": [
+      { "code": "ops.security.two-factor-policy", "group": "Security",
+        "label": "Change which actions require two-factor",
+        "reason": "Always required. If this could be switched off, every other requirement could be too." }
+    ]
+  },
+  "error": null, "errorCode": null }
+```
+
+Render `actions` as checkboxes **grouped by `group`, labelled with `label`** — never as raw dotted codes,
+which is how an operator guards the wrong thing. Render `alwaysGuarded` as a permanently-checked, disabled
+row showing its `reason`, so the screen explains the absence of a toggle rather than leaving someone hunting
+for one.
+
+### `GET /api/v1/ops/two-factor/policy` — current state (`ops.roles.view`)
+
+```json
+{ "isSuccess": true,
+  "data": {
+    "guardedActions": ["ops.security.two-factor-policy", "ops.treasury.top-up"],
+    "source": "Stored",
+    "updatedBy": "admin",
+    "updatedAt": "2026-09-23T10:31:00+00:00",
+    "note": "tightening controls",
+    "configuredDefaults": ["ops.security.two-factor-policy"],
+    "enrolledStaffCount": 7
+  },
+  "error": null, "errorCode": null }
+```
+
+- `source` is `"Configuration"` (nobody has ever saved a policy — the deployment defaults are in force) or
+  `"Stored"`. Worth showing: "nobody has chosen yet" and "someone chose exactly these" look identical in the
+  values alone, and only one of them is a question worth asking.
+- `configuredDefaults` is what would apply if the stored version were removed.
+
+### `PUT /api/v1/ops/two-factor/policy` — save (`ops.roles.manage` + **always** an `X-2FA-Code`)
+
+Request: `{ "guardedActions": ["ops.treasury.top-up"], "note": "optional, max 512" }`
+
+- **Send the complete set, not a delta.** A save replaces the list.
+- **This endpoint is always guarded**, whatever the saved policy says — including the save that would
+  weaken it. Without that, anyone on a stolen admin session could untick everything.
+- `ops.security.two-factor-policy` is **forced into every saved version** even if you omit it. Do not treat
+  its presence in the response as your request being altered incorrectly.
+- An action code this host does not enforce is refused with **400 `ops.unknown_guarded_action`** rather than
+  stored — a checkbox that guards nothing reads as protection that is not there.
+- `updatedBy` comes from the session; do not send it.
+
+### `GET /api/v1/ops/two-factor/policy/history` — the append-only trail (`ops.roles.view`)
+
+`{ "versions": [{ "id", "guardedActions", "updatedBy", "updatedAt", "note" }] }`, newest first. Nothing is
+ever updated in place: an action taken last month stays explainable against the policy actually in force
+then.
+
 
 ## 4. Pagination — identical convention on every list/search endpoint
 
@@ -2287,6 +2591,23 @@ exercised separately on a booted host — 21 checks covering one row per address
 `decision`, stale filtering, request-order echo, `null` for never screened, the 200 cap refusing 201, the
 missing-field and missing-chain refusals, and 403 for a user without `ops.compliance.view`.
 
+**Two-factor (2026-09-23): 58 checks over HTTP against a booted host**, with the authenticator codes
+generated by an *independent* RFC 6238 implementation rather than by the code under test — so the server and
+the test agree only if both match the spec, which is what makes Google Authenticator work. Proven end to end:
+an unenrolled login is restricted to the setup endpoints and `/auth/me` still explains why; a `Pending`
+enrollment grants nothing; a wrong confirmation code activates nothing; a real code activates and issues ten
+recovery codes; **the session is upgraded in place, with no re-login**; saving the policy is itself guarded
+and forces the self-protecting action back in even when omitted; a guarded top-up returns
+`ops.two_factor_required` naming the action, then `two_factor.invalid_code` on a bad code **without running
+the handler**, then reaches the handler with a good one; the same code works twice inside its window; a code
+one step old is accepted and three steps old refused; an unguarded read is unaffected; an unknown action is
+refused with `ops.unknown_guarded_action`; login then requires a code and reports `two_factor.code_required`
+vs `two_factor.invalid_code` vs `ops.invalid_credentials` as three distinct outcomes; and a recovery code
+signs in once but is refused on a guarded action with `ops.two_factor_recovery_not_accepted`.
+
+The merchant portal's own 2FA was verified the same way — **29 checks** on a booted portal host, including
+the tenant-scoped reset and that its authenticator label is distinct from the staff one.
+
 ### What this does not cover
 
 Writes were probed against nonexistent ids, which proves routing, binding and error mapping but not the
@@ -2297,7 +2618,11 @@ is this project's convention for Ops endpoints — they are thin wrappers over a
 
 ## 24. Known gaps — don't build UI that assumes these work today
 
-- **2FA** — not implemented anywhere in the backend.
+- ~~**2FA** — not implemented anywhere in the backend.~~ **Built and verified 2026-09-23.** Mandatory
+  enrollment, login codes, and per-action guarding — see §3b and §3c. Deferred within it: WebAuthn/passkeys,
+  per-role or per-amount thresholds ("only above 10,000 USDT"), trusted-device remembering, and revoking a
+  user's live sessions when an admin resets their factor (they are refused at next login, matching how a
+  disabled account already behaves).
 - **`volume` on the dashboard** returns `[]` — see §16b for why it was deliberately not built.
 - **No mismatch-review workflow** for deposits (§12) — by design, not a missing feature.
 - **No ops *action* on Sweep or Energy** (§22) — no manual retry, cancel, or stake trigger. Read-only.

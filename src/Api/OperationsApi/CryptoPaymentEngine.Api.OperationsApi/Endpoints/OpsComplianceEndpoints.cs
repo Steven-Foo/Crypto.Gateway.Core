@@ -53,7 +53,8 @@ public static class OpsComplianceEndpoints
             .RequirePermission(OpsPermissions.Compliance.View);
 
         app.MapPut("/api/v1/ops/compliance/policy", UpdatePolicyAsync)
-            .RequirePermission(OpsPermissions.Compliance.Manage);
+            .RequirePermission(OpsPermissions.Compliance.Manage)
+            .RequireTwoFactor(GuardedActions.CompliancePolicy);
     }
 
     /// <summary>

@@ -26,7 +26,7 @@ public static class PortalAuthEndpoints
         IHostEnvironment env,
         HttpContext http)
     {
-        var result = await auth.LoginAsync(new MerchantLoginCommand(request.Username, request.Password), http.RequestAborted);
+        var result = await auth.LoginAsync(new MerchantLoginCommand(request.Username, request.Password, request.TwoFactorCode), http.RequestAborted);
         if (result.IsFailure)
             // The module's own code (e.g. merchantidentity.invalid_credentials) reaches the client, so a SPA can
             // distinguish bad credentials from a disabled account without reading the message.
@@ -48,6 +48,10 @@ public static class PortalAuthEndpoints
                 permissions = result.Value.Permissions,
                 // UX signal only (not a security control): the SPA shows a change-password step at first login.
                 mustChangePassword = result.Value.MustChangePassword,
+                // False => this session may reach ONLY the enrollment routes, so the SPA should go straight
+                // to the QR screen rather than discovering the restriction one failed call at a time.
+                twoFactorEnrolled = result.Value.TwoFactorEnrolled,
+                twoFactorMethod = result.Value.TwoFactorMethod?.ToString(),
             },
             error = (string?)null,
             errorCode = (string?)null,
@@ -80,6 +84,9 @@ public static class PortalAuthEndpoints
                 displayName = principal.DisplayName,
                 permissions = principal.Permissions,
                 csrfToken = principal.CsrfToken,
+                // Survives a page refresh, which the login response does not — this is where the SPA learns
+                // on load that it must finish enrollment before anything else will answer.
+                twoFactorEnrolled = principal.TwoFactorEnrolled,
             },
             error = (string?)null,
             errorCode = (string?)null,

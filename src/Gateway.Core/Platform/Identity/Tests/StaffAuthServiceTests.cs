@@ -24,8 +24,22 @@ public sealed class StaffAuthServiceTests : IAsyncLifetime
 
     private static StaffAuthService Service(IdentityDbContext context, TimeProvider? timeProvider = null) =>
         new(new StaffUserRepository(context), new StaffSessionRepository(context), new RoleRepository(context),
-            new StaffPasswordHasher(), new BearerTokenGenerator(), Options.Create(new StaffAuthOptions { SessionTtlHours = 8 }),
+            new StaffPasswordHasher(), new BearerTokenGenerator(), TwoFactor(context),
+            Options.Create(new StaffAuthOptions { SessionTtlHours = 8 }),
             timeProvider ?? TimeProvider.System);
+
+    /// <summary>The real service over the same context — these tests exercise accounts that have NOT
+    /// enrolled, which is the forced-enrollment path: login succeeds and issues a restricted session.</summary>
+    private static TwoFactorService TwoFactor(IdentityDbContext context) =>
+        new(new StaffTwoFactorRepository(context),
+            new AesGcmTwoFactorSecretCipher(Options.Create(new TwoFactorSecretOptions
+            {
+                CurrentKeyVersion = 1,
+                Keys = { [1] = Convert.ToBase64String(Enumerable.Repeat((byte)0x2A, 32).ToArray()) },
+            })),
+            Options.Create(new TwoFactorOptions()),
+            TimeProvider.System,
+            Microsoft.Extensions.Logging.Abstractions.NullLogger<TwoFactorService>.Instance);
 
     /// <summary>Seeds an Admin (wildcard) role once per test DB and returns its id — mirrors what
     /// <c>DevStaffSeeder</c> does in the real host.</summary>
