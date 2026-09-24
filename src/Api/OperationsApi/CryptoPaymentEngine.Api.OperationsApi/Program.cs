@@ -193,6 +193,7 @@ app.MapOpsAccountApi();
 app.MapOpsAuditApi();
 app.MapOpsMerchantApi();
 app.MapOpsMerchantFeeApi();
+app.MapOpsDefaultFeeApi();
 app.MapOpsWalletApi();
 app.MapOpsMerchantSettlementApi();
 app.MapOpsMerchantPortalAccountApi();

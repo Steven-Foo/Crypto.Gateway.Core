@@ -178,6 +178,8 @@ gating would hand a new account a blank screen.
 | PUT | `/api/v1/ops/merchants/{id}/deposit-limits` | `ops.fees.manage` | 9 |
 | GET | `/api/v1/ops/merchants/{id}/fees` | `ops.fees.view` | 9 |
 | PUT | `/api/v1/ops/merchants/{id}/fees` | `ops.fees.manage` | 9 |
+| GET | `/api/v1/ops/merchants/default-fees` | `ops.fees.view` | 9 |
+| PUT | `/api/v1/ops/merchants/default-fees` | `ops.fees.manage` | 9 |
 | PUT | `/api/v1/ops/merchants/{id}/payout-approval` | `ops.merchants.manage` | 9 |
 | PUT | `/api/v1/ops/merchants/{id}/profile` | `ops.merchants.manage` | 9 |
 | POST | `/api/v1/ops/merchants/{id}/regenerate-key` | `ops.merchants.rotate-key` | 9 |
@@ -998,7 +1000,11 @@ param (client-side filter on the returned page for now).
   "error": null
 }
 ```
-An unpriced merchant simply has an empty `fees` array — which means **zero fee**, not an error.
+An unpriced merchant simply has an empty `fees` array. **This is not necessarily zero fee** — correcting an
+earlier version of this doc: if `Merchant:DefaultFee` config is set to a non-zero platform default, an unpriced
+merchant is charged *that* at deposit/withdrawal time instead (see §9b's `topUpFee*` note below for the one
+schedule that's a genuine, unconditional zero). An empty array only guarantees "this merchant has no fee
+explicitly declared" — not what it will actually be charged.
 `minimumDeposit`/`maximumDeposit`/`minimumWithdrawal`/`maximumWithdrawal`/`merchantWithdrawalCapFlat`/
 `merchantWithdrawalCapPercent` are read-only here (set via `PUT .../deposit-limits`, `PUT .../withdrawal-limits`,
 and `PUT .../withdrawal-cap` respectively) — included for a single-screen view.
@@ -1052,6 +1058,51 @@ it left behind rather than having to re-GET and hope:
                       "topUpFeeFixed": 0, "topUpFeePercent": 3 } },
   "warnings": [] }
 ```
+
+### `GET /api/v1/ops/merchants/default-fees` — `ops.fees.view`
+The default deposit/withdrawal fee template, per asset — pure storage for the create-merchant screen's
+pre-fill. **This is a UI convenience only.** It does not touch how any merchant's own pricing is set (that's
+still `PUT .../merchants/{id}/fees`, above) and does not change how an already-unpriced merchant is charged at
+deposit/withdrawal time (that stays `Merchant:DefaultFee` config, untouched — see the corrected note above).
+Setting a value here just changes what number shows up pre-filled in the create-merchant form; the operator
+still submits it the normal way through `POST /merchants` like any manually-typed value.
+
+Response — an array, one entry per asset with a default set (empty until staff configures one; today only
+TRON·USDT is expected):
+```json
+{
+  "isSuccess": true,
+  "data": {
+    "defaults": [
+      {
+        "chain": "Tron", "coin": "USDT",
+        "depositFeeFixed": 0.0, "depositFeePercent": 2.0, "depositFeeMinimum": 0.5,
+        "withdrawalFeeFixed": 1.0, "withdrawalFeePercent": 1.0, "withdrawalFeeMinimum": 1.0
+      }
+    ]
+  },
+  "error": null, "errorCode": null
+}
+```
+
+### `PUT /api/v1/ops/merchants/default-fees` — `ops.fees.manage`
+Unlike the per-merchant fee PUT above, this is a **full replace** — every field is required, there is no
+"omit = unchanged" semantics (there's nothing to leave unchanged; you're editing the template, not adjusting
+one merchant's live pricing).
+
+Request:
+```json
+{
+  "chain": "Tron", "coin": "USDT",
+  "depositFeeFixed": 0.0, "depositFeePercent": 2.0, "depositFeeMinimum": 0.5,
+  "withdrawalFeeFixed": 1.0, "withdrawalFeePercent": 1.0, "withdrawalFeeMinimum": 1.0
+}
+```
+Same validation as the per-merchant fee endpoint: percent `0–100` to 2 decimal places, fixed/minimum
+non-negative at the asset's precision, `400` on an unrecognized chain/coin. Response echoes back the saved
+values in the same shape as one row of the `GET` above (no `warnings` array — the disproportionate-minimum
+check compares against a specific merchant's own minimum transaction amount, which doesn't exist for a
+template). Audit action: `merchant.default_fee_updated`.
 
 ### `PUT /api/v1/ops/merchants/{id}/deposit-limits` — `ops.fees.manage`
 Mirrors `PUT .../withdrawal-limits` (§ below) for the **payin** side — new, previously no such concept

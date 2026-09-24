@@ -16,6 +16,7 @@ public sealed class MerchantDbContext(DbContextOptions<MerchantDbContext> option
     public DbSet<MerchantAssetPolicy> AssetPolicies => Set<MerchantAssetPolicy>();
     public DbSet<MerchantSettlementWallet> SettlementWallets => Set<MerchantSettlementWallet>();
     public DbSet<MerchantWebhook> Webhooks => Set<MerchantWebhook>();
+    public DbSet<DefaultFeePolicy> DefaultFeePolicies => Set<DefaultFeePolicy>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -26,5 +27,6 @@ public sealed class MerchantDbContext(DbContextOptions<MerchantDbContext> option
         modelBuilder.ApplyConfiguration(new MerchantAssetPolicyMap());
         modelBuilder.ApplyConfiguration(new MerchantSettlementWalletMap());
         modelBuilder.ApplyConfiguration(new MerchantWebhookMap());
+        modelBuilder.ApplyConfiguration(new DefaultFeePolicyMap());
     }
 }

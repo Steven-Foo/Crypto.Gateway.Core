@@ -71,6 +71,8 @@ public static class MerchantModuleExtensions
             sp.GetService<IAddressScreeningService>(),
             sp.GetRequiredService<IOptions<MerchantScreeningOptions>>()));
         services.AddScoped<IMerchantAssetPolicyService, MerchantAssetPolicyService>();
+        services.AddScoped<IDefaultFeePolicyRepository, DefaultFeePolicyRepository>();
+        services.AddScoped<IDefaultFeePolicyService, DefaultFeePolicyService>();
 
         // Same soft resolution as the registrar above, and for the same reason: a host that composes
         // Merchant but not Compliance must still boot. The service reports loudly if re-screening is

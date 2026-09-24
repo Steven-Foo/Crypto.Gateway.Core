@@ -804,3 +804,46 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260924071526_AddDefaultFeePolicy'
+)
+BEGIN
+    CREATE TABLE [merchant].[DefaultFeePolicy] (
+        [Id] uniqueidentifier NOT NULL,
+        [AssetId] uniqueidentifier NOT NULL,
+        [DepositFeeFixed] decimal(38,0) NOT NULL,
+        [DepositFeeBps] int NOT NULL,
+        [MinimumDepositFee] decimal(38,0) NOT NULL,
+        [WithdrawalFee] decimal(38,0) NOT NULL,
+        [WithdrawalFeeBps] int NOT NULL,
+        [MinimumWithdrawalFee] decimal(38,0) NOT NULL,
+        [CreatedAt] datetimeoffset NOT NULL,
+        [UpdatedAt] datetimeoffset NOT NULL,
+        CONSTRAINT [PK_DefaultFeePolicy] PRIMARY KEY ([Id]),
+        CONSTRAINT [CK_DefaultFeePolicy_FeeBps] CHECK ([DepositFeeBps] >= 0 AND [DepositFeeBps] <= 10000 AND [WithdrawalFeeBps] >= 0 AND [WithdrawalFeeBps] <= 10000),
+        CONSTRAINT [CK_DefaultFeePolicy_NonNegative] CHECK ([DepositFeeFixed] >= 0 AND [WithdrawalFee] >= 0 AND [MinimumDepositFee] >= 0 AND [MinimumWithdrawalFee] >= 0)
+    );
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260924071526_AddDefaultFeePolicy'
+)
+BEGIN
+    CREATE UNIQUE INDEX [IX_DefaultFeePolicy_AssetId] ON [merchant].[DefaultFeePolicy] ([AssetId]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260924071526_AddDefaultFeePolicy'
+)
+BEGIN
+    INSERT INTO [merchant].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260924071526_AddDefaultFeePolicy', N'10.0.9');
+END;
+
+COMMIT;
+GO
+
