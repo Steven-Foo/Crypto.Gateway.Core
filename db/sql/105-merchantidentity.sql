@@ -356,3 +356,32 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [merchantidentity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260925065553_AddMerchantUserRequireTwoFactor'
+)
+BEGIN
+    ALTER TABLE [merchantidentity].[MerchantUserSession] ADD [RequireTwoFactor] bit NOT NULL DEFAULT CAST(1 AS bit);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchantidentity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260925065553_AddMerchantUserRequireTwoFactor'
+)
+BEGIN
+    ALTER TABLE [merchantidentity].[MerchantUser] ADD [RequireTwoFactor] bit NOT NULL DEFAULT CAST(1 AS bit);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchantidentity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260925065553_AddMerchantUserRequireTwoFactor'
+)
+BEGIN
+    INSERT INTO [merchantidentity].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260925065553_AddMerchantUserRequireTwoFactor', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

@@ -53,7 +53,7 @@ public sealed class StaffAccountServiceTests : IAsyncLifetime
         var roleId = await SeedRoleAsync();
 
         await using var create = Context();
-        var created = await Service(create).CreateAsync("ops.person1", roleId, Ct);
+        var created = await Service(create).CreateAsync("ops.person1", roleId, true, Ct);
 
         created.IsSuccess.ShouldBeTrue();
         created.Value.Password.ShouldNotBeNullOrWhiteSpace();
@@ -79,7 +79,7 @@ public sealed class StaffAccountServiceTests : IAsyncLifetime
         var roleId = await SeedRoleAsync();
 
         await using var context = Context();
-        var result = await Service(context).CreateAsync(username!, roleId, Ct);
+        var result = await Service(context).CreateAsync(username!, roleId, true, Ct);
 
         result.IsFailure.ShouldBeTrue();
         result.Error!.Code.ShouldBe(StaffUserErrors.UsernameRequired.Code);
@@ -90,10 +90,10 @@ public sealed class StaffAccountServiceTests : IAsyncLifetime
     {
         var roleId = await SeedRoleAsync();
         await using var first = Context();
-        await Service(first).CreateAsync("dupe", roleId, Ct);
+        await Service(first).CreateAsync("dupe", roleId, true, Ct);
 
         await using var second = Context();
-        var duplicate = await Service(second).CreateAsync("dupe", roleId, Ct);
+        var duplicate = await Service(second).CreateAsync("dupe", roleId, true, Ct);
 
         duplicate.IsFailure.ShouldBeTrue();
         duplicate.Error!.Code.ShouldBe(StaffUserErrors.UsernameAlreadyExists.Code);
@@ -104,7 +104,7 @@ public sealed class StaffAccountServiceTests : IAsyncLifetime
     {
         var roleId = await SeedRoleAsync();
         await using var create = Context();
-        var account = (await Service(create).CreateAsync("self", roleId, Ct)).Value;
+        var account = (await Service(create).CreateAsync("self", roleId, true, Ct)).Value;
 
         await using var disable = Context();
         var result = await Service(disable).SetStatusAsync(account.StaffUserId, active: false, account.StaffUserId, Ct);
@@ -118,7 +118,7 @@ public sealed class StaffAccountServiceTests : IAsyncLifetime
     {
         var roleId = await SeedRoleAsync();
         await using var create = Context();
-        var only = (await Service(create).CreateAsync("only-active", roleId, Ct)).Value;
+        var only = (await Service(create).CreateAsync("only-active", roleId, true, Ct)).Value;
 
         // A different caller (not "only") tries to disable the last active account.
         await using var disable = Context();
@@ -133,8 +133,8 @@ public sealed class StaffAccountServiceTests : IAsyncLifetime
     {
         var roleId = await SeedRoleAsync();
         await using var create = Context();
-        var first = (await Service(create).CreateAsync("first", roleId, Ct)).Value;
-        var second = (await Service(create).CreateAsync("second", roleId, Ct)).Value;
+        var first = (await Service(create).CreateAsync("first", roleId, true, Ct)).Value;
+        var second = (await Service(create).CreateAsync("second", roleId, true, Ct)).Value;
 
         await using var disable = Context();
         var result = await Service(disable).SetStatusAsync(second.StaffUserId, active: false, first.StaffUserId, Ct);
@@ -148,7 +148,7 @@ public sealed class StaffAccountServiceTests : IAsyncLifetime
     {
         var roleId = await SeedRoleAsync();
         await using var create = Context();
-        var created = await Service(create).CreateAsync("reset-me", roleId, Ct);
+        var created = await Service(create).CreateAsync("reset-me", roleId, true, Ct);
 
         await using var reset = Context();
         var newCredential = await Service(reset).ResetPasswordAsync(created.Value.StaffUserId, Ct);
@@ -164,11 +164,58 @@ public sealed class StaffAccountServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Creating_an_account_stores_the_requested_two_factor_switch()
+    {
+        var roleId = await SeedRoleAsync();
+        await using var create = Context();
+        var forced = (await Service(create).CreateAsync("forced", roleId, true, Ct)).Value;
+        var optional = (await Service(create).CreateAsync("optional", roleId, false, Ct)).Value;
+
+        await using var verify = Context();
+        (await verify.StaffUsers.SingleAsync(u => u.Id == forced.StaffUserId, Ct)).RequireTwoFactor.ShouldBeTrue();
+        (await verify.StaffUsers.SingleAsync(u => u.Id == optional.StaffUserId, Ct)).RequireTwoFactor.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task An_admin_can_flip_another_accounts_two_factor_switch()
+    {
+        var roleId = await SeedRoleAsync();
+        await using var create = Context();
+        var admin = (await Service(create).CreateAsync("admin.acct", roleId, true, Ct)).Value;
+        var target = (await Service(create).CreateAsync("target.acct", roleId, true, Ct)).Value;
+
+        await using var toggle = Context();
+        var result = await Service(toggle).SetRequireTwoFactorAsync(
+            target.StaffUserId, requireTwoFactor: false, admin.StaffUserId, Ct);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.RequireTwoFactor.ShouldBeFalse();
+    }
+
+    [Fact]
+    public async Task An_account_cannot_change_its_own_two_factor_switch()
+    {
+        var roleId = await SeedRoleAsync();
+        await using var create = Context();
+        var account = (await Service(create).CreateAsync("self.switch", roleId, true, Ct)).Value;
+
+        await using var toggle = Context();
+        var result = await Service(toggle).SetRequireTwoFactorAsync(
+            account.StaffUserId, requireTwoFactor: false, account.StaffUserId, Ct);
+
+        result.IsFailure.ShouldBeTrue();
+        result.Error!.Code.ShouldBe(StaffUserErrors.CannotChangeOwnTwoFactorRequirement.Code);
+
+        await using var verify = Context();
+        (await verify.StaffUsers.SingleAsync(u => u.Id == account.StaffUserId, Ct)).RequireTwoFactor.ShouldBeTrue();
+    }
+
+    [Fact]
     public async Task Changing_role_to_an_unknown_role_fails()
     {
         var roleId = await SeedRoleAsync();
         await using var create = Context();
-        var account = (await Service(create).CreateAsync("reassign-me", roleId, Ct)).Value;
+        var account = (await Service(create).CreateAsync("reassign-me", roleId, true, Ct)).Value;
 
         await using var change = Context();
         var result = await Service(change).ChangeRoleAsync(account.StaffUserId, Guid.CreateVersion7(), Ct);

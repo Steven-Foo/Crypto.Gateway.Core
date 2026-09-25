@@ -30,9 +30,12 @@ public sealed record LoginResult(
 /// docs/two-factor-authentication.md). The host middleware enforces that, not this record.</param>
 /// <param name="AuthenticatorProven">True only when an authenticator code proved the session. A guarded
 /// action requires it; a recovery-code session is refused.</param>
+/// <param name="RequireTwoFactor">Snapshotted from <see cref="StaffUser.RequireTwoFactor"/> at login (§
+/// StaffSession). False lets the host's guarded-action filter skip the per-action code check entirely — the
+/// switch being off means this account does everything without 2FA, not just login.</param>
 public sealed record StaffPrincipal(
     Guid StaffUserId, string Username, Guid RoleId, string RoleName, IReadOnlyList<string> Permissions, string CsrfToken,
-    bool TwoFactorEnrolled, bool AuthenticatorProven);
+    bool TwoFactorEnrolled, bool AuthenticatorProven, bool RequireTwoFactor);
 
 public interface IStaffAuthService
 {
@@ -85,12 +88,20 @@ public sealed class StaffAuthService(
         if (!user.CanLogIn)
             return Result.Failure<LoginResult>(StaffUserErrors.AccountDisabled);
 
-        // The second factor is checked AFTER the password, deliberately. Checking it first, or reporting
-        // "wrong code" to someone who also got the password wrong, would confirm a valid username/password
-        // pair to an attacker holding only those.
-        var factorResult = await ResolveSecondFactorAsync(user.Id, command.Code, cancellationToken);
-        if (factorResult.IsFailure)
-            return Result.Failure<LoginResult>(factorResult.Error!);
+        // The switch decides whether a second factor is even asked for — off skips this entirely, even for an
+        // account that bound a factor earlier and never unbound it (§ StaffUser.RequireTwoFactor: the switch,
+        // not the binding, gates it). Checked AFTER the password when it does apply, deliberately: checking it
+        // first, or reporting "wrong code" to someone who also got the password wrong, would confirm a valid
+        // username/password pair to an attacker holding only those.
+        TwoFactorMethod? method = null;
+        if (user.RequireTwoFactor)
+        {
+            var factorResult = await ResolveSecondFactorAsync(user.Id, command.Code, cancellationToken);
+            if (factorResult.IsFailure)
+                return Result.Failure<LoginResult>(factorResult.Error!);
+
+            method = factorResult.Value;
+        }
 
         // The role's permission set is resolved here, once, and snapshotted onto the session — a role's
         // permissions changing takes effect on the account's next login, not mid-session (§ StaffSession).
@@ -103,17 +114,16 @@ public sealed class StaffAuthService(
         // A second CSPRNG value as the anti-CSRF token — same 256-bit generator, but we keep only the raw value
         // (it is compared plaintext, never a bearer credential, so it isn't hashed). See StaffSession.CsrfToken.
         var csrfToken = tokenGenerator.Generate().RawToken;
-        var method = factorResult.Value;
         var session = StaffSession.Issue(
             user.Id, user.Username, token.Hash, csrfToken, role.Id, role.Name, role.PermissionCodes,
-            TimeSpan.FromHours(_options.SessionTtlHours), now, method);
+            TimeSpan.FromHours(_options.SessionTtlHours), now, user.RequireTwoFactor, method);
 
         sessionRepository.Add(session);
         await sessionRepository.SaveChangesAsync(cancellationToken);
 
         return Result.Success(new LoginResult(
             token.RawToken, csrfToken, session.ExpiresAt, user.Username, role.Id, role.Name, role.PermissionCodes,
-            TwoFactorEnrolled: method is not null, method));
+            TwoFactorEnrolled: session.TwoFactorEnrolled, method));
     }
 
     /// <summary>
@@ -189,11 +199,12 @@ public sealed class StaffAuthService(
         if (session is null || !session.IsValid(timeProvider.GetUtcNow()))
             return Result.Failure<StaffPrincipal>(StaffUserErrors.SessionExpiredOrRevoked);
 
-        // Enrollment state is read from the session's recorded method, not re-queried: a session issued
+        // Enrollment/proven state is read from the session's own properties, not re-queried: a session issued
         // before enrollment stays restricted until it is upgraded in place by confirming (§ StaffSession),
-        // which is what makes the restriction survive across requests without a per-request lookup.
+        // and a switch-off session reads both as satisfied unconditionally — which is what makes both the
+        // restriction and the bypass survive across requests without a per-request lookup of the account.
         return Result.Success(new StaffPrincipal(
             session.StaffUserId, session.Username, session.RoleId, session.RoleName, session.PermissionCodes,
-            session.CsrfToken, TwoFactorEnrolled: session.TwoFactorMethod is not null, session.AuthenticatorProven));
+            session.CsrfToken, session.TwoFactorEnrolled, session.AuthenticatorProven, session.RequireTwoFactor));
     }
 }

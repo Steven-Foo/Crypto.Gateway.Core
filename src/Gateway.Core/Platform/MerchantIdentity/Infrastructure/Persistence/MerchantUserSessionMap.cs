@@ -25,6 +25,7 @@ public sealed class MerchantUserSessionMap : IEntityTypeConfiguration<MerchantUs
         // Nullable and stored as its name, so the migration is additive and live sessions survive it.
         builder.Property(s => s.TwoFactorMethod).HasConversion<string>().IsUnicode(false).HasMaxLength(16);
 
+        builder.Ignore(s => s.TwoFactorEnrolled);
         builder.Ignore(s => s.AuthenticatorProven);
         builder.Ignore(s => s.PermissionCodes);
         builder.Ignore(s => s.DomainEvents);

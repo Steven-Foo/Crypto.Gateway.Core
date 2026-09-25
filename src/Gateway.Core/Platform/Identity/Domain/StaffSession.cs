@@ -12,8 +12,9 @@ public sealed class StaffSession : Entity<Guid>
 {
     private StaffSession(
         Guid id, Guid staffUserId, string username, string tokenHash, string csrfToken, Guid roleId, string roleName,
-        string? permissionCodesCsv, DateTimeOffset expiresAt, DateTimeOffset now) : base(id)
+        string? permissionCodesCsv, bool requireTwoFactor, DateTimeOffset expiresAt, DateTimeOffset now) : base(id)
     {
+        RequireTwoFactor = requireTwoFactor;
         StaffUserId = staffUserId;
         Username = username;
         TokenHash = tokenHash;
@@ -72,9 +73,21 @@ public sealed class StaffSession : Entity<Guid>
     /// </summary>
     public TwoFactorMethod? TwoFactorMethod { get; private set; }
 
-    /// <summary>True when this session was proved by an authenticator app, which is the only method a
-    /// guarded action accepts.</summary>
-    public bool AuthenticatorProven => TwoFactorMethod == Domain.TwoFactorMethod.Totp;
+    /// <summary>Snapshotted from <see cref="StaffUser.RequireTwoFactor"/> at login — same principle as
+    /// <see cref="RoleName"/>/<see cref="PermissionCodesCsv"/>: the switch flipping mid-session takes effect
+    /// on this account's NEXT login, not retroactively on a session already issued. False makes both
+    /// <see cref="TwoFactorEnrolled"/> and <see cref="AuthenticatorProven"/> read as satisfied unconditionally,
+    /// which is what lets a switch-off session skip 2FA everywhere without touching <see cref="TwoFactorMethod"/>
+    /// at all (it stays an honest record of what was actually proved, or null if nothing was).</summary>
+    public bool RequireTwoFactor { get; private set; }
+
+    /// <summary>False only when the switch is on and this account has not finished enrolling — the one case
+    /// the host middleware restricts to the enrollment routes.</summary>
+    public bool TwoFactorEnrolled => !RequireTwoFactor || TwoFactorMethod is not null;
+
+    /// <summary>True when this session may perform a guarded action: either the switch is off for this
+    /// account (nothing to prove), or an authenticator app — not a recovery code — proved it at login.</summary>
+    public bool AuthenticatorProven => !RequireTwoFactor || TwoFactorMethod == Domain.TwoFactorMethod.Totp;
 
     public IReadOnlyList<string> PermissionCodes =>
         string.IsNullOrWhiteSpace(PermissionCodesCsv)
@@ -85,12 +98,13 @@ public sealed class StaffSession : Entity<Guid>
 
     public static StaffSession Issue(
         Guid staffUserId, string username, string tokenHash, string csrfToken, Guid roleId, string roleName,
-        IReadOnlyCollection<string> permissionCodes, TimeSpan ttl, DateTimeOffset now,
+        IReadOnlyCollection<string> permissionCodes, TimeSpan ttl, DateTimeOffset now, bool requireTwoFactor,
         TwoFactorMethod? twoFactorMethod = null)
     {
         var csv = permissionCodes.Count == 0 ? null : string.Join(',', permissionCodes);
         return new StaffSession(
-            Guid.CreateVersion7(), staffUserId, username, tokenHash, csrfToken, roleId, roleName, csv, now.Add(ttl), now)
+            Guid.CreateVersion7(), staffUserId, username, tokenHash, csrfToken, roleId, roleName, csv,
+            requireTwoFactor, now.Add(ttl), now)
         {
             TwoFactorMethod = twoFactorMethod,
         };

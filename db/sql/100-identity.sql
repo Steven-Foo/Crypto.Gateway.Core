@@ -409,3 +409,32 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [identity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260925064353_AddStaffRequireTwoFactor'
+)
+BEGIN
+    ALTER TABLE [identity].[StaffUser] ADD [RequireTwoFactor] bit NOT NULL DEFAULT CAST(1 AS bit);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [identity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260925064353_AddStaffRequireTwoFactor'
+)
+BEGIN
+    ALTER TABLE [identity].[StaffSession] ADD [RequireTwoFactor] bit NOT NULL DEFAULT CAST(1 AS bit);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [identity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260925064353_AddStaffRequireTwoFactor'
+)
+BEGIN
+    INSERT INTO [identity].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260925064353_AddStaffRequireTwoFactor', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

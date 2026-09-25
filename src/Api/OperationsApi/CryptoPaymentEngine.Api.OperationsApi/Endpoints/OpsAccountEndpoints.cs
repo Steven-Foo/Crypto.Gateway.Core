@@ -26,6 +26,8 @@ public static class OpsAccountEndpoints
             .RequireTwoFactor(GuardedActions.AccountsManage);
         app.MapPost("/api/v1/ops/accounts/{id:guid}/reset-password", ResetPasswordAsync).RequirePermission(OpsPermissions.Accounts.Manage)
             .RequireTwoFactor(GuardedActions.AccountsManage);
+        app.MapPatch("/api/v1/ops/accounts/{id:guid}/two-factor", SetRequireTwoFactorAsync).RequirePermission(OpsPermissions.Accounts.Manage)
+            .RequireTwoFactor(GuardedActions.AccountsManage);
     }
 
     private static async Task<IResult> ListAsync(IStaffAccountService accounts, HttpContext http, int page = 1, int pageSize = 50)
@@ -55,14 +57,14 @@ public static class OpsAccountEndpoints
     private static async Task<IResult> CreateAsync(
         CreateAccountRequest request, IStaffAccountService accounts, IAuditLogger audit, HttpContext http)
     {
-        var result = await accounts.CreateAsync(request.Username, request.RoleId, http.RequestAborted);
+        var result = await accounts.CreateAsync(request.Username, request.RoleId, request.RequireTwoFactor, http.RequestAborted);
         if (result.IsFailure)
             return OpsResults.Fail(result.Error!);
 
         var actor = AuditActor.From(http);
         await audit.LogAsync(new LogAuditEntryCommand(
             actor.StaffUserId, actor.Username, "account.created", "StaffUser", result.Value.StaffUserId.ToString(),
-            $"username={result.Value.Username}", actor.IpAddress), http.RequestAborted);
+            $"username={result.Value.Username},requireTwoFactor={request.RequireTwoFactor}", actor.IpAddress), http.RequestAborted);
 
         return Results.Ok(new
         {
@@ -131,5 +133,22 @@ public static class OpsAccountEndpoints
             },
             error = (string?)null, errorCode = (string?)null,
         });
+    }
+
+    /// <summary>Flips the live switch (§ StaffUser.RequireTwoFactor) — independent of whether the account has
+    /// actually bound an authenticator. Refuses a self-target (<see cref="StaffUserErrors.CannotChangeOwnTwoFactorRequirement"/>).</summary>
+    private static async Task<IResult> SetRequireTwoFactorAsync(
+        Guid id, SetAccountRequireTwoFactorRequest request, IStaffAccountService accounts, IAuditLogger audit, HttpContext http)
+    {
+        var actor = AuditActor.From(http);
+        var result = await accounts.SetRequireTwoFactorAsync(id, request.RequireTwoFactor, actor.StaffUserId, http.RequestAborted);
+        if (result.IsFailure)
+            return OpsResults.Fail(result.Error!);
+
+        await audit.LogAsync(new LogAuditEntryCommand(
+            actor.StaffUserId, actor.Username, "account.two_factor_requirement_changed", "StaffUser", id.ToString(),
+            $"requireTwoFactor={request.RequireTwoFactor}", actor.IpAddress), http.RequestAborted);
+
+        return Results.Ok(new { isSuccess = true, data = result.Value, error = (string?)null, errorCode = (string?)null });
     }
 }

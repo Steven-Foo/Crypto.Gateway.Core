@@ -118,6 +118,9 @@ namespace CryptoPaymentEngine.Gateway.Core.Platform.Identity.Infrastructure.Pers
                         .IsUnicode(false)
                         .HasColumnType("varchar(2048)");
 
+                    b.Property<bool>("RequireTwoFactor")
+                        .HasColumnType("bit");
+
                     b.Property<DateTimeOffset?>("RevokedAt")
                         .HasColumnType("datetimeoffset");
 
@@ -228,6 +231,9 @@ namespace CryptoPaymentEngine.Gateway.Core.Platform.Identity.Infrastructure.Pers
                         .IsRequired()
                         .HasMaxLength(512)
                         .HasColumnType("nvarchar(512)");
+
+                    b.Property<bool>("RequireTwoFactor")
+                        .HasColumnType("bit");
 
                     b.Property<Guid>("RoleId")
                         .HasColumnType("uniqueidentifier");

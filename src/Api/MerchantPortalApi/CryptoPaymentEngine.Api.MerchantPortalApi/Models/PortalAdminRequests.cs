@@ -12,11 +12,21 @@ public sealed class CreatePortalAccountRequest
     /// <summary>The role to grant. Optional: an account created without one has NO permissions until a role is
     /// assigned (fail-closed).</summary>
     public Guid? RoleId { get; init; }
+
+    /// <summary>The live 2FA switch for this account (§ MerchantUser.RequireTwoFactor) — true forces it
+    /// through enrollment on first login, false lets it use the portal without 2FA until an admin turns the
+    /// switch on. Defaults true (today's universal-force behaviour) when the caller omits it.</summary>
+    public bool RequireTwoFactor { get; init; } = true;
 }
 
 public sealed class SetPortalAccountStatusRequest
 {
     public bool Active { get; init; }
+}
+
+public sealed class SetPortalAccountRequireTwoFactorRequest
+{
+    public bool RequireTwoFactor { get; init; }
 }
 
 public sealed class AssignPortalRoleRequest

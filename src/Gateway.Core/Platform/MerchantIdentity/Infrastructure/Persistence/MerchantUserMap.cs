@@ -22,6 +22,7 @@ public sealed class MerchantUserMap : IEntityTypeConfiguration<MerchantUser>
         builder.Property(u => u.RoleId);
         builder.Property(u => u.MustChangePassword).IsRequired();
         builder.Property(u => u.IsPrimary).IsRequired();
+        builder.Property(u => u.RequireTwoFactor).IsRequired();
         builder.Property(u => u.Status).HasConversion<string>().HasMaxLength(16).IsRequired();
 
         builder.Ignore(u => u.DomainEvents);

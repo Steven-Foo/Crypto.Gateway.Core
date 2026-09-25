@@ -23,9 +23,12 @@ public sealed record MerchantLoginResult(
 /// </summary>
 /// <param name="TwoFactorEnrolled">False ⇒ this session may reach only the enrollment endpoints. Enforced
 /// by the host middleware, not this record.</param>
+/// <param name="RequireTwoFactor">Snapshotted from <see cref="MerchantUser.RequireTwoFactor"/> at login. The
+/// portal has no guarded-action filter yet (unlike Ops' <c>StaffAuthorization.RequireTwoFactor</c>), so this
+/// is carried for a future consumer rather than acted on here — see <c>MerchantUserSession</c>.</param>
 public sealed record MerchantPrincipal(
     Guid MerchantUserId, Guid MerchantId, string Username, string DisplayName, IReadOnlyList<string> Permissions,
-    string CsrfToken, bool TwoFactorEnrolled);
+    string CsrfToken, bool TwoFactorEnrolled, bool RequireTwoFactor);
 
 public interface IMerchantAuthService
 {
@@ -86,12 +89,21 @@ public sealed class MerchantAuthService(
         if (merchant is null || !merchant.CanAccessPortal)
             return Result.Failure<MerchantLoginResult>(MerchantUserErrors.MerchantClosed);
 
-        // Checked AFTER the password (and the merchant-closed gate above), deliberately: reporting "wrong
-        // code" to someone who also got the password wrong would confirm a valid username/password pair to
-        // an attacker holding only those, and there is no reason to spend a 2FA check on a closed merchant.
-        var factorResult = await ResolveSecondFactorAsync(user.Id, command.Code, cancellationToken);
-        if (factorResult.IsFailure)
-            return Result.Failure<MerchantLoginResult>(factorResult.Error!);
+        // The switch decides whether a second factor is even asked for — off skips this entirely, even for an
+        // account that bound a factor earlier and never unbound it (§ MerchantUser.RequireTwoFactor). Checked
+        // AFTER the password (and the merchant-closed gate above) when it does apply, deliberately: reporting
+        // "wrong code" to someone who also got the password wrong would confirm a valid username/password
+        // pair to an attacker holding only those, and there is no reason to spend a 2FA check on a closed
+        // merchant.
+        MerchantTwoFactorMethod? method = null;
+        if (user.RequireTwoFactor)
+        {
+            var factorResult = await ResolveSecondFactorAsync(user.Id, command.Code, cancellationToken);
+            if (factorResult.IsFailure)
+                return Result.Failure<MerchantLoginResult>(factorResult.Error!);
+
+            method = factorResult.Value;
+        }
 
         // Resolve the tenant's role for this account. No role (or a role that has since been deleted) ⇒ no
         // permissions at all, so the user can sign in and see nothing rather than silently inheriting access.
@@ -105,17 +117,16 @@ public sealed class MerchantAuthService(
         var now = timeProvider.GetUtcNow();
         var token = tokenGenerator.Generate();
         var csrfToken = tokenGenerator.Generate().RawToken; // second CSPRNG value, compared plaintext (§ CsrfToken)
-        var method = factorResult.Value;
         var session = MerchantUserSession.Issue(
             user.Id, user.MerchantId, user.Username, user.DisplayName, token.Hash, csrfToken, permissions,
-            TimeSpan.FromHours(_options.SessionTtlHours), now, method);
+            TimeSpan.FromHours(_options.SessionTtlHours), now, user.RequireTwoFactor, method);
 
         sessionRepository.Add(session);
         await sessionRepository.SaveChangesAsync(cancellationToken);
 
         return Result.Success(new MerchantLoginResult(
             token.RawToken, csrfToken, session.ExpiresAt, user.MerchantId, user.Username, user.DisplayName,
-            permissions, user.MustChangePassword, TwoFactorEnrolled: method is not null, method));
+            permissions, user.MustChangePassword, TwoFactorEnrolled: session.TwoFactorEnrolled, method));
     }
 
     /// <summary>
@@ -193,10 +204,11 @@ public sealed class MerchantAuthService(
         if (merchant is null || !merchant.CanAccessPortal)
             return Result.Failure<MerchantPrincipal>(MerchantUserErrors.MerchantClosed);
 
-        // Enrollment state comes from the session's recorded method, not a per-request lookup: a session
-        // issued before enrollment stays restricted until it is upgraded in place by confirming.
+        // Enrollment state comes from the session's own properties, not a per-request lookup: a session
+        // issued before enrollment stays restricted until it is upgraded in place by confirming, and a
+        // switch-off session reads it as satisfied unconditionally.
         return Result.Success(new MerchantPrincipal(
             session.MerchantUserId, session.MerchantId, session.Username, session.DisplayName, session.PermissionCodes,
-            session.CsrfToken, TwoFactorEnrolled: session.TwoFactorMethod is not null));
+            session.CsrfToken, session.TwoFactorEnrolled, session.RequireTwoFactor));
     }
 }

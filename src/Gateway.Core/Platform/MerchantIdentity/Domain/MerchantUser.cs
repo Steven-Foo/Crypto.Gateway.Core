@@ -17,7 +17,7 @@ public sealed class MerchantUser : Entity<Guid>
 {
     private MerchantUser(
         Guid id, Guid merchantId, string username, string displayName, string passwordHash, Guid? roleId,
-        bool mustChangePassword, bool isPrimary, DateTimeOffset now) : base(id)
+        bool mustChangePassword, bool isPrimary, bool requireTwoFactor, DateTimeOffset now) : base(id)
     {
         MerchantId = merchantId;
         Username = username;
@@ -26,6 +26,7 @@ public sealed class MerchantUser : Entity<Guid>
         RoleId = roleId;
         MustChangePassword = mustChangePassword;
         IsPrimary = isPrimary;
+        RequireTwoFactor = requireTwoFactor;
         Status = MerchantUserStatus.Active;
         CreatedAt = now;
     }
@@ -63,6 +64,12 @@ public sealed class MerchantUser : Entity<Guid>
     /// ordinary account-disable action.</summary>
     public bool IsPrimary { get; private set; }
 
+    /// <summary>The live master switch (§ StaffUser.RequireTwoFactor — identical concept, mirrored for the
+    /// portal): set at creation, flippable anytime after by another portal admin, independent of whether a
+    /// factor is actually bound. False suppresses 2FA entirely for this account, even one already enrolled;
+    /// flipping it back on demands a code again immediately since the bound secret was never touched.</summary>
+    public bool RequireTwoFactor { get; private set; }
+
     public MerchantUserStatus Status { get; private set; }
     public DateTimeOffset CreatedAt { get; private set; }
 
@@ -70,7 +77,7 @@ public sealed class MerchantUser : Entity<Guid>
 
     public static Result<MerchantUser> Create(
         Guid merchantId, string username, string displayName, string passwordHash, Guid? roleId,
-        bool mustChangePassword, bool isPrimary, DateTimeOffset now)
+        bool mustChangePassword, bool isPrimary, bool requireTwoFactor, DateTimeOffset now)
     {
         if (merchantId == Guid.Empty)
             return Result.Failure<MerchantUser>(MerchantUserErrors.MerchantRequired);
@@ -84,7 +91,14 @@ public sealed class MerchantUser : Entity<Guid>
         var name = string.IsNullOrWhiteSpace(displayName) ? username.Trim() : displayName.Trim();
         return Result.Success(new MerchantUser(
             Guid.CreateVersion7(), merchantId, username.Trim(), name, passwordHash, roleId, mustChangePassword,
-            isPrimary, now));
+            isPrimary, requireTwoFactor, now));
+    }
+
+    /// <summary>Flips the live switch. Independent of bind status — see <see cref="RequireTwoFactor"/>.</summary>
+    public Result SetRequireTwoFactor(bool requireTwoFactor)
+    {
+        RequireTwoFactor = requireTwoFactor;
+        return Result.Success();
     }
 
     /// <summary>Assigns (or clears) the account's role. The caller must have verified the role belongs to the

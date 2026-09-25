@@ -5,7 +5,8 @@ using CryptoPaymentEngine.SharedKernel;
 namespace CryptoPaymentEngine.Gateway.Core.Platform.Identity.Application;
 
 public sealed record StaffAccountView(
-    Guid StaffUserId, string Username, Guid RoleId, string RoleName, string Status, DateTimeOffset CreatedAt);
+    Guid StaffUserId, string Username, Guid RoleId, string RoleName, string Status, bool RequireTwoFactor,
+    DateTimeOffset CreatedAt);
 
 /// <summary>The one-time-visible result of creating an account or resetting its password — mirrors the
 /// Merchant module's one-time-secret convention (§10-adjacent).</summary>
@@ -14,7 +15,7 @@ public sealed record StaffAccountCredentialResult(Guid StaffUserId, string Usern
 public interface IStaffAccountService
 {
     Task<Result<StaffAccountCredentialResult>> CreateAsync(
-        string username, Guid roleId, CancellationToken cancellationToken = default);
+        string username, Guid roleId, bool requireTwoFactor, CancellationToken cancellationToken = default);
 
     Task<Result<StaffAccountView>> GetAsync(Guid staffUserId, CancellationToken cancellationToken = default);
 
@@ -31,6 +32,13 @@ public interface IStaffAccountService
 
     Task<Result<StaffAccountCredentialResult>> ResetPasswordAsync(
         Guid staffUserId, CancellationToken cancellationToken = default);
+
+    /// <summary>Flips the live 2FA-required switch (§ StaffUser.RequireTwoFactor). Refuses to let an admin
+    /// change their OWN switch (<see cref="StaffUserErrors.CannotChangeOwnTwoFactorRequirement"/>) — same
+    /// self-target guard as <see cref="SetStatusAsync"/>, for the same reason: doing it to yourself would let
+    /// you drop out of every guarded action with nobody else's sign-off.</summary>
+    Task<Result<StaffAccountView>> SetRequireTwoFactorAsync(
+        Guid staffUserId, bool requireTwoFactor, Guid actingStaffUserId, CancellationToken cancellationToken = default);
 }
 
 public sealed class StaffAccountService(
@@ -41,7 +49,7 @@ public sealed class StaffAccountService(
     TimeProvider timeProvider) : IStaffAccountService
 {
     public async Task<Result<StaffAccountCredentialResult>> CreateAsync(
-        string username, Guid roleId, CancellationToken cancellationToken = default)
+        string username, Guid roleId, bool requireTwoFactor, CancellationToken cancellationToken = default)
     {
         if (string.IsNullOrWhiteSpace(username))
             return Result.Failure<StaffAccountCredentialResult>(StaffUserErrors.UsernameRequired);
@@ -56,7 +64,8 @@ public sealed class StaffAccountService(
             return Result.Failure<StaffAccountCredentialResult>(RoleErrors.NotFound);
 
         var password = passwordGenerator.Generate();
-        var created = StaffUser.Create(trimmed, passwordHasher.Hash(password), roleId, timeProvider.GetUtcNow());
+        var created = StaffUser.Create(
+            trimmed, passwordHasher.Hash(password), roleId, requireTwoFactor, timeProvider.GetUtcNow());
         if (created.IsFailure)
             return Result.Failure<StaffAccountCredentialResult>(created.Error!);
 
@@ -144,9 +153,27 @@ public sealed class StaffAccountService(
         return Result.Success(new StaffAccountCredentialResult(user.Id, user.Username, password));
     }
 
+    public async Task<Result<StaffAccountView>> SetRequireTwoFactorAsync(
+        Guid staffUserId, bool requireTwoFactor, Guid actingStaffUserId, CancellationToken cancellationToken = default)
+    {
+        if (staffUserId == actingStaffUserId)
+            return Result.Failure<StaffAccountView>(StaffUserErrors.CannotChangeOwnTwoFactorRequirement);
+
+        var user = await userRepository.GetByIdAsync(staffUserId, cancellationToken);
+        if (user is null)
+            return Result.Failure<StaffAccountView>(StaffUserErrors.NotFound);
+
+        user.SetRequireTwoFactor(requireTwoFactor);
+        await userRepository.SaveChangesAsync(cancellationToken);
+
+        return Result.Success(await ToViewAsync(user, cancellationToken));
+    }
+
     private async Task<StaffAccountView> ToViewAsync(StaffUser user, CancellationToken cancellationToken)
     {
         var role = await roleRepository.GetByIdAsync(user.RoleId, cancellationToken);
-        return new StaffAccountView(user.Id, user.Username, user.RoleId, role?.Name ?? "(unknown role)", user.Status.ToString(), user.CreatedAt);
+        return new StaffAccountView(
+            user.Id, user.Username, user.RoleId, role?.Name ?? "(unknown role)", user.Status.ToString(),
+            user.RequireTwoFactor, user.CreatedAt);
     }
 }

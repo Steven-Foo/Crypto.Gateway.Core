@@ -223,6 +223,43 @@ POST /auth/2fa/enroll/confirm  { code }      -> 200 { enrolled: true, recoveryCo
 
 ---
 
+## 3c. The per-account 2FA switch — force it, or make it optional
+
+§3b above is "every portal user enrols" — a platform-wide statement. **This is a per-account, admin-set
+switch, `requireTwoFactor`, independent of whether that specific account has actually finished enrolling.**
+Full design: `docs/two-factor-authentication.md` §4.1 (the same feature, mirrored onto this host from Ops).
+
+### The four combinations
+
+| `requireTwoFactor` | Has bound a factor? | What happens at login |
+| --- | --- | --- |
+| `true` (default) | No | Forced into the §3b enrollment flow, as always. |
+| `true` | Yes | Prompted for a code, as always. |
+| `false` | No | Signs straight in. `twoFactorEnrolled: true`, so the SPA does **not** route to the QR screen. |
+| `false` | **Yes** | **Still signs straight in with no code asked** — the existing enrollment is left completely alone, just not checked while the switch is off. Turning it back on demands a code again immediately, no re-enrollment needed. |
+
+This portal has no per-action code prompts (§3b), so unlike the Ops side there is nothing beyond login for
+this switch to affect — it is purely a login-time gate.
+
+### Setting it
+
+- **At creation** — `POST /api/v1/portal/accounts` takes an optional `requireTwoFactor` (§9). Omit it and you
+  get today's behaviour (forced). This also applies to the merchant's own **primary/super-admin** account
+  when platform staff bootstrap it — see `backoffice-frontend-integration.md` §9/§9a; that account is not
+  exempt from this switch, only from disable.
+- **After creation** — `PATCH /api/v1/portal/accounts/{id}/two-factor`, gated on `portal.accounts.manage`,
+  body `{ "requireTwoFactor": bool }`.
+- **You cannot flip your own switch.** Targeting your own signed-in account id returns **409
+  `merchant_user.cannot_change_own_two_factor_requirement`** — another admin (or a teammate holding
+  `portal.accounts.manage`) must do it. Disable the control on your own row in the accounts screen rather
+  than let the request round-trip into a refusal.
+- Tenant-scoped like every other account write: a foreign merchant's account id reads as **not found**, never
+  actionable.
+- Every account row (`GET /api/v1/portal/accounts`) carries the current `requireTwoFactor`, so the accounts
+  screen can render a toggle per row with no extra call.
+
+---
+
 ## 4. Permissions — this drives every screen's visibility
 
 The session carries a permission code list, **snapshotted at login**. A role change therefore takes effect at
@@ -590,7 +627,14 @@ Top-ups appear in the normal deposit history (`/transactions/payin`) once detect
 ### Accounts — `portal.accounts.view` / `portal.accounts.manage`
 
 `GET /accounts`, `POST /accounts`, `PATCH /accounts/{id}/status`, `PATCH /accounts/{id}/role`,
-`POST /accounts/{id}/reset-password`.
+`POST /accounts/{id}/reset-password`, `PATCH /accounts/{id}/two-factor`.
+
+Row shape (`GET /accounts`):
+```json
+{ "merchantUserId": "guid", "username": "...", "displayName": "...", "roleId": "guid|null",
+  "roleName": "...|null", "status": "Active|Disabled", "mustChangePassword": true, "createdAt": "...",
+  "isPrimary": false, "requireTwoFactor": true }
+```
 
 - Create and reset return a **generated one-time password**, shown once. Administrators never choose it.
 - Guards that will reject you, and should be reflected in the UI: you cannot disable **yourself**, and you
@@ -601,6 +645,14 @@ Top-ups appear in the normal deposit history (`/transactions/payin`) once detect
   created when the merchant first got its portal login), fixed permanently, and it's the ONE account platform
   staff can reset on the merchant's behalf if it's ever locked out. Every other account is reset only from
   inside this portal by one of its own admins. Hide or disable the "disable" control for that one row.
+  **It is NOT exempt from `requireTwoFactor`** (§3c) — only from disable; the primary account's own switch can
+  still be flipped by another admin same as any other account.
+- `POST /accounts` accepts an optional `requireTwoFactor` (default `true`) — see §3c for the full
+  force/optional switch design.
+- `PATCH /accounts/{id}/two-factor` — body `{ "requireTwoFactor": bool }` — flips the switch on an existing
+  account (§3c). **409 `merchant_user.cannot_change_own_two_factor_requirement`** if `{id}` is the signed-in
+  user's own account; disable that control on your own row rather than let the request round-trip into a
+  refusal.
 - Usernames are **globally unique across all merchants** (a username resolves to exactly one tenant at login),
   so a collision is possible with a merchant you cannot see. Surface it as "username taken", nothing more.
 - **Disabling an account does not kill its live sessions** today — it is refused at next login. A filed gap.
@@ -646,7 +698,7 @@ Recorded actions:
 | `action` | `entityType` |
 |---|---|
 | `portal.role.created` / `.updated` / `.permissions_changed` / `.deleted` | `MerchantRole` |
-| `portal.account.created` / `.status_changed` / `.role_changed` / `.password_reset` / `.own_password_changed` | `MerchantUser` |
+| `portal.account.created` / `.status_changed` / `.role_changed` / `.password_reset` / `.own_password_changed` / `.two_factor_requirement_changed` | `MerchantUser` |
 | `portal.api_credential.rotated` | `MerchantApiCredential` |
 | `portal.allowed_ips.updated` | `Merchant` |
 | `portal.payout.approved` / `.rejected` | `Withdrawal` |

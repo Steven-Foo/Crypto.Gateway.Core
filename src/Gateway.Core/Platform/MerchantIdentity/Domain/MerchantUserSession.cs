@@ -13,8 +13,10 @@ public sealed class MerchantUserSession : Entity<Guid>
 {
     private MerchantUserSession(
         Guid id, Guid merchantUserId, Guid merchantId, string username, string displayName, string tokenHash,
-        string csrfToken, string? permissionCodesCsv, DateTimeOffset expiresAt, DateTimeOffset now) : base(id)
+        string csrfToken, string? permissionCodesCsv, bool requireTwoFactor, DateTimeOffset expiresAt,
+        DateTimeOffset now) : base(id)
     {
+        RequireTwoFactor = requireTwoFactor;
         MerchantUserId = merchantUserId;
         MerchantId = merchantId;
         Username = username;
@@ -60,20 +62,30 @@ public sealed class MerchantUserSession : Entity<Guid>
     /// later is not a migration.</summary>
     public MerchantTwoFactorMethod? TwoFactorMethod { get; private set; }
 
-    /// <summary>True when an authenticator app proved this session, rather than a printed fallback.</summary>
-    public bool AuthenticatorProven => TwoFactorMethod == Domain.MerchantTwoFactorMethod.Totp;
+    /// <summary>Snapshotted from <see cref="MerchantUser.RequireTwoFactor"/> at login — same principle as
+    /// <c>Platform.Identity.StaffSession.RequireTwoFactor</c>: the switch flipping mid-session takes effect on
+    /// this account's NEXT login, and false makes both <see cref="TwoFactorEnrolled"/> and
+    /// <see cref="AuthenticatorProven"/> read as satisfied unconditionally.</summary>
+    public bool RequireTwoFactor { get; private set; }
+
+    /// <summary>False only when the switch is on and this account has not finished enrolling.</summary>
+    public bool TwoFactorEnrolled => !RequireTwoFactor || TwoFactorMethod is not null;
+
+    /// <summary>True when an authenticator app proved this session, rather than a printed fallback — or the
+    /// switch is off, so there is nothing to prove.</summary>
+    public bool AuthenticatorProven => !RequireTwoFactor || TwoFactorMethod == Domain.MerchantTwoFactorMethod.Totp;
 
     public bool IsValid(DateTimeOffset now) => RevokedAt is null && now < ExpiresAt;
 
     public static MerchantUserSession Issue(
         Guid merchantUserId, Guid merchantId, string username, string displayName, string tokenHash, string csrfToken,
-        IReadOnlyCollection<string> permissionCodes, TimeSpan ttl, DateTimeOffset now,
+        IReadOnlyCollection<string> permissionCodes, TimeSpan ttl, DateTimeOffset now, bool requireTwoFactor,
         MerchantTwoFactorMethod? twoFactorMethod = null)
     {
         var csv = permissionCodes.Count == 0 ? null : string.Join(',', permissionCodes);
         return new MerchantUserSession(
             Guid.CreateVersion7(), merchantUserId, merchantId, username, displayName, tokenHash, csrfToken, csv,
-            now.Add(ttl), now)
+            requireTwoFactor, now.Add(ttl), now)
         {
             TwoFactorMethod = twoFactorMethod,
         };

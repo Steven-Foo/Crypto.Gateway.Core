@@ -104,8 +104,11 @@ public static class OpsMerchantPortalAccountEndpoints
         if (merchant.IsFailure)
             return OpsResults.Fail(merchant.Error!);
 
+        // No request body on this retry route — defaults to forced 2FA, the safe choice with no other signal.
+        // The merchant-creation flow (OpsMerchantEndpoints.CreateMerchantAsync) passes its own caller-chosen
+        // value through the overload below instead.
         var result = await ProvisionFirstPortalAccountAsync(
-            id, merchant.Value.MerchantCode, merchant.Value.Name, accounts, roles, http.RequestAborted);
+            id, merchant.Value.MerchantCode, merchant.Value.Name, accounts, roles, requireTwoFactor: true, http.RequestAborted);
         if (result.IsFailure)
             return OpsResults.Fail(result.Error!);
 
@@ -141,7 +144,8 @@ public static class OpsMerchantPortalAccountEndpoints
     /// </summary>
     public static async Task<Result<MerchantAccountCredential>> ProvisionFirstPortalAccountAsync(
         Guid merchantId, string merchantCode, string merchantName,
-        IMerchantAccountService accounts, IMerchantRoleService roles, CancellationToken cancellationToken)
+        IMerchantAccountService accounts, IMerchantRoleService roles, bool requireTwoFactor,
+        CancellationToken cancellationToken)
     {
         var existingAccounts = await accounts.ListAsync(merchantId, cancellationToken);
         if (existingAccounts.IsFailure)
@@ -169,6 +173,6 @@ public static class OpsMerchantPortalAccountEndpoints
         }
 
         var username = merchantCode.Trim().ToLowerInvariant();
-        return await accounts.CreateAsync(merchantId, username, merchantName, adminRoleId, cancellationToken);
+        return await accounts.CreateAsync(merchantId, username, merchantName, adminRoleId, requireTwoFactor, cancellationToken);
     }
 }

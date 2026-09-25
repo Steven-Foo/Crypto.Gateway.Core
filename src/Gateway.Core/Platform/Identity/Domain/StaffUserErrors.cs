@@ -33,4 +33,10 @@ public static class StaffUserErrors
 
     public static readonly Error CannotDisableLastActiveAccount =
         Error.Conflict("staff_user.cannot_disable_last_active_account", "At least one active staff account must remain.");
+
+    /// <summary>Mirrors <see cref="CannotDisableSelf"/> — flipping your OWN switch off would let you escape
+    /// every guarded action for the rest of your sessions with nobody else's sign-off (§ StaffUser.RequireTwoFactor).
+    /// Another admin must do it, same as an account cannot disable itself.</summary>
+    public static readonly Error CannotChangeOwnTwoFactorRequirement =
+        Error.Conflict("staff_user.cannot_change_own_two_factor_requirement", "You cannot change your own 2FA requirement.");
 }

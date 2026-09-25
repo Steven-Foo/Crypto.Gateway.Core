@@ -24,6 +24,7 @@ public static class PortalAccountEndpoints
         app.MapPatch("/api/v1/portal/accounts/{id:guid}/status", SetAccountStatusAsync).RequirePortalPermission(PortalPermissions.Accounts.Manage);
         app.MapPatch("/api/v1/portal/accounts/{id:guid}/role", AssignAccountRoleAsync).RequirePortalPermission(PortalPermissions.Accounts.Manage);
         app.MapPost("/api/v1/portal/accounts/{id:guid}/reset-password", ResetAccountPasswordAsync).RequirePortalPermission(PortalPermissions.Accounts.Manage);
+        app.MapPatch("/api/v1/portal/accounts/{id:guid}/two-factor", SetAccountRequireTwoFactorAsync).RequirePortalPermission(PortalPermissions.Accounts.Manage);
 
         // The signed-in user's own password — no permission code: everyone may change their own.
         app.MapPost("/api/v1/portal/account/change-password", ChangeOwnPasswordAsync);
@@ -51,7 +52,8 @@ public static class PortalAccountEndpoints
         CreatePortalAccountRequest request, IMerchantAccountService accounts, IAuditLogger audit, HttpContext http)
     {
         var result = await accounts.CreateAsync(
-            PortalTenant.MerchantId(http), request.Username, request.DisplayName ?? "", request.RoleId, http.RequestAborted);
+            PortalTenant.MerchantId(http), request.Username, request.DisplayName ?? "", request.RoleId,
+            request.RequireTwoFactor, http.RequestAborted);
 
         if (result.IsFailure)
             return Fail(result.Error!);
@@ -62,7 +64,7 @@ public static class PortalAccountEndpoints
             PortalAuditActor.From(http).Entry(
                 PortalAuditActions.AccountCreated, PortalAuditActions.EntityAccount,
                 result.Value.MerchantUserId.ToString(),
-                $"username={result.Value.Username}; roleId={request.RoleId?.ToString() ?? "none"}"),
+                $"username={result.Value.Username}; roleId={request.RoleId?.ToString() ?? "none"}; requireTwoFactor={request.RequireTwoFactor}"),
             http.RequestAborted);
 
         return Ok(new
@@ -131,6 +133,25 @@ public static class PortalAccountEndpoints
             username = result.Value.Username,
             temporaryPassword = result.Value.TemporaryPassword, // shown once
         });
+    }
+
+    private static async Task<IResult> SetAccountRequireTwoFactorAsync(
+        Guid id, SetPortalAccountRequireTwoFactorRequest request, IMerchantAccountService accounts, IAuditLogger audit, HttpContext http)
+    {
+        var principal = PortalTenant.Principal(http);
+        var result = await accounts.SetRequireTwoFactorAsync(
+            principal.MerchantId, id, principal.MerchantUserId, request.RequireTwoFactor, http.RequestAborted);
+
+        if (result.IsFailure)
+            return Fail(result.Error!);
+
+        await audit.LogAsync(
+            PortalAuditActor.From(http).Entry(
+                PortalAuditActions.AccountTwoFactorRequirementChanged, PortalAuditActions.EntityAccount, id.ToString(),
+                $"requireTwoFactor={request.RequireTwoFactor}"),
+            http.RequestAborted);
+
+        return Ok(new { merchantUserId = id, requireTwoFactor = request.RequireTwoFactor });
     }
 
     private static async Task<IResult> ChangeOwnPasswordAsync(

@@ -59,6 +59,14 @@ public static class StaffAuthorization
             if (!policy.IsGuarded(action))
                 return await next(context);
 
+            // The account's own live switch (§ StaffUser.RequireTwoFactor) overrides the catalog: off means
+            // this account does everything without 2FA, not only login, so a guarded action never even asks
+            // for a code. This is an explicit per-account admin decision (only another admin can flip it —
+            // StaffAccountService.SetRequireTwoFactorAsync refuses a self-target), not a caller-controlled
+            // bypass.
+            if (!principal.RequireTwoFactor)
+                return await next(context);
+
             // Fail closed. An unenrolled operator is refused, never waved through — the dangerous version of
             // this check passes an account that has no factor at all. Unreachable while enrollment is forced
             // (§ StaffBearerAuthMiddleware), and kept precisely because that is an invariant elsewhere.

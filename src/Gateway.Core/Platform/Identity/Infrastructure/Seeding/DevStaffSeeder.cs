@@ -49,7 +49,8 @@ public sealed class DevStaffSeeder(
 
             var adminRoleId = await EnsureAdminRoleAsync(roleRepository, cancellationToken);
 
-            var userResult = StaffUser.Create(seed.Username, hasher.Hash(seed.Password), adminRoleId, timeProvider.GetUtcNow());
+            var userResult = StaffUser.Create(
+                seed.Username, hasher.Hash(seed.Password), adminRoleId, requireTwoFactor: true, timeProvider.GetUtcNow());
             if (userResult.IsFailure)
             {
                 logger.LogWarning("Dev staff seed skipped: {Error}.", userResult.Error!.Message);

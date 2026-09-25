@@ -28,6 +28,12 @@ public sealed class CreateMerchantRequest
     /// platform default fee, exactly like before this endpoint accepted pricing at all); a caller passing
     /// any other chain/coin gets a clear rejection rather than a silently-inert policy.</summary>
     public CreateMerchantFeeRequest? Fees { get; init; }
+
+    /// <summary>The live 2FA switch (§ MerchantUser.RequireTwoFactor) applied to the merchant's auto-provisioned
+    /// FIRST portal account (its primary/super-admin) — the account is not exempt from this switch, only from
+    /// disable. Defaults true (force) when the caller omits it. Has no effect if the portal account fails to
+    /// provision (staff retry via POST .../portal-account, which reads this same default).</summary>
+    public bool PortalAccountRequireTwoFactor { get; init; } = true;
 }
 
 /// <summary>The initial pricing set at merchant creation — the same shape as <see cref="SetMerchantFeeRequest"/>

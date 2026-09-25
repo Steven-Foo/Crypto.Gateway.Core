@@ -319,7 +319,8 @@ public static class OpsMerchantEndpoints
         // back the merchant. Staff can always retry via POST .../portal-account afterward.
         object? portalAccount = null;
         var portalResult = await OpsMerchantPortalAccountEndpoints.ProvisionFirstPortalAccountAsync(
-            merchant.MerchantId, merchant.MerchantCode, request.Name, portalAccounts, portalRoles, http.RequestAborted);
+            merchant.MerchantId, merchant.MerchantCode, request.Name, portalAccounts, portalRoles,
+            request.PortalAccountRequireTwoFactor, http.RequestAborted);
         if (portalResult.IsFailure)
             logger.LogWarning(
                 "Portal account failed to provision for merchant {MerchantId}: {Error}. Staff can retry via " +

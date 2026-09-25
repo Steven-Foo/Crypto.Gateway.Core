@@ -3,6 +3,7 @@ using CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Application;
 using CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Domain;
 using CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Infrastructure.Persistence;
 using CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Infrastructure.Security;
+using CryptoPaymentEngine.SharedKernel;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Shouldly;
@@ -80,14 +81,33 @@ public sealed class MerchantAuthServiceTests : IAsyncLifetime
         return role.Id;
     }
 
-    private static async Task SeedUserAsync(Guid merchantId, string username, string password, Guid? roleId = null)
+    private static async Task<Guid> SeedUserAsync(
+        Guid merchantId, string username, string password, Guid? roleId = null, bool requireTwoFactor = true)
     {
         await using var context = Context();
         var user = MerchantUser.Create(
             merchantId, username, "Ops", new MerchantPasswordHasher().Hash(password), roleId,
-            mustChangePassword: false, isPrimary: false, DateTimeOffset.UtcNow).Value;
+            mustChangePassword: false, isPrimary: false, requireTwoFactor, DateTimeOffset.UtcNow).Value;
         context.MerchantUsers.Add(user);
         await context.SaveChangesAsync(Ct);
+        return user.Id;
+    }
+
+    /// <summary>Enrolls and activates a real authenticator for an already-seeded account, returning the raw
+    /// secret so a test can produce a valid code with <see cref="Totp.ComputeAt"/>.</summary>
+    private static async Task<byte[]> EnrollAsync(Guid merchantId, Guid merchantUserId, string username)
+    {
+        await using var context = Context();
+        var service = TwoFactor(context);
+
+        var enrollment = await service.BeginEnrollmentAsync(merchantId, merchantUserId, username, Ct);
+        Totp.TryFromBase32(enrollment.Value.SecretBase32, out var secret).ShouldBeTrue();
+
+        var confirm = await service.ConfirmEnrollmentAsync(
+            merchantId, merchantUserId, Totp.ComputeAt(secret, Totp.StepAt(DateTimeOffset.UtcNow)), Ct);
+        confirm.IsSuccess.ShouldBeTrue();
+
+        return secret;
     }
 
     public async ValueTask InitializeAsync()
@@ -244,6 +264,78 @@ public sealed class MerchantAuthServiceTests : IAsyncLifetime
 
         validated.IsFailure.ShouldBeTrue();
         validated.Error!.Code.ShouldBe(MerchantUserErrors.MerchantClosed.Code);
+    }
+
+    // ── the live RequireTwoFactor switch (§ MerchantUser.RequireTwoFactor) — mirrors the Ops-side scenarios ──
+
+    [Fact]
+    public async Task Switch_off_and_never_bound_logs_in_with_no_code_and_no_restriction()
+    {
+        await SeedUserAsync(Tenant, "portal.switch.off.unbound", "s3cret-password", requireTwoFactor: false);
+
+        await using var context = Context();
+        var login = await Service(context)
+            .LoginAsync(new MerchantLoginCommand("portal.switch.off.unbound", "s3cret-password"), Ct);
+
+        login.IsSuccess.ShouldBeTrue();
+        login.Value.TwoFactorEnrolled.ShouldBeTrue();
+        login.Value.TwoFactorMethod.ShouldBeNull();
+
+        await using var verify = Context();
+        (await Service(verify).ValidateAsync(login.Value.Token, Ct)).Value.TwoFactorEnrolled.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task Switch_on_and_never_bound_is_forced_into_a_restricted_session()
+    {
+        await SeedUserAsync(Tenant, "portal.switch.on.unbound", "s3cret-password", requireTwoFactor: true);
+
+        await using var context = Context();
+        var login = await Service(context)
+            .LoginAsync(new MerchantLoginCommand("portal.switch.on.unbound", "s3cret-password"), Ct);
+
+        login.IsSuccess.ShouldBeTrue();
+        login.Value.TwoFactorEnrolled.ShouldBeFalse();
+        login.Value.TwoFactorMethod.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Switch_off_and_already_bound_still_logs_in_with_no_code_and_ignores_the_binding()
+    {
+        var userId = await SeedUserAsync(Tenant, "portal.switch.off.bound", "s3cret-password", requireTwoFactor: false);
+        await EnrollAsync(Tenant, userId, "portal.switch.off.bound");
+
+        await using var context = Context();
+        var login = await Service(context)
+            .LoginAsync(new MerchantLoginCommand("portal.switch.off.bound", "s3cret-password"), Ct);
+
+        login.IsSuccess.ShouldBeTrue();
+        login.Value.TwoFactorEnrolled.ShouldBeTrue();
+        login.Value.TwoFactorMethod.ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task Switch_on_and_already_bound_requires_a_code()
+    {
+        var userId = await SeedUserAsync(Tenant, "portal.switch.on.bound", "s3cret-password", requireTwoFactor: true);
+        var secret = await EnrollAsync(Tenant, userId, "portal.switch.on.bound");
+
+        await using (var noCode = Context())
+        {
+            var refused = await Service(noCode)
+                .LoginAsync(new MerchantLoginCommand("portal.switch.on.bound", "s3cret-password"), Ct);
+            refused.IsFailure.ShouldBeTrue();
+            refused.Error!.Code.ShouldBe(MerchantTwoFactorErrors.CodeRequired.Code);
+        }
+
+        await using var context = Context();
+        var code = Totp.ComputeAt(secret, Totp.StepAt(DateTimeOffset.UtcNow));
+        var login = await Service(context)
+            .LoginAsync(new MerchantLoginCommand("portal.switch.on.bound", "s3cret-password", code), Ct);
+
+        login.IsSuccess.ShouldBeTrue();
+        login.Value.TwoFactorEnrolled.ShouldBeTrue();
+        login.Value.TwoFactorMethod.ShouldBe(MerchantTwoFactorMethod.Totp);
     }
 
     private sealed class FakeTimeProvider(DateTimeOffset now) : TimeProvider

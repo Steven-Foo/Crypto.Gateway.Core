@@ -99,7 +99,7 @@ public sealed class RoleServiceTests : IAsyncLifetime
         await using var context = Context();
         var role = Role.Create("Auditor", null, ["ops.transactions.view"], DateTimeOffset.UtcNow).Value;
         context.Roles.Add(role);
-        var user = StaffUser.Create("auditor1", new StaffPasswordHasher().Hash("pw"), role.Id, DateTimeOffset.UtcNow).Value;
+        var user = StaffUser.Create("auditor1", new StaffPasswordHasher().Hash("pw"), role.Id, requireTwoFactor: true, DateTimeOffset.UtcNow).Value;
         context.StaffUsers.Add(user);
         await context.SaveChangesAsync(Ct);
 

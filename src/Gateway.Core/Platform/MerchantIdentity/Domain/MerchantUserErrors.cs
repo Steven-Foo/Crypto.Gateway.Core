@@ -64,4 +64,10 @@ public static class MerchantUserErrors
 
     public static readonly Error PasswordTooShort =
         Error.Validation("merchant_user.password_too_short", "The new password must be at least 12 characters.");
+
+    /// <summary>Mirrors <c>Platform.Identity.StaffUserErrors.CannotChangeOwnTwoFactorRequirement</c> — flipping
+    /// your OWN switch off would let you escape 2FA with nobody else's sign-off. Another portal admin must do
+    /// it, same as an account cannot disable itself.</summary>
+    public static readonly Error CannotChangeOwnTwoFactorRequirement =
+        Error.Conflict("merchant_user.cannot_change_own_two_factor_requirement", "You cannot change your own 2FA requirement.");
 }

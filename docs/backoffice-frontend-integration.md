@@ -180,7 +180,7 @@ landing-page reads where gating would hand a new account a blank screen.
 *if* an admin has marked that action as guarded in the back office (§3c). It is not a fixed property of the
 route: the platform-wide policy decides, and it can change at any time. Treat every `yes` row as "may return
 `403 ops.two_factor_required` at any moment", and handle it in one place rather than per screen — §3c shows
-the interceptor that covers all 37 of them and every one added later.
+the interceptor that covers all 38 of them and every one added later.
 
 | Method | Route | Permission | 2FA | §  |
 |---|---|---|---|---|
@@ -191,6 +191,7 @@ the interceptor that covers all 37 of them and every one added later.
 | POST | `/api/v1/ops/accounts/{id:guid}/reset-password` | `ops.accounts.manage` | yes | 7 |
 | PATCH | `/api/v1/ops/accounts/{id:guid}/role` | `ops.accounts.manage` | yes | 7 |
 | PATCH | `/api/v1/ops/accounts/{id:guid}/status` | `ops.accounts.manage` | yes | 7 |
+| PATCH | `/api/v1/ops/accounts/{id:guid}/two-factor` | `ops.accounts.manage` | yes | 3d |
 | GET | `/api/v1/ops/audit` | `ops.audit.view` |  | 8 |
 | POST | `/api/v1/ops/auth/2fa/enroll` | _any session_ |  | 3b |
 | POST | `/api/v1/ops/auth/2fa/enroll/confirm` | _any session_ |  | 3b |
@@ -761,6 +762,49 @@ Request: `{ "guardedActions": ["ops.treasury.top-up"], "note": "optional, max 51
 ever updated in place: an action taken last month stays explainable against the policy actually in force
 then.
 
+---
+
+## 3d. The per-account 2FA switch — force it, or make it optional
+
+Distinct from §3b/§3c above, and an easy pair to confuse, so read this before building an accounts screen:
+
+- **§3b (enrollment) and §3c (guarded actions) are about *the whole platform*** — everyone enrolls, some
+  actions demand a fresh code from whoever performs them.
+- **§3d is a per-account, admin-set switch: `requireTwoFactor`.** It decides whether **this one account**
+  has to go through any of the above **at all** — independently of whether it has actually finished setting
+  up an authenticator. Full design: `docs/two-factor-authentication.md` §4.1.
+
+### The four combinations your UI has to render sensibly
+
+| `requireTwoFactor` | Has bound a factor? | What happens at login |
+| --- | --- | --- |
+| `true` (default) | No | Forced into the §3b enrollment flow, as always. |
+| `true` | Yes | Prompted for a code, as always — nothing changes for this account. |
+| `false` | No | Signs straight in. `twoFactorEnrolled: true` on the login/`/auth/me` response, so the SPA does **not** route it to the QR screen. |
+| `false` | **Yes** | **Still signs straight in with no code asked** — the existing enrollment is left completely alone (not deleted, not disabled), just not checked while the switch is off. Flipping the switch back on later demands a code again immediately, with no re-enrollment. |
+
+A `requireTwoFactor: false` account also skips **every** guarded action (§3c) — no `X-2FA-Code` prompt ever
+fires for it, on any route, while the switch stays off.
+
+### Setting it
+
+- **At creation** — `POST /api/v1/ops/accounts` takes an optional `requireTwoFactor` (§7 below). Omit it and
+  you get today's behaviour (forced).
+- **After creation** — `PATCH /api/v1/ops/accounts/{id}/two-factor` (§7 below), body `{ "requireTwoFactor": bool }`.
+  This is itself a guarded action (`ops.accounts.manage` + `X-2FA-Code`) — expect the same
+  `ops.two_factor_required` prompt-and-replay dance as any other guarded write (§3c).
+- **You cannot flip your own switch.** `PATCH .../{id}/two-factor` on the signed-in user's own account id
+  returns **409 `staff_user.cannot_change_own_two_factor_requirement`**. Disable the control on that one row
+  in the UI rather than let the user discover the refusal after submitting — same treatment as the existing
+  "cannot disable your own account" rule on `PATCH .../status`.
+- Every account row (`GET /accounts`, `GET /accounts/{id}`) carries the current `requireTwoFactor` value, so
+  a settings screen can render a toggle per row with no extra call.
+
+### This isn't platform-wide config — a role can't turn 2FA off for a class of accounts
+
+There's no bulk "make Finance role optional" switch. Each account's `requireTwoFactor` is set individually by
+an admin — deliberately, since it's the one thing that can take an account out of 2FA entirely.
+
 
 ## 4. Pagination — identical convention on every list/search endpoint
 
@@ -846,31 +890,44 @@ button and an explicit "this will never be shown again" warning, same treatment 
 ### `GET /api/v1/ops/accounts` — `ops.accounts.view`
 Paginated. Row:
 ```json
-{ "staffUserId": "guid", "username": "admin", "roleId": "guid", "roleName": "Admin", "status": "Active", "createdAt": "..." }
+{ "staffUserId": "guid", "username": "admin", "roleId": "guid", "roleName": "Admin", "status": "Active", "requireTwoFactor": true, "createdAt": "..." }
 ```
 `status` is `"Active"` or `"Disabled"` (PascalCase — note this differs from the lowercase-snake vocab used
-on deposit/withdrawal status, see §14).
+on deposit/withdrawal status, see §14). `requireTwoFactor` is the LIVE force/optional switch (§3d) —
+independent of whether the account has actually finished setting up an authenticator.
 
 ### `GET /api/v1/ops/accounts/{id}` — `ops.accounts.view`
 Same row shape.
 
-### `POST /api/v1/ops/accounts` — `ops.accounts.manage`
-Request: `{ "username": "string, required, max 64", "roleId": "guid, required" }`
+### `POST /api/v1/ops/accounts` — `ops.accounts.manage` + `X-2FA-Code`
+Request: `{ "username": "string, required, max 64", "roleId": "guid, required", "requireTwoFactor": "bool, optional, default true" }`
 Response 200:
 ```json
 { "isSuccess": true, "data": { "staffUserId": "guid", "username": "...", "password": "one-time-shown", "warning": "Store this password securely — it will never be shown again." }, "error": null }
 ```
+`requireTwoFactor` defaults to `true` if omitted — the new account is forced through 2FA setup at first
+login exactly as before this field existed. Pass `false` to create it 2FA-optional instead (§3d) — it can
+still be logged into with no code needed. This route is itself guarded, same as the other account-admin
+writes below.
 
-### `PATCH /api/v1/ops/accounts/{id}/status` — `ops.accounts.manage`
+### `PATCH /api/v1/ops/accounts/{id}/status` — `ops.accounts.manage` + `X-2FA-Code`
 Request: `{ "active": true|false }`
 409 if: disabling your own currently-logged-in account, or disabling the last remaining active account
 (system refuses to let you lock everyone out).
 
-### `PATCH /api/v1/ops/accounts/{id}/role` — `ops.accounts.manage`
+### `PATCH /api/v1/ops/accounts/{id}/role` — `ops.accounts.manage` + `X-2FA-Code`
 Request: `{ "roleId": "guid" }`
 
-### `POST /api/v1/ops/accounts/{id}/reset-password` — `ops.accounts.manage`
+### `POST /api/v1/ops/accounts/{id}/reset-password` — `ops.accounts.manage` + `X-2FA-Code`
 No body. Same one-time-password response shape as create.
+
+### `PATCH /api/v1/ops/accounts/{id}/two-factor` — `ops.accounts.manage` + `X-2FA-Code`
+Request: `{ "requireTwoFactor": true|false }`. Response 200: the account row (§3d's live switch — full
+semantics, the four-scenario table, and why this can never target the caller's own account are in
+`docs/two-factor-authentication.md` §4.1). **409 `staff_user.cannot_change_own_two_factor_requirement`** if
+`{id}` is the caller's own account — a colleague with the same permission must do it instead; the settings
+screen should disable this control on the row matching the signed-in user's own id rather than let the
+request round-trip into a refusal.
 
 ---
 
@@ -980,11 +1037,18 @@ Request:
     "withdrawalFeeFixed": 1,
     "withdrawalFeePercent": 1,
     "withdrawalFeeMinimum": 2
-  }
+  },
+  "portalAccountRequireTwoFactor": true
 }
 ```
 - `settlementDays`: T+N in whole days, 0-30 (0 = withdrawable immediately). The UI can offer 0/1/2 as presets;
   the backend accepts the full range.
+- `portalAccountRequireTwoFactor`: optional, **defaults `true`**. Sets the live 2FA switch (§3d) on the
+  merchant's auto-provisioned first/primary portal account. `true` (default) forces that account through 2FA
+  enrollment at its first portal login, same as every account created before this field existed; pass `false`
+  to create it 2FA-optional instead. The primary account is **not** exempt from this switch — only from
+  disable. Has no effect if portal-account provisioning itself fails (`portalAccount: null` below) — retry via
+  `POST .../portal-account` (§9a), which always forces (see that section).
 - `settlementMode`: `"auto"` or `"manual"`, case-insensitive, defaults to `"manual"` if omitted. **Record only
   today** — no automated settlement logic runs yet regardless of this value; every merchant behaves as manual.
 - `fees` is **entirely optional** — omit it to create the merchant unpriced (it falls back to the platform
@@ -1042,6 +1106,10 @@ No body. Response 200:
 - **409** (`merchant.portal_account_exists`) if the merchant already has a portal account — this never
   creates a second one; use the portal's own account management (or a password reset) instead. 404 if the
   merchant doesn't exist.
+- **This retry route takes no body and always forces 2FA** (`requireTwoFactor: true`) on the account it
+  creates — there is no other signal to go on here. If you need it created 2FA-optional, use
+  `portalAccountRequireTwoFactor: false` on the original `POST /ops/merchants` call instead (§9 above), or
+  flip the switch afterward from inside the portal itself once the account exists.
 
 ### `GET /api/v1/ops/merchants/{id}/portal-accounts` — `ops.merchants.manage`
 **Staff see only the merchant's primary account here — never its teammates.** A merchant can have any number
@@ -1059,7 +1127,7 @@ Response 200:
     "accounts": [
       { "merchantUserId": "guid", "username": "me00002", "displayName": "...", "roleId": "guid|null",
         "roleName": "Admin|null", "status": "Active|Disabled", "mustChangePassword": true, "createdAt": "...",
-        "isPrimary": true }
+        "isPrimary": true, "requireTwoFactor": true }
     ]
   },
   "error": null
@@ -1070,6 +1138,10 @@ Response 200:
 Staff-triggered password reset of the merchant's **primary account only** — for when that admin is locked out
 and has nobody else inside its own portal to reset it for them. No body. **Invalidates the old password
 immediately.**
+
+`requireTwoFactor` on the row above is **read-only from this host** — this Ops API has no write endpoint for
+it. Flipping a merchant portal account's switch after creation is done by the merchant's own portal admin,
+from inside the portal (`merchant-portal-frontend-integration.md` §3b/§7), not by platform staff.
 
 **403 `merchant_user.only_primary_resettable_by_staff` for any other account id** — a teammate's password is
 the merchant's own business, reset by its own admin inside the portal, never by staff. This is enforced at the

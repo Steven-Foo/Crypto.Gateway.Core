@@ -10,7 +10,10 @@ public sealed record MerchantAccountView(
     /// <summary>The merchant's original super-admin — see <c>MerchantUser.IsPrimary</c>. Platform staff may
     /// only reset this one account's password; every other account is the merchant's own business, managed
     /// inside its own portal.</summary>
-    bool IsPrimary = false);
+    bool IsPrimary = false,
+    /// <summary>The live 2FA switch (§ MerchantUser.RequireTwoFactor) — independent of whether the account
+    /// has actually bound an authenticator.</summary>
+    bool RequireTwoFactor = true);
 
 /// <summary>The generated one-time password, readable exactly once — at creation or reset. Never stored
 /// recoverably (only its PBKDF2 hash is), never logged.</summary>
@@ -24,7 +27,8 @@ public sealed record MerchantAccountCredential(Guid MerchantUserId, string Usern
 public interface IMerchantAccountService
 {
     Task<Result<MerchantAccountCredential>> CreateAsync(
-        Guid merchantId, string username, string displayName, Guid? roleId, CancellationToken cancellationToken = default);
+        Guid merchantId, string username, string displayName, Guid? roleId, bool requireTwoFactor,
+        CancellationToken cancellationToken = default);
 
     Task<Result<IReadOnlyList<MerchantAccountView>>> ListAsync(Guid merchantId, CancellationToken cancellationToken = default);
 
@@ -54,6 +58,14 @@ public interface IMerchantAccountService
     /// never sets a chosen password for someone else.</summary>
     Task<Result> ChangeOwnPasswordAsync(
         Guid merchantId, Guid actingUserId, string currentPassword, string newPassword, CancellationToken cancellationToken = default);
+
+    /// <summary>Flips the live 2FA switch (§ MerchantUser.RequireTwoFactor). Refuses a self-target
+    /// (<see cref="MerchantUserErrors.CannotChangeOwnTwoFactorRequirement"/>) — same lock-out class as
+    /// <see cref="SetStatusAsync"/>: doing it to yourself would let you drop out of 2FA with nobody else's
+    /// sign-off. Applies to the primary account too — it is not exempt from this switch, only from disable.</summary>
+    Task<Result> SetRequireTwoFactorAsync(
+        Guid merchantId, Guid targetUserId, Guid actingUserId, bool requireTwoFactor,
+        CancellationToken cancellationToken = default);
 }
 
 public sealed class MerchantAccountService(
@@ -66,7 +78,8 @@ public sealed class MerchantAccountService(
     private const int MinimumPasswordLength = 12;
 
     public async Task<Result<MerchantAccountCredential>> CreateAsync(
-        Guid merchantId, string username, string displayName, Guid? roleId, CancellationToken cancellationToken = default)
+        Guid merchantId, string username, string displayName, Guid? roleId, bool requireTwoFactor,
+        CancellationToken cancellationToken = default)
     {
         var normalised = username.Trim();
         if (await users.UsernameExistsAsync(normalised, cancellationToken))
@@ -85,7 +98,7 @@ public sealed class MerchantAccountService(
         var temporaryPassword = passwordGenerator.Generate();
         var user = MerchantUser.Create(
             merchantId, normalised, displayName, hasher.Hash(temporaryPassword), roleId,
-            mustChangePassword: true, isPrimary, timeProvider.GetUtcNow());
+            mustChangePassword: true, isPrimary, requireTwoFactor, timeProvider.GetUtcNow());
         if (user.IsFailure)
             return Result.Failure<MerchantAccountCredential>(user.Error!);
 
@@ -123,7 +136,7 @@ public sealed class MerchantAccountService(
     private static MerchantAccountView ToView(MerchantUser u, IReadOnlyDictionary<Guid, string> roleNames) =>
         new(u.Id, u.Username, u.DisplayName, u.RoleId,
             u.RoleId is { } rid ? roleNames.GetValueOrDefault(rid) : null,
-            u.Status.ToString(), u.MustChangePassword, u.CreatedAt, u.IsPrimary);
+            u.Status.ToString(), u.MustChangePassword, u.CreatedAt, u.IsPrimary, u.RequireTwoFactor);
 
     public async Task<Result> SetStatusAsync(
         Guid merchantId, Guid targetUserId, Guid actingUserId, bool active, CancellationToken cancellationToken = default)
@@ -193,6 +206,22 @@ public sealed class MerchantAccountService(
             return Result.Failure<MerchantAccountCredential>(MerchantUserErrors.OnlyPrimaryResettableByStaff);
 
         return await ResetPasswordAsync(merchantId, targetUserId, cancellationToken);
+    }
+
+    public async Task<Result> SetRequireTwoFactorAsync(
+        Guid merchantId, Guid targetUserId, Guid actingUserId, bool requireTwoFactor,
+        CancellationToken cancellationToken = default)
+    {
+        if (targetUserId == actingUserId)
+            return Result.Failure(MerchantUserErrors.CannotChangeOwnTwoFactorRequirement);
+
+        var user = await users.FindByIdAsync(merchantId, targetUserId, cancellationToken);
+        if (user is null)
+            return Result.Failure(MerchantUserErrors.NotFound);
+
+        user.SetRequireTwoFactor(requireTwoFactor);
+        await users.SaveChangesAsync(cancellationToken);
+        return Result.Success();
     }
 
     public async Task<Result> ChangeOwnPasswordAsync(

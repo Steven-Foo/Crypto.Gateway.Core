@@ -4,6 +4,7 @@ using CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Infrastructure.
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Metadata;
+using Microsoft.EntityFrameworkCore.Migrations;
 using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 
 #nullable disable
@@ -11,9 +12,11 @@ using Microsoft.EntityFrameworkCore.Storage.ValueConversion;
 namespace CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Infrastructure.Migrations
 {
     [DbContext(typeof(MerchantIdentityDbContext))]
-    partial class MerchantIdentityDbContextModelSnapshot : ModelSnapshot
+    [Migration("20260925065553_AddMerchantUserRequireTwoFactor")]
+    partial class AddMerchantUserRequireTwoFactor
     {
-        protected override void BuildModel(ModelBuilder modelBuilder)
+        /// <inheritdoc />
+        protected override void BuildTargetModel(ModelBuilder modelBuilder)
         {
 #pragma warning disable 612, 618
             modelBuilder

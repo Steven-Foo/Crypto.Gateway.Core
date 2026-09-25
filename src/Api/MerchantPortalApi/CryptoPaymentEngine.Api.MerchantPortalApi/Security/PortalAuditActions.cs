@@ -25,6 +25,7 @@ public static class PortalAuditActions
     public const string AccountStatusChanged = "portal.account.status_changed";
     public const string AccountRoleChanged = "portal.account.role_changed";
     public const string AccountPasswordReset = "portal.account.password_reset";
+    public const string AccountTwoFactorRequirementChanged = "portal.account.two_factor_requirement_changed";
     public const string OwnPasswordChanged = "portal.account.own_password_changed";
 
     public const string ApiCredentialRotated = "portal.api_credential.rotated";

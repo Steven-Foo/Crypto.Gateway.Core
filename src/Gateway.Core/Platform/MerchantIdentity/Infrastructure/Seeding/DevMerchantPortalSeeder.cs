@@ -102,7 +102,7 @@ public sealed class DevMerchantPortalSeeder(
 
             var userResult = MerchantUser.Create(
                 merchant.MerchantId, seed.Username, seed.DisplayName, hasher.Hash(seed.Password), adminRoleId,
-                mustChangePassword: false, isPrimary, timeProvider.GetUtcNow());
+                mustChangePassword: false, isPrimary, requireTwoFactor: true, timeProvider.GetUtcNow());
             if (userResult.IsFailure)
             {
                 logger.LogWarning("Dev merchant-portal seed skipped: {Error}.", userResult.Error!.Message);
