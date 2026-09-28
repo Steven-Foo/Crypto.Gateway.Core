@@ -119,5 +119,6 @@ app.MapPortalMoneyOutApi();
 app.MapPortalTopUpApi();
 app.MapPortalActivityApi();
 app.MapPortalTwoFactorApi();
+app.MapPortalTwoFactorPolicyApi();
 
 app.Run();

@@ -1855,6 +1855,27 @@ sessions on a factor reset (refused at next login, matching how a disabled accou
 both at once).
 
 
+**2FA guarded-action settings — recommended baseline for staff + per-action codes for the merchant portal
+(2026-09-28) — BUILT, HTTP-verified on both booted hosts.** Two related pieces. **(1) Staff (OperationsApi):** the
+guarded-action catalog grew 15 → 23, closing every unguarded Ops write that moves money or changes access (merchant
+pricing/limits/cap/default fee, settlement period, freeze/close, profile, manual deposit fail, wallet suspend,
+callback resend, AML re-screen). Each `GuardableAction` carries `Recommended`; **an empty config floor now means the
+recommended baseline, not "nothing"** (host `PostConfigure<TwoFactorOptions>`), and new `POST
+/ops/two-factor/policy/restore-defaults` saves that baseline (server-owned, always-guarded). **Real defect fixed:** a
+policy save wrote the full before/after lists into the 512-char `audit.AuditEntry.Reason`, which overflowed at 21
+actions — the policy saved, the audit write failed, the operator got a 500 for a change that happened; the reason
+now records added/removed only, capped. **(2) Merchant portal (option 3 of 3, user-chosen):** a **platform minimum**
+(staff, admin BO — merchants can't remove it) **plus each merchant's own additions** (portal "2FA 验证" page).
+Catalog `MerchantGuardedActions` lives in `MerchantIdentity.Application` (two hosts need it); new append-only
+`merchantidentity.MerchantTwoFactorPolicyVersion` (`MerchantId NULL` = minimum; migration
+`AddMerchantTwoFactorPolicy`, `105-merchantidentity.sql` regenerated + applied twice); enforcement
+`RequirePortalTwoFactor` (same `X-2FA-Code` contract as staff; `MerchantPrincipal.AuthenticatorProven` added);
+30-second cache so a staff change reaches the portal without a restart. **No ledger/key impact.** Tests: catalog +
+drift guards for both hosts, 11 SQL-backed merchant-policy tests (incl. a merchant cannot remove a platform
+requirement; tenant isolation). Docs: `backoffice-frontend-integration.md` §3c/§3e, `merchant-portal-frontend-integration.md`
+§3d, `two-factor-authentication.md` §5.2/§9.1. **Deploy note:** both APIs start demanding codes for the recommended
+actions immediately — the frontends' `X-2FA-Code` interceptor must ship with this.
+
 Every other module in the map is a placeholder in this doc, not yet on disk — scaffold a module
 only when real feature work on it starts, creating only the layers it uses (§4.3).
 

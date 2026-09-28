@@ -185,9 +185,9 @@ the session they get **can only reach the enrollment endpoints**; everything els
 
 Any TOTP app works — Google Authenticator, Authy, 1Password, Microsoft Authenticator all read the same QR.
 
-**This phase is login only.** Unlike the back office, the portal has **no per-action code prompts**: a
-merchant user proves themselves once, at sign-in, and nothing else asks again. There is no guarded-action
-policy on this host and nothing sends an `X-2FA-Code` header.
+**Per-action codes: now supported (2026-09-28)** — see **§3d**. On top of the code at login, sensitive actions
+(payouts, API key, whitelist, team management, …) can require a fresh code on the request itself, controlled by a
+platform minimum plus each merchant's own additions.
 
 ### The flow
 
@@ -238,8 +238,8 @@ Full design: `docs/two-factor-authentication.md` §4.1 (the same feature, mirror
 | `false` | No | Signs straight in. `twoFactorEnrolled: true`, so the SPA does **not** route to the QR screen. |
 | `false` | **Yes** | **Still signs straight in with no code asked** — the existing enrollment is left completely alone, just not checked while the switch is off. Turning it back on demands a code again immediately, no re-enrollment needed. |
 
-This portal has no per-action code prompts (§3b), so unlike the Ops side there is nothing beyond login for
-this switch to affect — it is purely a login-time gate.
+It also switches off the **per-action** code prompts (§3d) for that account: with `requireTwoFactor: false`,
+protected actions don't ask for a code either — the same as the admin back office.
 
 ### Setting it
 
@@ -270,6 +270,165 @@ this switch to affect — it is purely a login-time gate.
 | `true` | `true` | Protected — asked for a code at every login |
 | `false` | `false` | 2FA off, never set up |
 | `false` | `true` | Has an authenticator, but the switch is off, so it isn't asked for a code |
+
+---
+
+## 3d. Per-action 2FA codes + the "2FA 验证" settings page
+
+**New (2026-09-28).** Sensitive portal actions (submitting a payout, rotating the API key, …) can require a
+**fresh 6-digit authenticator code on the request itself**, on top of the code at login. This is the same model
+the admin back office uses, so the frontend pattern is identical.
+
+### Who decides which actions need a code — two layers
+
+| Layer | Set by | Where | Can the merchant change it? |
+|---|---|---|---|
+| **Platform minimum** | Platform staff | Admin back office | **No.** Shown locked (🔒 "平台要求"). |
+| **Merchant's own additions** | The merchant's admin | This portal's "2FA 验证" page | Yes — can switch on MORE actions for their team. |
+
+**Effective list = platform minimum + the merchant's additions.** A merchant can make its team *stricter* than
+the platform requires, never *looser*. If the platform later starts requiring something a merchant had already
+added, it simply moves into the locked list.
+
+**Out of the box** (before anyone saves anything) the platform minimum is the **recommended baseline**: every
+action marked `recommended: true` below. So from day one these actions ask for a code.
+
+### The actions
+
+| `code` | `group` | Recommended (platform default) | Protects |
+|---|---|---|---|
+| `portal.payouts.create` | Payouts | ✅ | `POST /payouts` |
+| `portal.payouts.approve` | Payouts | ✅ | `POST /payouts/{id}/approve`, `/reject` |
+| `portal.cashout.create` | Cash-out | ✅ | `POST /cash-outs` |
+| `portal.topup.create` | Top-up | — | `POST /top-ups` |
+| `portal.api.rotate-key` | API | ✅ | `POST /api-credential/rotate` |
+| `portal.api.allowed-ips` | API | ✅ | `PUT /allowed-ips` |
+| `portal.accounts.manage` | Team | ✅ | `POST /accounts`, `PATCH /accounts/{id}/status`, `/role`, `/two-factor`, `POST /accounts/{id}/reset-password`, `POST /accounts/{id}/2fa/reset` |
+| `portal.roles.manage` | Team | ✅ | `POST /roles`, `PUT /roles/{id}`, `PUT /roles/{id}/permissions`, `DELETE /roles/{id}` |
+| `portal.account.change-password` | Account | — | `POST /account/change-password` |
+| `portal.security.two-factor-policy` | Security | **always on** | `PUT /two-factor/policy`, `POST /two-factor/policy/restore-defaults` |
+
+All routes are under `/api/v1/portal`. **Render the list from `GET /two-factor/actions`, not from this table** —
+it's here so you can prepare Chinese labels. Map each `code` to your own label; fall back to the English `label`
+from the API for any code you haven't translated yet (that's how a newly added action appears instead of
+vanishing).
+
+**Whose requests get prompted:** only users whose own account has `requireTwoFactor: true` (§3c). A user whose
+admin made 2FA optional does every action with no code.
+
+### How a protected action behaves — build this ONCE, as an HTTP interceptor
+
+```
+POST /api/v1/portal/payouts          (no X-2FA-Code header)
+  -> 403 { errorCode: "portal.two_factor_required", data: { action: "portal.payouts.create" } }
+
+  ... open a modal: "Enter the 6-digit code from your authenticator app" ...
+
+POST /api/v1/portal/payouts          X-2FA-Code: 418392     (same body, replayed)
+  -> 200   (or the action's normal business error)
+```
+
+- Catch `portal.two_factor_required` in your shared HTTP client, prompt for the code, **replay the exact same
+  request** with the `X-2FA-Code` header. Every screen then works with no per-screen code — including actions
+  added later, or ones a merchant admin switches on.
+- `data.action` tells you what is being protected, so the modal can say *why* it's asking (use your label map).
+- The code goes in the **`X-2FA-Code` header**, never the body. In cookie mode the request still needs its
+  usual `X-CSRF-Token` too (§3) — the two headers are independent.
+- **A refused code means the action did not happen** (the check runs before the action). Keep the form, clear
+  the code box, let them retype.
+- A valid code can be reused within its own ~30-second window (±30s for clock drift) — approving several
+  payouts in a row doesn't need a new code each time. **Do not cache or auto-fill the code.**
+
+| `errorCode` | Status | Meaning / what to do |
+|---|---|---|
+| `portal.two_factor_required` | 403 | No code sent. Prompt, then replay with `X-2FA-Code`. |
+| `portal_two_factor.invalid_code` | 401 | Wrong or expired code. Let them retype. **Not a logout** — don't treat this 401 as "session expired". |
+| `portal_two_factor.locked_out` | 401 | Too many wrong codes; the factor is locked ~15 minutes. |
+| `portal.two_factor_recovery_not_accepted` | 403 | They signed in with a **recovery code**. Protected actions need the authenticator app — ask them to sign out and back in with the app. |
+| `portal.two_factor_not_enrolled` | 403 | No authenticator bound (should be unreachable — setup is forced at login). |
+
+> ⚠️ `portal_two_factor.invalid_code` is a **401**. If your client treats every 401 as "session expired → go
+> to login", special-case it (check `errorCode`), or a typo would log the user out.
+
+### The "2FA 验证" settings page
+
+**Page purpose:** choose which sensitive actions require a fresh 2FA code (二次动态码验证) for this merchant's team.
+Actions required by the platform are shown locked. Funds, permissions, API keys and whitelist actions are
+recommended ON.
+
+| Call | Permission | Code needed? | Used for |
+|---|---|---|---|
+| `GET /api/v1/portal/two-factor/actions` | `portal.roles.view` | no | The toggle list: `code`, `group`, `label`, `recommended` |
+| `GET /api/v1/portal/two-factor/policy` | `portal.roles.view` | no | What's ON now, split into locked vs merchant-added |
+| `PUT /api/v1/portal/two-factor/policy` | `portal.roles.manage` | **always** | Save |
+| `POST /api/v1/portal/two-factor/policy/restore-defaults` | `portal.roles.manage` | **always** | "恢复默认设置" |
+| `GET /api/v1/portal/two-factor/policy/history` | `portal.roles.view` | no | Who changed it and when |
+
+A user with `portal.roles.view` but not `portal.roles.manage` sees the page **read-only**.
+
+**`GET /two-factor/actions`**
+```json
+{ "isSuccess": true, "data": {
+    "actions": [
+      { "code": "portal.payouts.create", "group": "Payouts", "label": "Submit a payout", "recommended": true },
+      { "code": "portal.topup.create", "group": "Top-up", "label": "Create a top-up invoice", "recommended": false }
+      // ... 9 in total at the time of writing
+    ],
+    "alwaysGuarded": [
+      { "code": "portal.security.two-factor-policy", "group": "Security",
+        "label": "Change which actions require two-factor",
+        "reason": "Always required. If this could be switched off, every other requirement could be too." } ] },
+  "error": null, "errorCode": null }
+```
+
+**`GET /two-factor/policy`**
+```json
+{ "isSuccess": true, "data": {
+    "guardedActions":   ["portal.accounts.manage", "...", "portal.security.two-factor-policy", "portal.topup.create"],
+    "platformRequired": ["portal.accounts.manage", "portal.api.allowed-ips", "..."],
+    "merchantAdded":    ["portal.topup.create"],
+    "source": "Stored",
+    "updatedBy": "merchant001",
+    "updatedAt": "2026-09-28T10:30:00+00:00",
+    "note": "stricter for our team" },
+  "error": null, "errorCode": null }
+```
+
+| Field | Meaning |
+|---|---|
+| `guardedActions` | Everything that asks for a code right now (locked + added + the always-on one). |
+| `platformRequired` | Required by the platform → render **ON + disabled** with a "平台要求" / 🔒 tag. |
+| `merchantAdded` | What this merchant switched on themselves → render ON and editable. |
+| `source` | `"Default"` = this merchant has never saved (only the platform minimum applies); `"Stored"` = they have. |
+| `updatedBy` / `updatedAt` / `note` | The merchant's own last change. `null` while `source` is `"Default"`. |
+
+**Rendering each toggle:** `checked = guardedActions.includes(code)`; `disabled = platformRequired.includes(code)
+|| !canManage`. Show the "推荐" tag when `recommended: true`. Show the `alwaysGuarded` row permanently ON and
+disabled with its `reason`.
+
+**`PUT /two-factor/policy`** — body `{ "guardedActions": [...], "note": "optional, max 512" }`
+- Send **every code that is switched on in the UI** — you may include the locked ones; the server ignores them
+  (it stores only what the platform doesn't already require). Omitting a locked code does **not** switch it
+  off — the merchant can't remove platform requirements.
+- Always asks for a code (`portal.two_factor_required` → prompt → replay). Response: the new policy, same shape
+  as `GET`. Re-render from it.
+- An unknown code → **400 `portal.unknown_guarded_action`**, nothing saved.
+
+**`POST /two-factor/policy/restore-defaults`** — optional body `{ "note": "..." }`
+- Removes **all of the merchant's own additions** → back to exactly the platform minimum (which is itself the
+  recommended baseline unless platform staff changed it). It **never** turns off platform-required actions.
+- Always asks for a code. Show a confirmation first. Response: the new policy.
+
+**`GET /two-factor/policy/history?limit=50`** → `{ "versions": [{ "id", "merchantAdded", "updatedBy",
+"updatedAt", "note" }] }`, newest first — **this merchant's own changes only** (platform-minimum changes are
+made by platform staff and aren't shown here). Every save/restore is also in the activity log (§9.5) as
+`portal.two_factor_policy.changed` / `portal.two_factor_policy.restored_defaults`.
+
+### What changes for existing screens
+
+Every screen that calls a protected route (the table above) can now get `portal.two_factor_required`. If the
+interceptor is in place, those screens need **no changes**. If it isn't, those actions will fail with a 403
+until it is — so ship the interceptor together with (or before) this backend version.
 
 ---
 
@@ -732,7 +891,7 @@ Read-only — nothing exposes a way to edit or delete an entry.
 
 | Gap | Status |
 |---|---|
-| **2FA / OTP** | **Done (2026-09-23)** — mandatory enrollment + a code at login (§3b). The `otp` field now works; `code` is the preferred name. **Per-action code prompts are deliberately NOT on this host** — that is the back office's model, and bringing it here (payout approval being the obvious first candidate) is its own piece of work. |
+| **2FA / OTP** | **Done** — mandatory enrollment + a code at login (§3b, 2026-09-23), and **per-action code prompts with a "2FA 验证" settings page (§3d, 2026-09-28)**. The `otp` login field works; `code` is the preferred name. |
 | **`errorCode` on failures** | **Done** — every response carries one, `portal.*` for host validation and `<module>.*` for business rules (§2). |
 | **Dashboard / aggregates** | No portal endpoint. The Ops dashboard is platform-wide and is not exposed here. |
 | **Paging** | **Done.** Transaction history and `/addresses` are paged. Accounts and roles return in full — bounded by headcount, so paging them would add UI work for no benefit. |

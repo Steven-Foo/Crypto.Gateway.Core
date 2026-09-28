@@ -1,3 +1,4 @@
+using CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Application;
 using CryptoPaymentEngine.Gateway.Core.Platform.Audit.Application;
 using CryptoPaymentEngine.Api.MerchantPortalApi.Models;
 using CryptoPaymentEngine.Api.MerchantPortalApi.Security;
@@ -25,13 +26,17 @@ public static class PortalMoneyOutEndpoints
 {
     public static void MapPortalMoneyOutApi(this IEndpointRouteBuilder app)
     {
-        app.MapPost("/api/v1/portal/payouts", CreatePayoutAsync).RequirePortalPermission(PortalPermissions.Payouts.Create);
-        app.MapPost("/api/v1/portal/cash-outs", CreateCashOutAsync).RequirePortalPermission(PortalPermissions.CashOut.Create);
+        app.MapPost("/api/v1/portal/payouts", CreatePayoutAsync).RequirePortalPermission(PortalPermissions.Payouts.Create)
+            .RequirePortalTwoFactor(MerchantGuardedActions.PayoutCreate);
+        app.MapPost("/api/v1/portal/cash-outs", CreateCashOutAsync).RequirePortalPermission(PortalPermissions.CashOut.Create)
+            .RequirePortalTwoFactor(MerchantGuardedActions.CashOutCreate);
 
         // The merchant-side approval stage. A separate permission from Create, so a user who may only submit a
         // payout cannot also sign it off.
-        app.MapPost("/api/v1/portal/payouts/{id:guid}/approve", ApprovePayoutAsync).RequirePortalPermission(PortalPermissions.Payouts.Approve);
-        app.MapPost("/api/v1/portal/payouts/{id:guid}/reject", RejectPayoutAsync).RequirePortalPermission(PortalPermissions.Payouts.Approve);
+        app.MapPost("/api/v1/portal/payouts/{id:guid}/approve", ApprovePayoutAsync).RequirePortalPermission(PortalPermissions.Payouts.Approve)
+            .RequirePortalTwoFactor(MerchantGuardedActions.PayoutApprove);
+        app.MapPost("/api/v1/portal/payouts/{id:guid}/reject", RejectPayoutAsync).RequirePortalPermission(PortalPermissions.Payouts.Approve)
+            .RequirePortalTwoFactor(MerchantGuardedActions.PayoutApprove);
     }
 
     /// <summary>

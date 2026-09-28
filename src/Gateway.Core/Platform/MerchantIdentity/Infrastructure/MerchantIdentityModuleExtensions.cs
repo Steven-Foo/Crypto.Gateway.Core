@@ -51,6 +51,16 @@ public static class MerchantIdentityModuleExtensions
         services.AddSingleton<IMerchantTwoFactorSecretCipher, AesGcmMerchantTwoFactorSecretCipher>();
         services.AddScoped<IMerchantTwoFactorService, MerchantTwoFactorService>();
 
+        // Which portal actions demand a code: the platform minimum (admin back office) + each merchant's own
+        // additions (portal). Both hosts compose this — the Ops host edits the minimum, the portal enforces
+        // and edits the additions. The cache is a singleton so the 30-second window actually spans requests.
+        services.Configure<MerchantTwoFactorPolicyOptions>(
+            configuration.GetSection(MerchantTwoFactorPolicyOptions.SectionName));
+        services.AddScoped<IMerchantTwoFactorPolicyRepository, MerchantTwoFactorPolicyRepository>();
+        services.AddSingleton<MerchantTwoFactorPolicyCache>();
+        services.AddScoped<MerchantTwoFactorPolicyProvider>();
+        services.AddScoped<IMerchantTwoFactorPolicyService, MerchantTwoFactorPolicyService>();
+
         return services;
     }
 

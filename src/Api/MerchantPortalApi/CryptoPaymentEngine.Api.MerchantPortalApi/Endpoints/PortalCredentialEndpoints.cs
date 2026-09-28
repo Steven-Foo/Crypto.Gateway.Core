@@ -1,3 +1,4 @@
+using CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Application;
 using CryptoPaymentEngine.Gateway.Core.Platform.Audit.Application;
 using System.Net;
 using CryptoPaymentEngine.Api.MerchantPortalApi.Models;
@@ -20,8 +21,10 @@ public static class PortalCredentialEndpoints
     public static void MapPortalCredentialApi(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/v1/portal/api-credential", GetAsync).RequirePortalPermission(PortalPermissions.ApiCredentials.View);
-        app.MapPost("/api/v1/portal/api-credential/rotate", RotateAsync).RequirePortalPermission(PortalPermissions.ApiCredentials.Manage);
-        app.MapPut("/api/v1/portal/allowed-ips", UpdateAllowedIpsAsync).RequirePortalPermission(PortalPermissions.ApiCredentials.Manage);
+        app.MapPost("/api/v1/portal/api-credential/rotate", RotateAsync).RequirePortalPermission(PortalPermissions.ApiCredentials.Manage)
+            .RequirePortalTwoFactor(MerchantGuardedActions.ApiKeyRotate);
+        app.MapPut("/api/v1/portal/allowed-ips", UpdateAllowedIpsAsync).RequirePortalPermission(PortalPermissions.ApiCredentials.Manage)
+            .RequirePortalTwoFactor(MerchantGuardedActions.AllowedIps);
     }
 
     /// <summary>Credential <em>metadata</em> only — whether an active credential exists and the current IP

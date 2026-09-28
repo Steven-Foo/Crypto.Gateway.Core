@@ -1,3 +1,4 @@
+using CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Application;
 using CryptoPaymentEngine.Api.MerchantPortalApi.Models;
 using CryptoPaymentEngine.Api.MerchantPortalApi.Security;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
@@ -29,7 +30,8 @@ namespace CryptoPaymentEngine.Api.MerchantPortalApi.Endpoints;
 public static class PortalTopUpEndpoints
 {
     public static void MapPortalTopUpApi(this IEndpointRouteBuilder app) =>
-        app.MapPost("/api/v1/portal/top-ups", CreateAsync).RequirePortalPermission(PortalPermissions.TopUp.Create);
+        app.MapPost("/api/v1/portal/top-ups", CreateAsync).RequirePortalPermission(PortalPermissions.TopUp.Create)
+            .RequirePortalTwoFactor(MerchantGuardedActions.TopUpCreate);
 
     private static async Task<IResult> CreateAsync(
         CreatePortalTopUpRequest request,

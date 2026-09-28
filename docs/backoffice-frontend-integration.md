@@ -275,6 +275,12 @@ the interceptor that covers all 38 of them and every one added later.
 | GET | `/api/v1/ops/two-factor/policy` | `ops.roles.view` |  | 3c |
 | PUT | `/api/v1/ops/two-factor/policy` | `ops.roles.manage` | yes | 3c |
 | POST | `/api/v1/ops/two-factor/policy/restore-defaults` | `ops.roles.manage` | yes | 3c |
+| GET | `/api/v1/ops/merchant-two-factor/actions` | `ops.roles.view` |  | 3e |
+| GET | `/api/v1/ops/merchant-two-factor/policy` | `ops.roles.view` |  | 3e |
+| PUT | `/api/v1/ops/merchant-two-factor/policy` | `ops.roles.manage` | yes | 3e |
+| POST | `/api/v1/ops/merchant-two-factor/policy/restore-defaults` | `ops.roles.manage` | yes | 3e |
+| GET | `/api/v1/ops/merchant-two-factor/policy/history` | `ops.roles.view` |  | 3e |
+| GET | `/api/v1/ops/merchants/{id:guid}/two-factor-policy` | `ops.merchants.view` |  | 3e |
 | GET | `/api/v1/ops/two-factor/policy/history` | `ops.roles.view` |  | 3c |
 | GET | `/api/v1/ops/wallets` | `ops.wallets.view` |  | 11 |
 | GET | `/api/v1/ops/wallets/{id:guid}` | `ops.wallets.view` |  | 11 |
@@ -935,6 +941,115 @@ fires for it, on any route, while the switch stays off.
 There's no bulk "make Finance role optional" switch. Each account's `requireTwoFactor` is set individually by
 an admin — deliberately, since it's the one thing that can take an account out of 2FA entirely.
 
+
+## 3e. Merchant-portal 2FA — the platform minimum ("商户端 2FA 验证")
+
+**New (2026-09-28).** The merchant portal now also has per-action 2FA codes (payouts, API key, whitelist, team
+management, …). Which merchant-portal actions ask for a code is decided in **two layers**:
+
+| Layer | Set by | Where |
+|---|---|---|
+| **Platform minimum** | Platform staff | **This page, in the admin back office** (endpoints below) |
+| **Merchant's own additions** | Each merchant's admin | Their own "2FA 验证" page in the merchant portal |
+
+**Effective list for a merchant = platform minimum + that merchant's additions.** Merchants can only ADD; they
+cannot switch off anything in the platform minimum (they see it locked). So this page sets the floor every
+merchant must meet. Full merchant-side behaviour: `merchant-portal-frontend-integration.md` §3d.
+
+**Out of the box** the platform minimum is the **recommended baseline** (`recommended: true` actions), so every
+merchant is protected from day one without anyone configuring anything.
+
+This is a **separate list from §3c** (which is about *staff* actions in this back office). Two settings pages,
+or two tabs on one page: "后台操作" (§3c) and "商户端操作" (this section).
+
+### Endpoints — all under `/api/v1/ops/merchant-two-factor`
+
+| Call | Permission | Code needed? | Used for |
+|---|---|---|---|
+| `GET /actions` | `ops.roles.view` | no | The merchant-portal action list: `code`, `group`, `label`, `recommended` |
+| `GET /policy` | `ops.roles.view` | no | The current platform minimum |
+| `PUT /policy` | `ops.roles.manage` | **always** | Save the platform minimum |
+| `POST /policy/restore-defaults` | `ops.roles.manage` | **always** | 恢复默认设置 → the recommended baseline |
+| `GET /policy/history` | `ops.roles.view` | no | Who changed the minimum, when |
+| `GET /api/v1/ops/merchants/{id}/two-factor-policy` | `ops.merchants.view` | no | Read-only: what ONE merchant actually enforces (minimum + their additions) — handy on the merchant detail page |
+
+Saving and restoring are protected by the same always-on staff action as §3c
+(`ops.security.two-factor-policy`): changing which actions need 2FA — for staff or for merchants — always costs
+a fresh code. Your §3c interceptor handles it with no extra work.
+
+### The merchant-portal actions
+
+| `code` | `group` | Recommended | What it protects in the merchant portal |
+|---|---|---|---|
+| `portal.payouts.create` | Payouts | ✅ | Submitting a payout |
+| `portal.payouts.approve` | Payouts | ✅ | Approving / rejecting a payout |
+| `portal.cashout.create` | Cash-out | ✅ | Submitting a cash-out |
+| `portal.topup.create` | Top-up | — | Creating a top-up invoice |
+| `portal.api.rotate-key` | API | ✅ | Rotating the API key |
+| `portal.api.allowed-ips` | API | ✅ | Changing the API IP whitelist |
+| `portal.accounts.manage` | Team | ✅ | Creating / disabling / resetting users, their role, 2FA switch and 2FA reset |
+| `portal.roles.manage` | Team | ✅ | Creating / changing / deleting roles |
+| `portal.account.change-password` | Account | — | A user changing their own password |
+| `portal.security.two-factor-policy` | Security | always on | The merchant changing their OWN settings page (not part of the minimum — can't be unticked) |
+
+Render from `GET /actions`, not from this table; map `code` → Chinese label in the frontend.
+
+### `GET /api/v1/ops/merchant-two-factor/policy`
+
+```json
+{ "isSuccess": true, "data": {
+    "guardedActions": ["portal.accounts.manage", "portal.api.allowed-ips", "..."],
+    "source": "Configuration",
+    "updatedBy": null, "updatedAt": null, "note": null,
+    "configuredDefaults": ["portal.accounts.manage", "..."],
+    "recommendedDefaults": ["portal.accounts.manage", "..."] },
+  "error": null, "errorCode": null }
+```
+
+Same meanings as §3c: `source` `"Configuration"` = nobody saved yet (the recommended baseline is in force),
+`"Stored"` = someone did; `recommendedDefaults` = exactly what restore-defaults saves, so "is it the recommended
+set?" is a direct array comparison. Unlike §3c, `guardedActions` here does **not** include an always-on code —
+the merchant's always-on action applies on the merchant's own page and is listed under `alwaysGuarded` in
+`GET /actions`.
+
+### `PUT /api/v1/ops/merchant-two-factor/policy`
+
+Body `{ "guardedActions": ["portal.payouts.create", ...], "note": "optional, max 512" }` — the **complete** list
+(a save replaces it). Sending `[]` is allowed and means "no minimum" — every merchant then decides entirely for
+themselves; show a strong warning. Unknown code → **400 `ops.unknown_guarded_action`**. Response: the saved
+minimum (`guardedActions`, `source: "Stored"`, `updatedBy`, `updatedAt`, `note`).
+
+**When does it reach the merchants?** Immediately for new requests on this host; the merchant portal picks it
+up **within 30 seconds** (it caches the policy briefly). No restart needed.
+
+### `POST /api/v1/ops/merchant-two-factor/policy/restore-defaults`
+
+Optional body `{ "note": "..." }`. Saves the recommended baseline as the platform minimum (default note:
+*"Restored the recommended security baseline."*). Recorded as a new version; response same shape as `PUT`.
+
+### `GET /api/v1/ops/merchant-two-factor/policy/history`
+
+`?limit=50` → `{ "versions": [{ "id", "guardedActions", "updatedBy", "updatedAt", "note" }] }`, newest first —
+platform-minimum changes only. Also written to the staff audit log as `merchant_two_factor.policy_changed` /
+`merchant_two_factor.policy_restored_defaults` (added/removed actions).
+
+### `GET /api/v1/ops/merchants/{id}/two-factor-policy`
+
+```json
+{ "isSuccess": true, "data": {
+    "merchantId": "guid",
+    "guardedActions": ["...everything that asks for a code for this merchant..."],
+    "platformRequired": ["...the minimum..."],
+    "merchantAdded": ["portal.topup.create"],
+    "source": "Stored",
+    "updatedBy": "merchant001", "updatedAt": "...", "note": "..." },
+  "error": null, "errorCode": null }
+```
+
+Read-only — staff can see but not edit a merchant's own additions (those are the merchant's decision).
+`source: "Default"` = that merchant has never changed their page.
+
+---
 
 ## 4. Pagination — identical convention on every list/search endpoint
 

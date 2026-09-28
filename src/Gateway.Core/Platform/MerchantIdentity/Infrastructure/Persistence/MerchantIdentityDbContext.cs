@@ -15,6 +15,7 @@ public sealed class MerchantIdentityDbContext(DbContextOptions<MerchantIdentityD
     public DbSet<MerchantRole> MerchantRoles => Set<MerchantRole>();
     public DbSet<MerchantUserTwoFactor> MerchantUserTwoFactors => Set<MerchantUserTwoFactor>();
     public DbSet<MerchantUserRecoveryCode> MerchantUserRecoveryCodes => Set<MerchantUserRecoveryCode>();
+    public DbSet<MerchantTwoFactorPolicyVersion> MerchantTwoFactorPolicyVersions => Set<MerchantTwoFactorPolicyVersion>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
     {
@@ -24,5 +25,6 @@ public sealed class MerchantIdentityDbContext(DbContextOptions<MerchantIdentityD
         modelBuilder.ApplyConfiguration(new MerchantUserSessionMap());
         modelBuilder.ApplyConfiguration(new MerchantUserTwoFactorMap());
         modelBuilder.ApplyConfiguration(new MerchantUserRecoveryCodeMap());
+        modelBuilder.ApplyConfiguration(new MerchantTwoFactorPolicyVersionMap());
     }
 }

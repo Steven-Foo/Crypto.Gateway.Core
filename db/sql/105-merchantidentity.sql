@@ -385,3 +385,49 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [merchantidentity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260928101459_AddMerchantTwoFactorPolicy'
+)
+BEGIN
+    CREATE TABLE [merchantidentity].[MerchantTwoFactorPolicyVersion] (
+        [Id] uniqueidentifier NOT NULL,
+        [MerchantId] uniqueidentifier NULL,
+        [GuardedActionsCsv] varchar(4000) NOT NULL,
+        [Note] nvarchar(512) NULL,
+        [UpdatedBy] nvarchar(128) NOT NULL,
+        [UpdatedAt] datetimeoffset NOT NULL,
+        [Seq] bigint NOT NULL IDENTITY,
+        CONSTRAINT [PK_MerchantTwoFactorPolicyVersion] PRIMARY KEY NONCLUSTERED ([Id])
+    );
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchantidentity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260928101459_AddMerchantTwoFactorPolicy'
+)
+BEGIN
+    CREATE INDEX [IX_MerchantTwoFactorPolicyVersion_MerchantId] ON [merchantidentity].[MerchantTwoFactorPolicyVersion] ([MerchantId]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchantidentity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260928101459_AddMerchantTwoFactorPolicy'
+)
+BEGIN
+    CREATE UNIQUE CLUSTERED INDEX [IX_MerchantTwoFactorPolicyVersion_Seq] ON [merchantidentity].[MerchantTwoFactorPolicyVersion] ([Seq]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchantidentity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20260928101459_AddMerchantTwoFactorPolicy'
+)
+BEGIN
+    INSERT INTO [merchantidentity].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20260928101459_AddMerchantTwoFactorPolicy', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

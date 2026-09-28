@@ -454,10 +454,10 @@ ops.two_factor_not_enrolled           403  backstop on a guarded action.
 ops.two_factor_recovery_not_accepted  403  session authenticated by a recovery code (§3.2).
 ```
 
-## 9. Merchant portal — login only, this phase
+## 9. Merchant portal — login, and (since 2026-09-28) per-action codes
 
-`MerchantIdentity` gets the **enrollment + login half only**. No policy table, no action catalog, no
-`X-2FA-Code` anywhere: there is nothing guarded on that side yet.
+`MerchantIdentity` first got the **enrollment + login half only** (below). Per-action codes followed on
+2026-09-28 — see **§9.1**.
 
 - New `merchantidentity.MerchantUserTwoFactor` and `MerchantUserRecoveryCode`, identical in shape to §3.1
   and §3.2, plus `MerchantUserSession.TwoFactorMethod`. Migration `AddMerchantUserTwoFactor`.
@@ -481,9 +481,41 @@ ops.two_factor_recovery_not_accepted  403  session authenticated by a recovery c
 - The two modules share **no code beyond SharedKernel primitives** (§4.5) — same rule already in force for
   `Pbkdf2PasswordHash` and `OpaqueToken`.
 
-When merchant-side guarded actions are eventually wanted (payout approval is the obvious first), §5's
-catalog pattern transplants with `PortalGuardedActions` in the portal host and a per-tenant rather than
-platform-wide policy — which is its own T3 design.
+### 9.1 Merchant-side guarded actions — platform minimum + merchant additions (2026-09-28)
+
+**Decision (user, option 3 of three):** who controls which portal actions need a code? (1) each merchant alone —
+flexible, but a merchant could switch off protection on payouts; (2) the platform alone — simple, uniform;
+(3) **both: a platform minimum no merchant can remove, plus each merchant's own additions on top.** Chosen: 3.
+A stolen merchant login is exactly the case where the merchant's own settings can't be trusted to hold, so the
+floor must sit with the platform, while stricter merchants can still go further.
+
+- **Catalog:** `MerchantGuardedActions` (9 actions + the always-on `portal.security.two-factor-policy`) — in
+  **`MerchantIdentity.Application`, not a host**, unlike the staff catalog: two hosts need it (the portal
+  enforces it, the admin back office edits the minimum), and a host can't reference a host. Codes stay opaque
+  to the module. Recommended (= default minimum): payouts create/approve, cash-out, API key rotate, allowed-IPs,
+  accounts manage, roles manage. Not recommended: top-up, change-own-password.
+- **One append-only table, two layers:** `merchantidentity.MerchantTwoFactorPolicyVersion` (migration
+  `AddMerchantTwoFactorPolicy`), `MerchantId NULL` = the platform minimum, `MerchantId = X` = X's additions.
+  A merchant row stores **only the additions** (whatever the platform doesn't already require at save time), so a
+  later platform relaxation isn't silently undone by an old merchant row that merely echoed it; if the platform
+  later requires something a merchant had added, it moves to the locked list. "Latest" = highest clustered `Seq`.
+- **Effective = minimum ∪ additions ∪ always-on.** Resolved by `MerchantTwoFactorPolicyProvider` with a 30-second
+  singleton cache (platform + per-merchant); a save invalidates on the saving host, the other host catches up
+  within the window.
+- **Default minimum** = the recommended baseline when nothing is saved and config
+  (`MerchantIdentity:TwoFactorPolicy:PlatformGuardedActions`) is empty. **Restore defaults** = recommended
+  baseline for the minimum; "remove all my additions" for a merchant — never "nothing".
+- **Enforcement:** `PortalAuthorization.RequirePortalTwoFactor(action)`, chained after the permission gate — same
+  contract as the staff filter (`X-2FA-Code`, `portal.two_factor_required` with `data.action`, account switch
+  off ⇒ skipped, recovery-code session refused). `MerchantPrincipal` gained `AuthenticatorProven` for that.
+- **Surfaces:** portal `/api/v1/portal/two-factor/{actions,policy,policy/history,policy/restore-defaults}`
+  (read `portal.roles.view`, write `portal.roles.manage` + always-on code); Ops
+  `/api/v1/ops/merchant-two-factor/...` for the minimum (guarded by the staff always-on action) + read-only
+  `/ops/merchants/{id}/two-factor-policy`. Docs: `merchant-portal-frontend-integration.md` §3d,
+  `backoffice-frontend-integration.md` §3e.
+- **Verified:** 11 service tests (SQL Server) incl. "a merchant cannot remove a platform-required action" and
+  tenant isolation; a source-scan drift test that every catalog code is enforced on a portal route; and over HTTP
+  on both booted hosts, including staff changing the minimum and the portal enforcing it after the cache window.
 
 ## 10. Audit
 

@@ -23,12 +23,15 @@ public sealed record MerchantLoginResult(
 /// </summary>
 /// <param name="TwoFactorEnrolled">False ⇒ this session may reach only the enrollment endpoints. Enforced
 /// by the host middleware, not this record.</param>
-/// <param name="RequireTwoFactor">Snapshotted from <see cref="MerchantUser.RequireTwoFactor"/> at login. The
-/// portal has no guarded-action filter yet (unlike Ops' <c>StaffAuthorization.RequireTwoFactor</c>), so this
-/// is carried for a future consumer rather than acted on here — see <c>MerchantUserSession</c>.</param>
+/// <param name="RequireTwoFactor">Snapshotted from <see cref="MerchantUser.RequireTwoFactor"/> at login. False
+/// means this account does every action — guarded or not — with no code; the portal's guarded-action filter
+/// (<c>PortalAuthorization.RequirePortalTwoFactor</c>) skips it, exactly as Ops does for staff.</param>
+/// <param name="AuthenticatorProven">True only when an authenticator code proved this session (or the switch is
+/// off). A recovery-code sign-in is false, and a guarded action refuses it — a printed fallback exists to get
+/// someone back in, not to authorise moving money.</param>
 public sealed record MerchantPrincipal(
     Guid MerchantUserId, Guid MerchantId, string Username, string DisplayName, IReadOnlyList<string> Permissions,
-    string CsrfToken, bool TwoFactorEnrolled, bool RequireTwoFactor);
+    string CsrfToken, bool TwoFactorEnrolled, bool RequireTwoFactor, bool AuthenticatorProven = false);
 
 public interface IMerchantAuthService
 {
@@ -209,6 +212,6 @@ public sealed class MerchantAuthService(
         // switch-off session reads it as satisfied unconditionally.
         return Result.Success(new MerchantPrincipal(
             session.MerchantUserId, session.MerchantId, session.Username, session.DisplayName, session.PermissionCodes,
-            session.CsrfToken, session.TwoFactorEnrolled, session.RequireTwoFactor));
+            session.CsrfToken, session.TwoFactorEnrolled, session.RequireTwoFactor, session.AuthenticatorProven));
     }
 }

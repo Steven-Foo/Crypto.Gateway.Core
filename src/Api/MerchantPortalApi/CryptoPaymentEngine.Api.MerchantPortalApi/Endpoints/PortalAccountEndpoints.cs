@@ -20,21 +20,31 @@ public static class PortalAccountEndpoints
     {
         // Accounts
         app.MapGet("/api/v1/portal/accounts", ListAccountsAsync).RequirePortalPermission(PortalPermissions.Accounts.View);
-        app.MapPost("/api/v1/portal/accounts", CreateAccountAsync).RequirePortalPermission(PortalPermissions.Accounts.Manage);
-        app.MapPatch("/api/v1/portal/accounts/{id:guid}/status", SetAccountStatusAsync).RequirePortalPermission(PortalPermissions.Accounts.Manage);
-        app.MapPatch("/api/v1/portal/accounts/{id:guid}/role", AssignAccountRoleAsync).RequirePortalPermission(PortalPermissions.Accounts.Manage);
-        app.MapPost("/api/v1/portal/accounts/{id:guid}/reset-password", ResetAccountPasswordAsync).RequirePortalPermission(PortalPermissions.Accounts.Manage);
-        app.MapPatch("/api/v1/portal/accounts/{id:guid}/two-factor", SetAccountRequireTwoFactorAsync).RequirePortalPermission(PortalPermissions.Accounts.Manage);
+        app.MapPost("/api/v1/portal/accounts", CreateAccountAsync).RequirePortalPermission(PortalPermissions.Accounts.Manage)
+            .RequirePortalTwoFactor(MerchantGuardedActions.AccountsManage);
+        app.MapPatch("/api/v1/portal/accounts/{id:guid}/status", SetAccountStatusAsync).RequirePortalPermission(PortalPermissions.Accounts.Manage)
+            .RequirePortalTwoFactor(MerchantGuardedActions.AccountsManage);
+        app.MapPatch("/api/v1/portal/accounts/{id:guid}/role", AssignAccountRoleAsync).RequirePortalPermission(PortalPermissions.Accounts.Manage)
+            .RequirePortalTwoFactor(MerchantGuardedActions.AccountsManage);
+        app.MapPost("/api/v1/portal/accounts/{id:guid}/reset-password", ResetAccountPasswordAsync).RequirePortalPermission(PortalPermissions.Accounts.Manage)
+            .RequirePortalTwoFactor(MerchantGuardedActions.AccountsManage);
+        app.MapPatch("/api/v1/portal/accounts/{id:guid}/two-factor", SetAccountRequireTwoFactorAsync).RequirePortalPermission(PortalPermissions.Accounts.Manage)
+            .RequirePortalTwoFactor(MerchantGuardedActions.AccountsManage);
 
         // The signed-in user's own password — no permission code: everyone may change their own.
-        app.MapPost("/api/v1/portal/account/change-password", ChangeOwnPasswordAsync);
+        app.MapPost("/api/v1/portal/account/change-password", ChangeOwnPasswordAsync)
+            .RequirePortalTwoFactor(MerchantGuardedActions.ChangeOwnPassword);
 
         // Roles
         app.MapGet("/api/v1/portal/roles", ListRolesAsync).RequirePortalPermission(PortalPermissions.Roles.View);
-        app.MapPost("/api/v1/portal/roles", CreateRoleAsync).RequirePortalPermission(PortalPermissions.Roles.Manage);
-        app.MapPut("/api/v1/portal/roles/{id:guid}", UpdateRoleAsync).RequirePortalPermission(PortalPermissions.Roles.Manage);
-        app.MapPut("/api/v1/portal/roles/{id:guid}/permissions", SetRolePermissionsAsync).RequirePortalPermission(PortalPermissions.Roles.Manage);
-        app.MapDelete("/api/v1/portal/roles/{id:guid}", DeleteRoleAsync).RequirePortalPermission(PortalPermissions.Roles.Manage);
+        app.MapPost("/api/v1/portal/roles", CreateRoleAsync).RequirePortalPermission(PortalPermissions.Roles.Manage)
+            .RequirePortalTwoFactor(MerchantGuardedActions.RolesManage);
+        app.MapPut("/api/v1/portal/roles/{id:guid}", UpdateRoleAsync).RequirePortalPermission(PortalPermissions.Roles.Manage)
+            .RequirePortalTwoFactor(MerchantGuardedActions.RolesManage);
+        app.MapPut("/api/v1/portal/roles/{id:guid}/permissions", SetRolePermissionsAsync).RequirePortalPermission(PortalPermissions.Roles.Manage)
+            .RequirePortalTwoFactor(MerchantGuardedActions.RolesManage);
+        app.MapDelete("/api/v1/portal/roles/{id:guid}", DeleteRoleAsync).RequirePortalPermission(PortalPermissions.Roles.Manage)
+            .RequirePortalTwoFactor(MerchantGuardedActions.RolesManage);
 
         // The catalog a Roles editor assigns from — any authenticated portal user may read it.
         app.MapGet("/api/v1/portal/permissions", () => Ok(new { permissions = PortalPermissions.All }));

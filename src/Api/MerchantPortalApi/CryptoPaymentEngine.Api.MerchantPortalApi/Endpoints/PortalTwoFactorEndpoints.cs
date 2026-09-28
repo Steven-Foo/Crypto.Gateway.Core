@@ -35,7 +35,8 @@ public static class PortalTwoFactorEndpoints
         // A merchant admin recovering one of their OWN users' lost devices, without involving platform
         // staff. Tenant-scoped in the service, so another merchant passing a real id gets nothing.
         app.MapPost("/api/v1/portal/accounts/{id:guid}/2fa/reset", ResetAsync)
-            .RequirePortalPermission(PortalPermissions.Accounts.Manage);
+            .RequirePortalPermission(PortalPermissions.Accounts.Manage)
+            .RequirePortalTwoFactor(MerchantGuardedActions.AccountsManage);
     }
 
     private static async Task<IResult> GetStatusAsync(HttpContext http, IMerchantTwoFactorService twoFactor)

@@ -200,6 +200,7 @@ app.UseMiddleware<StaffBearerAuthMiddleware>();
 
 app.MapGet("/health", () => Results.Ok(new { status = "healthy" }));
 app.MapOpsTwoFactorApi();
+app.MapOpsMerchantTwoFactorPolicyApi();
 app.MapOpsAuthApi();
 app.MapOpsRoleApi();
 app.MapOpsAccountApi();

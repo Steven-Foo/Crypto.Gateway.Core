@@ -93,6 +93,12 @@ public static class PortalErrorCodes
     // means "ask your admin", and they are completely different screens.
     public const string TwoFactorEnrollmentRequired = "portal.two_factor_enrollment_required";
 
+    // Per-action 2FA (RequirePortalTwoFactor) — the same meanings as the admin back office's ops.* codes.
+    public const string TwoFactorRequired = "portal.two_factor_required";
+    public const string TwoFactorNotEnrolled = "portal.two_factor_not_enrolled";
+    public const string TwoFactorRecoveryNotAccepted = "portal.two_factor_recovery_not_accepted";
+    public const string UnknownGuardedAction = "portal.unknown_guarded_action";
+
     // ── request validation ──
     public const string InvalidChain = "portal.invalid_chain";
     public const string InvalidAsset = "portal.invalid_asset";
