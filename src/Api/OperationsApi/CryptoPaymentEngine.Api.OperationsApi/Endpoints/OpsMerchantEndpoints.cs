@@ -35,10 +35,14 @@ public static class OpsMerchantEndpoints
         app.MapGet("/api/v1/ops/merchants/next-code", GetNextCodeAsync).RequirePermission(OpsPermissions.Merchants.View);
 
         // Mutations — ops.merchants.manage (key rotation gets its own, more sensitive code).
-        app.MapPost("/api/v1/ops/merchants", CreateMerchantAsync).RequirePermission(OpsPermissions.Merchants.Manage);
-        app.MapPut("/api/v1/ops/merchants/{id:guid}/profile", UpdateProfileAsync).RequirePermission(OpsPermissions.Merchants.Manage);
-        app.MapPatch("/api/v1/ops/merchants/{id:guid}/status", SetStatusAsync).RequirePermission(OpsPermissions.Merchants.Manage);
-        app.MapPost("/api/v1/ops/merchants/{id:guid}/close", CloseMerchantAsync).RequirePermission(OpsPermissions.Merchants.Manage);
+        app.MapPost("/api/v1/ops/merchants", CreateMerchantAsync).RequirePermission(OpsPermissions.Merchants.Manage)
+            .RequireTwoFactor(GuardedActions.MerchantProfile);
+        app.MapPut("/api/v1/ops/merchants/{id:guid}/profile", UpdateProfileAsync).RequirePermission(OpsPermissions.Merchants.Manage)
+            .RequireTwoFactor(GuardedActions.MerchantProfile);
+        app.MapPatch("/api/v1/ops/merchants/{id:guid}/status", SetStatusAsync).RequirePermission(OpsPermissions.Merchants.Manage)
+            .RequireTwoFactor(GuardedActions.MerchantStatus);
+        app.MapPost("/api/v1/ops/merchants/{id:guid}/close", CloseMerchantAsync).RequirePermission(OpsPermissions.Merchants.Manage)
+            .RequireTwoFactor(GuardedActions.MerchantStatus);
         app.MapPost("/api/v1/ops/merchants/{id:guid}/regenerate-key", RegenerateKeyAsync).RequirePermission(OpsPermissions.Merchants.RotateKey)
             .RequireTwoFactor(GuardedActions.MerchantCredential);
         app.MapPut("/api/v1/ops/merchants/{id:guid}/allowed-ips", UpdateAllowedIpsAsync).RequirePermission(OpsPermissions.Merchants.Manage)

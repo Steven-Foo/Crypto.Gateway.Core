@@ -21,7 +21,8 @@ public static class OpsMerchantFeeEndpoints
     public static void MapOpsMerchantFeeApi(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/v1/ops/merchants/{id:guid}/fees", ListAsync).RequirePermission(OpsPermissions.Fees.View);
-        app.MapPut("/api/v1/ops/merchants/{id:guid}/fees", SetAsync).RequirePermission(OpsPermissions.Fees.Manage);
+        app.MapPut("/api/v1/ops/merchants/{id:guid}/fees", SetAsync).RequirePermission(OpsPermissions.Fees.Manage)
+            .RequireTwoFactor(GuardedActions.MerchantPricing);
     }
 
     private static async Task<IResult> ListAsync(

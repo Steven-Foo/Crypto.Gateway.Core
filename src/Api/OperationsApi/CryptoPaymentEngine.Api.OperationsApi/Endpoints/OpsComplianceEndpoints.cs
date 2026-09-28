@@ -30,10 +30,12 @@ public static class OpsComplianceEndpoints
             .RequirePermission(OpsPermissions.Compliance.View);
 
         app.MapPost("/api/v1/ops/compliance/screenings/re-screen", ReScreenAsync)
-            .RequirePermission(OpsPermissions.Compliance.Manage);
+            .RequirePermission(OpsPermissions.Compliance.Manage)
+            .RequireTwoFactor(GuardedActions.ComplianceRescreen);
 
         app.MapPost("/api/v1/ops/compliance/deposit-addresses/screen", ScreenDepositAddressesAsync)
-            .RequirePermission(OpsPermissions.Compliance.Manage);
+            .RequirePermission(OpsPermissions.Compliance.Manage)
+            .RequireTwoFactor(GuardedActions.ComplianceRescreen);
 
         // What is true NOW: one row per address at its latest verdict. The screenings list above is the
         // history; a work queue belongs here.

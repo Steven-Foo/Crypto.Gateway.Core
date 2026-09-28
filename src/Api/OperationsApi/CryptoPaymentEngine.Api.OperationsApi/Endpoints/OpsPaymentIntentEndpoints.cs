@@ -11,7 +11,8 @@ public static class OpsPaymentIntentEndpoints
 {
     public static void MapOpsPaymentIntentApi(this IEndpointRouteBuilder app)
     {
-        app.MapPost("/api/v1/ops/payment-intents/{reference:guid}/fail", FailAsync).RequirePermission(OpsPermissions.Deposits.Manage);
+        app.MapPost("/api/v1/ops/payment-intents/{reference:guid}/fail", FailAsync).RequirePermission(OpsPermissions.Deposits.Manage)
+            .RequireTwoFactor(GuardedActions.DepositManualFail);
     }
 
     private static async Task<IResult> FailAsync(

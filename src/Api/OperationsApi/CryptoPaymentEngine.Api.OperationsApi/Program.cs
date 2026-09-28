@@ -103,6 +103,18 @@ builder.Services.AddWithdrawalModule(config, dbConnection);    // read-only use 
 builder.Services.AddNotificationModule(dbConnection);          // read-only use here: ICallbackDeliveryQuery for both transaction screens
 builder.Services.AddLedgerModule(dbConnection); // read-only use here: ILedgerQuery for /transactions
 builder.Services.AddIdentityModule(config, dbConnection); // staff login/logout/session validation
+
+// The 2FA policy floor: what is guarded before staff save a policy of their own. When configuration names no
+// actions, the floor is the host's RECOMMENDED BASELINE (GuardedActions.RecommendedCodes) — never "nothing":
+// a fresh environment must start protected, and "restore defaults" returns to the same set. Identity can't
+// supply this itself because the catalog is host-owned (§4.5). A deployment that lists actions in
+// Identity:TwoFactor:GuardedActions overrides it; config can't express "none" on purpose — switching every
+// action off is a deliberate, audited save in the back office, not a settings-file edit.
+builder.Services.PostConfigure<CryptoPaymentEngine.Gateway.Core.Platform.Identity.Application.TwoFactorOptions>(options =>
+{
+    if (!options.GuardedActions.Any(a => !string.IsNullOrWhiteSpace(a)))
+        options.GuardedActions = [.. GuardedActions.RecommendedCodes];
+});
 builder.Services.AddAuditModule(dbConnection); // staff-action logging, called directly by mutating Ops endpoints
 
 // MerchantIdentity: this host never issues portal sessions (that's MerchantPortalApi's job) — it composes

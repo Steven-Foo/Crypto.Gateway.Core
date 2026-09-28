@@ -1,3 +1,4 @@
+using CryptoPaymentEngine.Api.OperationsApi.Endpoints;
 using CryptoPaymentEngine.Api.OperationsApi.Security;
 using CryptoPaymentEngine.Gateway.Core.Platform.Identity.Domain;
 using Shouldly;
@@ -103,6 +104,91 @@ public class GuardedActionCatalogTests
     public void The_policy_endpoint_is_guarded()
     {
         AllEndpointSource().ShouldContain("RequireTwoFactor(GuardedActions.TwoFactorPolicy)");
+    }
+
+    /// <summary>
+    /// The recommended baseline is what a fresh environment guards and what "restore defaults" saves. Only
+    /// the three actions whose worst case is a nuisance (no money moves, no access granted) are left out —
+    /// anything else dropping out of it would silently weaken every fresh deployment and every reset.
+    /// </summary>
+    [Fact]
+    public void The_recommended_baseline_is_everything_except_the_low_risk_actions()
+    {
+        string[] notRecommended =
+        [
+            GuardedActions.MerchantProfile,
+            GuardedActions.CallbackResend,
+            GuardedActions.ComplianceRescreen,
+        ];
+
+        GuardedActions.Guardable.Where(a => !a.Recommended).Select(a => a.Code)
+            .ShouldBe(notRecommended, ignoreOrder: true);
+
+        GuardedActions.RecommendedCodes.ShouldBe(
+            GuardedActions.Guardable.Where(a => a.Recommended).Select(a => a.Code), ignoreOrder: true);
+
+        // The money, permission, key and whitelist actions the page calls out explicitly.
+        GuardedActions.RecommendedCodes.ShouldContain(GuardedActions.WithdrawalApprove);
+        GuardedActions.RecommendedCodes.ShouldContain(GuardedActions.BalanceAdjust);
+        GuardedActions.RecommendedCodes.ShouldContain(GuardedActions.RolesManage);
+        GuardedActions.RecommendedCodes.ShouldContain(GuardedActions.MerchantCredential);
+        GuardedActions.RecommendedCodes.ShouldContain(GuardedActions.MerchantAllowedIps);
+        GuardedActions.RecommendedCodes.ShouldContain(GuardedActions.MerchantPricing);
+    }
+
+    /// <summary>Codes are stored in saved policies — a duplicate would render as two checkboxes controlling
+    /// one rule.</summary>
+    [Fact]
+    public void Every_guardable_code_is_unique()
+    {
+        GuardedActions.Guardable.Select(a => a.Code).ShouldBeUnique();
+    }
+
+    /// <summary>"Restore defaults" is a policy save, so it must carry the same always-on guard as the save —
+    /// otherwise it would be the one way to rewrite the policy without a fresh code.</summary>
+    [Fact]
+    public void The_restore_defaults_endpoint_is_guarded()
+    {
+        var source = File.ReadAllText(Path.Combine(EndpointsDirectory, "OpsTwoFactorEndpoints.cs"));
+        var statement = System.Text.RegularExpressions.Regex.Match(
+            source, @"app\.MapPost\(""/api/v1/ops/two-factor/policy/restore-defaults"".*?;",
+            System.Text.RegularExpressions.RegexOptions.Singleline).Value;
+
+        statement.ShouldNotBeNullOrEmpty();
+        statement.ShouldContain("RequireTwoFactor(GuardedActions.TwoFactorPolicy)");
+    }
+
+    /// <summary>
+    /// Found by exercising the policy save over HTTP: the audit reason used to spell out the full before AND
+    /// after lists, which overflowed the 512-character audit column once the catalog grew — the policy saved,
+    /// then the audit write failed and the operator got a 500 for a change that had happened. The worst case
+    /// is every action switched on from nothing, plus a maximum-length note.
+    /// </summary>
+    [Fact]
+    public void The_policy_change_audit_reason_always_fits_the_audit_column()
+    {
+        var everything = GuardedActions.AllCodes;
+        var longNote = new string('x', 512);
+
+        OpsTwoFactorEndpoints.DescribePolicyChange([], everything, longNote).Length
+            .ShouldBeLessThanOrEqualTo(OpsTwoFactorEndpoints.AuditReasonMaxLength);
+        OpsTwoFactorEndpoints.DescribePolicyChange(everything, [], longNote).Length
+            .ShouldBeLessThanOrEqualTo(OpsTwoFactorEndpoints.AuditReasonMaxLength);
+    }
+
+    /// <summary>The reason records what CHANGED — the part a reviewer needs — not the unchanged remainder.</summary>
+    [Fact]
+    public void The_policy_change_audit_reason_lists_only_what_changed()
+    {
+        var reason = OpsTwoFactorEndpoints.DescribePolicyChange(
+            [GuardedActions.BalanceAdjust, GuardedActions.RolesManage],
+            [GuardedActions.BalanceAdjust, GuardedActions.MerchantPricing],
+            "tighten pricing");
+
+        reason.ShouldContain($"Added: {GuardedActions.MerchantPricing}.");
+        reason.ShouldContain($"Removed: {GuardedActions.RolesManage}.");
+        reason.ShouldNotContain(GuardedActions.BalanceAdjust);
+        reason.ShouldEndWith("Note: tighten pricing");
     }
 
     /// <summary>

@@ -20,8 +20,10 @@ public static class OpsWalletEndpoints
     {
         app.MapGet("/api/v1/ops/wallets", SearchAsync).RequirePermission(OpsPermissions.Wallets.View);
         app.MapGet("/api/v1/ops/wallets/{id:guid}", GetAsync).RequirePermission(OpsPermissions.Wallets.View);
-        app.MapPost("/api/v1/ops/wallets/{id:guid}/suspend", SuspendAsync).RequirePermission(OpsPermissions.Wallets.Manage);
-        app.MapPost("/api/v1/ops/wallets/{id:guid}/resume", ResumeAsync).RequirePermission(OpsPermissions.Wallets.Manage);
+        app.MapPost("/api/v1/ops/wallets/{id:guid}/suspend", SuspendAsync).RequirePermission(OpsPermissions.Wallets.Manage)
+            .RequireTwoFactor(GuardedActions.WalletSuspend);
+        app.MapPost("/api/v1/ops/wallets/{id:guid}/resume", ResumeAsync).RequirePermission(OpsPermissions.Wallets.Manage)
+            .RequireTwoFactor(GuardedActions.WalletSuspend);
     }
 
     private static async Task<IResult> SearchAsync(

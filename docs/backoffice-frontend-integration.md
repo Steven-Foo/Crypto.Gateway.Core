@@ -200,21 +200,21 @@ the interceptor that covers all 38 of them and every one added later.
 | POST | `/api/v1/ops/auth/login` | _any session_ |  | 3 |
 | POST | `/api/v1/ops/auth/logout` | _any session_ |  | 3 |
 | GET | `/api/v1/ops/auth/me` | _any session_ |  | 3 |
-| POST | `/api/v1/ops/callbacks/{type}/{referenceId:guid}/resend` | `ops.callbacks.manage` |  | 16 |
+| POST | `/api/v1/ops/callbacks/{type}/{referenceId:guid}/resend` | `ops.callbacks.manage` | yes | 16 |
 | GET | `/api/v1/ops/compliance/addresses` | `ops.compliance.view` |  | 22b |
-| POST | `/api/v1/ops/compliance/deposit-addresses/screen` | `ops.compliance.manage` |  | 22b |
+| POST | `/api/v1/ops/compliance/deposit-addresses/screen` | `ops.compliance.manage` | yes | 22b |
 | GET | `/api/v1/ops/compliance/policy` | `ops.compliance.view` |  | 22b |
 | PUT | `/api/v1/ops/compliance/policy` | `ops.compliance.manage` | yes | 22b |
 | GET | `/api/v1/ops/compliance/policy/history` | `ops.compliance.view` |  | 22b |
 | GET | `/api/v1/ops/compliance/screenings` | `ops.compliance.view` |  | 22b |
 | GET | `/api/v1/ops/compliance/screenings/{screeningId:guid}` | `ops.compliance.view` |  | 22b |
 | POST | `/api/v1/ops/compliance/screenings/latest` | `ops.compliance.view` |  | 22b |
-| POST | `/api/v1/ops/compliance/screenings/re-screen` | `ops.compliance.manage` |  | 22b |
+| POST | `/api/v1/ops/compliance/screenings/re-screen` | `ops.compliance.manage` | yes | 22b |
 | GET | `/api/v1/ops/dashboard` | _any session_ |  | 16b |
 | GET | `/api/v1/ops/energy/operations` | `ops.energy.view` |  | 22 |
 | GET | `/api/v1/ops/energy/resources` | `ops.energy.view` |  | 22 |
 | GET | `/api/v1/ops/merchants` | `ops.merchants.view` |  | 9 |
-| POST | `/api/v1/ops/merchants` | `ops.merchants.manage` |  | 9 |
+| POST | `/api/v1/ops/merchants` | `ops.merchants.manage` | yes | 9 |
 | GET | `/api/v1/ops/merchants/{id:guid}` | `ops.merchants.view` |  | 9 |
 | GET | `/api/v1/ops/merchants/{id:guid}/allowed-ips` | `ops.merchants.view` |  | 9 |
 | PUT | `/api/v1/ops/merchants/{id:guid}/allowed-ips` | `ops.merchants.manage` | yes | 9 |
@@ -222,28 +222,28 @@ the interceptor that covers all 38 of them and every one added later.
 | POST | `/api/v1/ops/merchants/{id:guid}/balance/credit` | `ops.balances.adjust` | yes | 9 |
 | POST | `/api/v1/ops/merchants/{id:guid}/balance/debit` | `ops.balances.adjust` | yes | 9 |
 | GET | `/api/v1/ops/merchants/{id:guid}/balance/history` | `ops.merchants.view` |  | 9 |
-| POST | `/api/v1/ops/merchants/{id:guid}/close` | `ops.merchants.manage` |  | 9 |
-| PUT | `/api/v1/ops/merchants/{id:guid}/deposit-limits` | `ops.fees.manage` |  | 9 |
+| POST | `/api/v1/ops/merchants/{id:guid}/close` | `ops.merchants.manage` | yes | 9 |
+| PUT | `/api/v1/ops/merchants/{id:guid}/deposit-limits` | `ops.fees.manage` | yes | 9 |
 | GET | `/api/v1/ops/merchants/{id:guid}/fees` | `ops.fees.view` |  | 9 |
-| PUT | `/api/v1/ops/merchants/{id:guid}/fees` | `ops.fees.manage` |  | 9 |
+| PUT | `/api/v1/ops/merchants/{id:guid}/fees` | `ops.fees.manage` | yes | 9 |
 | PUT | `/api/v1/ops/merchants/{id:guid}/payout-approval` | `ops.merchants.manage` | yes | 9 |
 | POST | `/api/v1/ops/merchants/{id:guid}/portal-account` | `ops.merchants.manage` | yes | 9 |
 | GET | `/api/v1/ops/merchants/{id:guid}/portal-accounts` | `ops.merchants.manage` |  | 9 |
 | POST | `/api/v1/ops/merchants/{id:guid}/portal-accounts/{accountId:guid}/reset-password` | `ops.merchants.manage` | yes | 9 |
-| PUT | `/api/v1/ops/merchants/{id:guid}/profile` | `ops.merchants.manage` |  | 9 |
+| PUT | `/api/v1/ops/merchants/{id:guid}/profile` | `ops.merchants.manage` | yes | 9 |
 | POST | `/api/v1/ops/merchants/{id:guid}/regenerate-key` | `ops.merchants.rotate-key` | yes | 9 |
-| PUT | `/api/v1/ops/merchants/{id:guid}/settlement-period` | `ops.merchants.manage` |  | 9 |
+| PUT | `/api/v1/ops/merchants/{id:guid}/settlement-period` | `ops.merchants.manage` | yes | 9 |
 | PUT | `/api/v1/ops/merchants/{id:guid}/settlement-wallet` | `ops.merchants.manage` | yes | 9 |
 | POST | `/api/v1/ops/merchants/{id:guid}/settlement-wallets` | `ops.merchants.manage` | yes | 19 |
 | POST | `/api/v1/ops/merchants/{id:guid}/settlement-wallets/{walletId:guid}/activate` | `ops.merchants.manage` | yes | 19 |
 | POST | `/api/v1/ops/merchants/{id:guid}/settlement-wallets/{walletId:guid}/retire` | `ops.merchants.manage` | yes | 19 |
-| PATCH | `/api/v1/ops/merchants/{id:guid}/status` | `ops.merchants.manage` |  | 9 |
-| PUT | `/api/v1/ops/merchants/{id:guid}/withdrawal-cap` | `ops.fees.manage` |  | 9 |
-| PUT | `/api/v1/ops/merchants/{id:guid}/withdrawal-limits` | `ops.fees.manage` |  | 9 |
+| PATCH | `/api/v1/ops/merchants/{id:guid}/status` | `ops.merchants.manage` | yes | 9 |
+| PUT | `/api/v1/ops/merchants/{id:guid}/withdrawal-cap` | `ops.fees.manage` | yes | 9 |
+| PUT | `/api/v1/ops/merchants/{id:guid}/withdrawal-limits` | `ops.fees.manage` | yes | 9 |
 | GET | `/api/v1/ops/merchants/default-fees` | `ops.fees.view` |  | 9 |
-| PUT | `/api/v1/ops/merchants/default-fees` | `ops.fees.manage` |  | 9 |
+| PUT | `/api/v1/ops/merchants/default-fees` | `ops.fees.manage` | yes | 9 |
 | GET | `/api/v1/ops/merchants/next-code` | `ops.merchants.view` |  | 9 |
-| POST | `/api/v1/ops/payment-intents/{reference:guid}/fail` | `ops.deposits.manage` |  | 12 |
+| POST | `/api/v1/ops/payment-intents/{reference:guid}/fail` | `ops.deposits.manage` | yes | 12 |
 | GET | `/api/v1/ops/permissions` | `ops.roles.view` |  | 3 |
 | GET | `/api/v1/ops/reconciliation` | _any session_ |  | 16b |
 | GET | `/api/v1/ops/roles` | `ops.roles.view` |  | 6 |
@@ -267,18 +267,19 @@ the interceptor that covers all 38 of them and every one added later.
 | GET | `/api/v1/ops/treasury/cold-wallets` | `ops.treasury.manage` |  | 20 |
 | POST | `/api/v1/ops/treasury/cold-wallets` | `ops.treasury.manage` | yes | 20 |
 | POST | `/api/v1/ops/treasury/cold-wallets/{walletId:guid}/activate` | `ops.treasury.manage` | yes | 20 |
-| POST | `/api/v1/ops/treasury/cold-wallets/{walletId:guid}/re-screen` | `ops.treasury.manage` |  | 20 |
+| POST | `/api/v1/ops/treasury/cold-wallets/{walletId:guid}/re-screen` | `ops.treasury.manage` | yes | 20 |
 | POST | `/api/v1/ops/treasury/cold-wallets/{walletId:guid}/retire` | `ops.treasury.manage` | yes | 20 |
 | GET | `/api/v1/ops/treasury/hot-pool` | `ops.treasury.manage` |  | 20 |
 | POST | `/api/v1/ops/treasury/top-up` | `ops.treasury.manage` | yes | 20 |
 | GET | `/api/v1/ops/two-factor/actions` | `ops.roles.view` |  | 3c |
 | GET | `/api/v1/ops/two-factor/policy` | `ops.roles.view` |  | 3c |
 | PUT | `/api/v1/ops/two-factor/policy` | `ops.roles.manage` | yes | 3c |
+| POST | `/api/v1/ops/two-factor/policy/restore-defaults` | `ops.roles.manage` | yes | 3c |
 | GET | `/api/v1/ops/two-factor/policy/history` | `ops.roles.view` |  | 3c |
 | GET | `/api/v1/ops/wallets` | `ops.wallets.view` |  | 11 |
 | GET | `/api/v1/ops/wallets/{id:guid}` | `ops.wallets.view` |  | 11 |
-| POST | `/api/v1/ops/wallets/{id:guid}/resume` | `ops.wallets.manage` |  | 11 |
-| POST | `/api/v1/ops/wallets/{id:guid}/suspend` | `ops.wallets.manage` |  | 11 |
+| POST | `/api/v1/ops/wallets/{id:guid}/resume` | `ops.wallets.manage` | yes | 11 |
+| POST | `/api/v1/ops/wallets/{id:guid}/suspend` | `ops.wallets.manage` | yes | 11 |
 | POST | `/api/v1/ops/withdrawals/{withdrawalId:guid}/approve` | `ops.withdrawals.approve` | yes | 14 |
 | POST | `/api/v1/ops/withdrawals/{withdrawalId:guid}/audit-approve` | `ops.withdrawals.approve` | yes | 14 |
 | POST | `/api/v1/ops/withdrawals/{withdrawalId:guid}/audit-reject` | `ops.withdrawals.approve` | yes | 14 |
@@ -700,17 +701,115 @@ works with no frontend change at all.
 | `ops.two_factor_recovery_not_accepted` | 403 | This session signed in with a recovery code. They must sign in with the authenticator. |
 | `ops.two_factor_not_enrolled` | 403 | No active factor (should be unreachable — enrollment is forced). |
 
-### `GET /api/v1/ops/two-factor/actions` — what the settings screen renders (`ops.roles.view`)
+### Whose requests actually get prompted
+
+A guarded action prompts **only staff whose own account has `requireTwoFactor: true`** (§3d). An account an
+admin has made 2FA-optional does every action — guarded or not — with no code. So the settings page decides
+*which actions* are sensitive; the per-account switch decides *which people* are asked to prove themselves.
+
+---
+
+### The "2FA 验证" settings page — what it is and how to build it
+
+**Page purpose (页面定位):** configure which sensitive platform actions require a fresh authenticator code
+(二次 2FA 动态码验证). When an action is switched on, its confirmation dialog must ask for the 6-digit code,
+and a wrong code blocks it (错误将拦截 — enforced by the server, see the failure table above; the UI cannot
+bypass it). Funds, permissions, keys, whitelists and risk-control actions are recommended ON.
+
+**Endpoints this page uses — all under `/api/v1/ops/two-factor`:**
+
+| Call | Permission | Code needed? | Used for |
+|---|---|---|---|
+| `GET /actions` | `ops.roles.view` | no | The list of toggles: code, group, label, **recommended** |
+| `GET /policy` | `ops.roles.view` | no | Which toggles are ON right now, plus the recommended set |
+| `PUT /policy` | `ops.roles.manage` | **always** | Save the toggles |
+| `POST /policy/restore-defaults` | `ops.roles.manage` | **always** | "恢复默认设置" — back to the recommended baseline |
+| `GET /policy/history` | `ops.roles.view` | no | Who changed what, when (optional "history" drawer) |
+
+A user with `ops.roles.view` but not `ops.roles.manage` should see the page **read-only** (toggles disabled,
+no Save / Restore buttons).
+
+**Suggested page layout:**
+
+1. **Header:** title, the one-paragraph explanation above, and a line showing the current state:
+   - `source: "Configuration"` ⇒ "Using the recommended default — nobody has changed these settings yet."
+   - `source: "Stored"` ⇒ "Last changed by `updatedBy` at `updatedAt`" (+ `note` if present).
+2. **One card per `group`**, in the order the groups first appear in `/actions`. Inside each card, one row per
+   action: the **label** (translated — see below), a **"推荐" tag when `recommended: true`**, and an on/off
+   switch. Switch state = `guardedActions` (from `/policy`) contains that `code`.
+3. **The always-on row** (from `alwaysGuarded`): shown in a "Security" card, switch permanently ON and disabled,
+   with its `reason` underneath. Do not hide it — its absence would leave an admin hunting for it.
+4. **Footer buttons:** **Save** (enabled only when something changed) and **恢复默认设置 / Restore defaults**.
+5. Optional: a **"not recommended" warning** next to any recommended action the admin switches OFF, e.g. "This
+   action moves money / changes permissions — turning off 2FA here is not recommended." Compute it client-side:
+   `recommended === true && !checked`.
+
+**Save flow:** send the **complete** list of switched-on codes to `PUT /policy` (not just the changed ones).
+The server will ask for a code (`403 ops.two_factor_required`) — your interceptor prompts, replays with
+`X-2FA-Code`, and the 200 response is the new state. Re-render from the response, not from your local copy.
+
+**Restore-defaults flow:** show a confirmation first ("Reset every action to the recommended security
+baseline?"), then `POST /policy/restore-defaults` — same code prompt as a save. **Do not implement it
+client-side** by sending the recommended list through `PUT`: the server owns the baseline, so a stale or buggy
+frontend can never turn "restore defaults" into "switch everything off". It restores to the **recommended
+baseline, never to all-off** (恢复默认设置应回到推荐安全基线，而不是全部关闭).
+
+**Labels / Chinese text:** the API returns English `label`s. Map the **`code`** to your own Chinese label in the
+frontend (codes are stable and never renamed; labels may be reworded). Fall back to the English `label` for any
+code you have no translation for yet — that is how a newly added action shows up before you translate it,
+instead of disappearing.
+
+### The action catalog (current)
+
+Everything below comes from `GET /actions` — **render from the response, never from a hardcoded copy of this
+table**; it is here so you can prepare translations and understand what each switch protects.
+
+| `code` | `group` | Recommended | What it protects (routes) |
+|---|---|---|---|
+| `ops.treasury.top-up` | Treasury | ✅ | `POST /treasury/top-up` |
+| `ops.treasury.cold-wallet` | Treasury | ✅ | `POST /treasury/cold-wallets`, `.../cold-wallet`, `.../{id}/activate`, `.../{id}/retire` |
+| `ops.withdrawals.approve` | Withdrawals | ✅ | `POST /withdrawals/{id}/approve`, `/reject`, `/audit-approve`, `/audit-reject` |
+| `ops.withdrawals.record-settlement` | Withdrawals | ✅ | `POST /withdrawals/{id}/record-settlement` |
+| `ops.withdrawals.funding` | Withdrawals | ✅ | `POST /withdrawals/{id}/release`, `/cancel` |
+| `ops.balances.adjust` | Merchants | ✅ | `POST /merchants/{id}/balance/credit`, `/debit` |
+| `ops.merchants.settlement-wallet` | Merchants | ✅ | `PUT /merchants/{id}/settlement-wallet`, `POST .../settlement-wallets` (+ activate / retire) |
+| `ops.merchants.rotate-key` | Merchants | ✅ | `POST /merchants/{id}/regenerate-key` |
+| `ops.merchants.risk-controls` | Merchants | ✅ | `PUT /merchants/{id}/approval-threshold`, `/payout-approval` |
+| `ops.merchants.allowed-ips` | Merchants | ✅ | `PUT /merchants/{id}/allowed-ips` |
+| `ops.merchants.portal-account` | Merchants | ✅ | `POST /merchants/{id}/portal-account`, `.../portal-accounts/{accountId}/reset-password` |
+| `ops.merchants.pricing` | Merchants | ✅ | `PUT /merchants/{id}/fees`, `/deposit-limits`, `/withdrawal-limits`, `/withdrawal-cap`, `PUT /merchants/default-fees` |
+| `ops.merchants.settlement-period` | Merchants | ✅ | `PUT /merchants/{id}/settlement-period` |
+| `ops.merchants.status` | Merchants | ✅ | `PATCH /merchants/{id}/status` (freeze / unfreeze), `POST /merchants/{id}/close` |
+| `ops.merchants.profile` | Merchants | — | `POST /merchants` (create), `PUT /merchants/{id}/profile` |
+| `ops.deposits.manual-fail` | Orders | ✅ | `POST /payment-intents/{reference}/fail` |
+| `ops.wallets.suspend` | Wallets | ✅ | `POST /wallets/{id}/suspend`, `/resume` |
+| `ops.callbacks.resend` | Callbacks | — | `POST /callbacks/{type}/{referenceId}/resend` |
+| `ops.sweep.settings` | Sweep | ✅ | `PUT /sweeps/settings/{chain}`, `POST /sweeps/scan/{chain}` |
+| `ops.compliance.policy` | Compliance | ✅ | `PUT /compliance/policy` |
+| `ops.compliance.re-screen` | Compliance | — | `POST /compliance/screenings/re-screen`, `/compliance/deposit-addresses/screen`, `/treasury/cold-wallets/{id}/re-screen` |
+| `ops.accounts.manage` | Staff | ✅ | Staff account create / status / role / reset-password / 2FA switch / 2FA reset |
+| `ops.roles.manage` | Staff | ✅ | Role create / edit / permissions / delete |
+| `ops.security.two-factor-policy` | Security | always on | `PUT /two-factor/policy`, `POST /two-factor/policy/restore-defaults` |
+
+All routes are under `/api/v1/ops`. **Why the three "—" rows are not recommended:** creating a merchant or
+editing its profile moves no money and grants no access by itself; resending a callback only re-delivers a
+notification the merchant was already owed; a re-screen only reads (though it spends the screening provider's
+daily quota). They can still be switched on.
+
+**Not in the catalog because the feature does not exist yet** (if they appear in a mockup, they need backend
+work first, not just a toggle): Gas / energy top-up and replacing the gas master wallet (energy has read-only
+ops screens today), publishing API-doc versions, API rate-limit / circuit-breaker policy, and a staff
+"change my own password" screen.
+
+### `GET /api/v1/ops/two-factor/actions` (`ops.roles.view`)
 
 ```json
 { "isSuccess": true,
   "data": {
     "actions": [
-      { "code": "ops.treasury.top-up", "group": "Treasury", "label": "Record a hot-wallet top-up" },
-      { "code": "ops.withdrawals.approve", "group": "Withdrawals", "label": "Approve or reject a payout" }
-      // ... 15 in total at the time of writing, across the groups
-      //     Treasury · Withdrawals · Merchants · Sweep · Compliance · Staff.
-      // Render from the response, never from a hardcoded list — the catalog grows.
+      { "code": "ops.treasury.top-up", "group": "Treasury", "label": "Record a hot-wallet top-up", "recommended": true },
+      { "code": "ops.merchants.profile", "group": "Merchants", "label": "Create a merchant or edit its profile", "recommended": false }
+      // ... 23 in total at the time of writing (catalog above). Render from the response — the catalog grows.
     ],
     "alwaysGuarded": [
       { "code": "ops.security.two-factor-policy", "group": "Security",
@@ -721,37 +820,46 @@ works with no frontend change at all.
   "error": null, "errorCode": null }
 ```
 
-Render `actions` as checkboxes **grouped by `group`, labelled with `label`** — never as raw dotted codes,
-which is how an operator guards the wrong thing. Render `alwaysGuarded` as a permanently-checked, disabled
-row showing its `reason`, so the screen explains the absence of a toggle rather than leaving someone hunting
-for one.
+- `recommended` — part of the recommended security baseline. Show the "推荐" tag; it is also exactly the set
+  "restore defaults" switches on.
+- Render labels, never raw dotted codes — showing codes is how an operator switches the wrong thing.
 
-### `GET /api/v1/ops/two-factor/policy` — current state (`ops.roles.view`)
+### `GET /api/v1/ops/two-factor/policy` (`ops.roles.view`)
 
 ```json
 { "isSuccess": true,
   "data": {
-    "guardedActions": ["ops.security.two-factor-policy", "ops.treasury.top-up"],
-    "source": "Stored",
-    "updatedBy": "admin",
-    "updatedAt": "2026-09-23T10:31:00+00:00",
-    "note": "tightening controls",
-    "configuredDefaults": ["ops.security.two-factor-policy"],
+    "guardedActions": ["ops.accounts.manage", "ops.balances.adjust", "...", "ops.security.two-factor-policy"],
+    "source": "Configuration",
+    "updatedBy": null,
+    "updatedAt": null,
+    "note": null,
+    "configuredDefaults": ["ops.accounts.manage", "...", "ops.security.two-factor-policy"],
+    "recommendedDefaults": ["ops.accounts.manage", "...", "ops.security.two-factor-policy"],
     "enrolledStaffCount": 7
   },
   "error": null, "errorCode": null }
 ```
 
-- `source` is `"Configuration"` (nobody has ever saved a policy — the deployment defaults are in force) or
-  `"Stored"`. Worth showing: "nobody has chosen yet" and "someone chose exactly these" look identical in the
-  values alone, and only one of them is a question worth asking.
-- `configuredDefaults` is what would apply if the stored version were removed.
+| Field | Meaning |
+|---|---|
+| `guardedActions` | The actions ON right now. Always contains `ops.security.two-factor-policy`. Sorted. |
+| `source` | `"Configuration"` = nobody has saved a policy yet, so the default is in force. `"Stored"` = someone saved one. |
+| `updatedBy` / `updatedAt` / `note` | Who saved the current version, when, and why. `null` while `source` is `"Configuration"`. |
+| `configuredDefaults` | What applies if nobody has saved anything. Normally identical to `recommendedDefaults`. |
+| `recommendedDefaults` | Exactly what "restore defaults" would save. Same shape and sorting as `guardedActions`, so "is the current policy the recommended one?" is a direct array comparison — handy for a "✓ Using recommended settings" badge. |
+| `enrolledStaffCount` | How many staff have bound an authenticator. |
+
+**What a fresh environment does:** until someone saves, **the recommended baseline is in force** (`source:
+"Configuration"`, `guardedActions` = `recommendedDefaults`). A new deployment is protected from the first
+minute; nobody has to remember to switch 2FA on.
 
 ### `PUT /api/v1/ops/two-factor/policy` — save (`ops.roles.manage` + **always** an `X-2FA-Code`)
 
-Request: `{ "guardedActions": ["ops.treasury.top-up"], "note": "optional, max 512" }`
+Request: `{ "guardedActions": ["ops.treasury.top-up", "ops.balances.adjust"], "note": "optional, max 512" }`
 
-- **Send the complete set, not a delta.** A save replaces the list.
+- **Send the complete set, not a delta.** A save replaces the list. Sending `[]` switches everything off
+  except the always-on action — allowed, but it is a deliberate, audited choice (show a strong warning).
 - **This endpoint is always guarded**, whatever the saved policy says — including the save that would
   weaken it. Without that, anyone on a stolen admin session could untick everything.
 - `ops.security.two-factor-policy` is **forced into every saved version** even if you omit it. Do not treat
@@ -760,11 +868,27 @@ Request: `{ "guardedActions": ["ops.treasury.top-up"], "note": "optional, max 51
   stored — a checkbox that guards nothing reads as protection that is not there.
 - `updatedBy` comes from the session; do not send it.
 
+Response 200: `{ "guardedActions": [...], "source": "Stored", "updatedBy": "admin", "updatedAt": "...", "note": "..." }`.
+
+### `POST /api/v1/ops/two-factor/policy/restore-defaults` — 恢复默认设置 (`ops.roles.manage` + **always** an `X-2FA-Code`)
+
+Request body is optional: `{ "note": "optional, max 512" }` (or no body). If you send no note, the server
+records *"Restored the recommended security baseline."*
+
+- Switches ON exactly the `recommended: true` actions (+ the always-on one), and **switches OFF** the
+  not-recommended ones — it is a reset to the baseline, not "add the recommended ones to what is on".
+- Saved as a **new version** in the history, attributed to the caller — a reset is recorded like any other
+  change, never a deletion of the record.
+- Response 200: same shape as `PUT /policy` (`source` is `"Stored"` afterwards, because someone chose it).
+- Same failure codes as a save.
+
 ### `GET /api/v1/ops/two-factor/policy/history` — the append-only trail (`ops.roles.view`)
 
-`{ "versions": [{ "id", "guardedActions", "updatedBy", "updatedAt", "note" }] }`, newest first. Nothing is
-ever updated in place: an action taken last month stays explainable against the policy actually in force
-then.
+`?limit=50` (default). `{ "versions": [{ "id", "guardedActions", "updatedBy", "updatedAt", "note" }] }`, newest
+first. Nothing is ever updated in place: an action taken last month stays explainable against the policy
+actually in force then. Every save and every restore is also written to the staff audit log (§ audit) as
+`two_factor.policy_changed` / `two_factor.policy_restored_defaults`, recording which actions were **added and
+removed**.
 
 ---
 

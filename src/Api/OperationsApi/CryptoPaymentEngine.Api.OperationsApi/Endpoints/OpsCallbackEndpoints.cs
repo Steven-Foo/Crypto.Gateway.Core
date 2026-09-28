@@ -15,7 +15,8 @@ namespace CryptoPaymentEngine.Api.OperationsApi.Endpoints;
 public static class OpsCallbackEndpoints
 {
     public static void MapOpsCallbackApi(this IEndpointRouteBuilder app) =>
-        app.MapPost("/api/v1/ops/callbacks/{type}/{referenceId:guid}/resend", ResendAsync).RequirePermission(OpsPermissions.Callbacks.Manage);
+        app.MapPost("/api/v1/ops/callbacks/{type}/{referenceId:guid}/resend", ResendAsync).RequirePermission(OpsPermissions.Callbacks.Manage)
+            .RequireTwoFactor(GuardedActions.CallbackResend);
 
     private static async Task<IResult> ResendAsync(
         string type, Guid referenceId, ICallbackDeliveryResendService resend, IAuditLogger audit, HttpContext http)

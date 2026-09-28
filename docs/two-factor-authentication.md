@@ -134,6 +134,11 @@ transfer exactly:
   effective policy so a fresh environment boots with a defined posture; the first save takes over and
   `source` reads `Stored`. Config alone means every change is a deployment; DB alone means a new environment
   boots with the control undefined.
+- **An empty config floor means the RECOMMENDED BASELINE, not "nothing"** (2026-09-28). The OperationsApi
+  host `PostConfigure`s `TwoFactorOptions`: when config lists no actions, the floor becomes
+  `GuardedActions.RecommendedCodes` (§5.2). So a fresh environment is protected from its first minute, and
+  "restore defaults" returns to the same set. Config can override the floor with an explicit list, but cannot
+  express "none" — switching everything off is a deliberate, audited save in the back office.
 - **`source: Configuration | Stored`** distinguishes "nobody has set this" from "someone set it to exactly
   the default". Only one of those is a question worth asking.
 
@@ -281,6 +286,34 @@ app.MapPost("/api/v1/ops/treasury/top-up", RecordTopUpAsync)
 
 **Permission first, 2FA second** — no point demanding a code for something the caller may not do, and doing
 so confirms the action exists to someone with no access to it.
+
+The code block above shows the original ten. **The catalog is 23 actions as of 2026-09-28** — the
+authoritative list is `GuardedActions.Guardable` (and `GET /ops/two-factor/actions`), with the full
+code → group → recommended → routes table in `backoffice-frontend-integration.md` §3c. Added on 2026-09-28,
+closing every unguarded Ops write that moves money or changes access: `ops.merchants.pricing` (fees, limits,
+cash-out cap, default fee), `ops.merchants.settlement-period`, `ops.merchants.status` (freeze / unfreeze /
+close), `ops.merchants.profile`, `ops.deposits.manual-fail`, `ops.wallets.suspend`, `ops.callbacks.resend`,
+`ops.compliance.re-screen`.
+
+### 5.2 The recommended baseline and "restore defaults"
+
+Each `GuardableAction` carries `Recommended`. **True** for anything that moves money, changes permissions,
+touches keys or whitelists, or loosens a risk control; **false** only where the worst case is a nuisance —
+`ops.merchants.profile` (no money, no access), `ops.callbacks.resend` (re-delivers an owed notification),
+`ops.compliance.re-screen` (reads; spends screening quota). `GuardedActions.RecommendedCodes` is derived from
+the catalog, so the flag and the set cannot disagree.
+
+The baseline is used twice: as the **config floor** when nothing is configured (§3), and by
+**`POST /ops/two-factor/policy/restore-defaults`**, which saves exactly that set as a new, attributed policy
+version. The server owns the baseline — the frontend never sends it — so "restore defaults" can never be
+turned into "switch everything off" by a stale or buggy client. The endpoint carries the always-on
+`TwoFactorPolicy` guard, because it is a policy save.
+
+**Audit text:** a policy save/restore records what was **added and removed**, not the full before/after lists.
+The full lists overflowed the 512-character `audit.AuditEntry.Reason` once the catalog passed a dozen actions
+— found by exercising the save over HTTP: the policy row saved, then the audit write failed, and the operator
+got a 500 for a change that had in fact happened. The reason is now capped to the column; the complete lists
+are always in the append-only policy history.
 
 ### 5.1 The self-protection invariant
 
@@ -470,7 +503,7 @@ code on that top-up, and when.*
 | 4 | **DONE.** `TwoFactorService` (enroll/confirm/verify/reset) + `TwoFactorPolicyService`/`Provider`/`Cache`. | T3 |
 | 5 | **DONE.** `StaffAuthService.LoginAsync` takes the code; forced-enrollment restriction in the middleware. | T3 |
 | 6 | **DONE.** Host: `GuardedActions`, `RequireTwoFactor`, endpoints, error codes. | T2 |
-| 7 | **DONE.** `.RequireTwoFactor(...)` on the ten seed actions. | T2 |
+| 7 | **DONE.** `.RequireTwoFactor(...)` on the ten seed actions; extended to 23 actions + recommended baseline + restore-defaults on 2026-09-28 (§5, §5.2). | T2 |
 | 8 | **DONE.** Merchant portal: mirror of 2-5 under `MerchantIdentity` + `MerchantPortalApi` (§9). | T3 |
 | 9 | **DONE.** Docs: `backoffice-frontend-integration.md` §0a/§0b/§2/§3b/§3c/§23b/§24 and `merchant-portal-frontend-integration.md` §3/§3b/§10. | T1 |
 

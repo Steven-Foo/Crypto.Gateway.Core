@@ -21,6 +21,11 @@ public sealed class SaveTwoFactorPolicyRequest
     [MaxLength(512)] public string? Note { get; init; }
 }
 
+public sealed class RestoreTwoFactorPolicyRequest
+{
+    [MaxLength(512)] public string? Note { get; init; }
+}
+
 /// <summary>
 /// Enrollment, recovery codes, and the platform-wide policy saying which actions demand a code.
 ///
@@ -62,6 +67,13 @@ public static class OpsTwoFactorEndpoints
 
         // Always guarded, whatever the saved policy says (§ GuardedActions.TwoFactorPolicy).
         app.MapPut("/api/v1/ops/two-factor/policy", SavePolicyAsync)
+            .RequirePermission(OpsPermissions.Roles.Manage)
+            .RequireTwoFactor(GuardedActions.TwoFactorPolicy);
+
+        // "Restore defaults" = the recommended baseline, NEVER "nothing guarded". The server decides what the
+        // baseline is, so a frontend bug can't turn a reset into switching the control off. Same guard as a
+        // save, because it IS a save.
+        app.MapPost("/api/v1/ops/two-factor/policy/restore-defaults", RestoreDefaultsAsync)
             .RequirePermission(OpsPermissions.Roles.Manage)
             .RequireTwoFactor(GuardedActions.TwoFactorPolicy);
     }
@@ -198,7 +210,10 @@ public static class OpsTwoFactorEndpoints
     private static IResult GetActions() =>
         OpsResults.Ok(new
         {
-            actions = GuardedActions.Guardable.Select(a => new { code = a.Code, group = a.Group, label = a.Label }),
+            actions = GuardedActions.Guardable.Select(a => new
+            {
+                code = a.Code, group = a.Group, label = a.Label, recommended = a.Recommended,
+            }),
             // Shown as permanently on, so the screen explains its absence rather than leaving an operator
             // hunting for a toggle that will never appear.
             alwaysGuarded = new[]
@@ -227,6 +242,9 @@ public static class OpsTwoFactorEndpoints
             updatedAt = view.Current.UpdatedAt,
             note = view.Current.Note,
             configuredDefaults = view.ConfiguredDefaults.GuardedActions,
+            // What "restore defaults" would save. Normally the same list as configuredDefaults; they differ
+            // only if a deployment overrides the floor in configuration.
+            recommendedDefaults = RecommendedPolicy(),
             enrolledStaffCount = view.EnrolledStaffCount,
         });
     }
@@ -247,21 +265,72 @@ public static class OpsTwoFactorEndpoints
                 $"Unknown guarded action(s): {string.Join(", ", unknown)}.");
         }
 
+        return await SaveAndAuditAsync(
+            request.GuardedActions, request.Note, "two_factor.policy_changed", http, policy, audit);
+    }
+
+    private static Task<IResult> RestoreDefaultsAsync(
+        RestoreTwoFactorPolicyRequest? request, HttpContext http, ITwoFactorPolicyService policy, IAuditLogger audit) =>
+        // Saved as an ordinary new version (append-only, attributed), so the history shows who restored and
+        // when — a reset is a policy change like any other, not a deletion of the record.
+        SaveAndAuditAsync(
+            GuardedActions.RecommendedCodes,
+            string.IsNullOrWhiteSpace(request?.Note) ? "Restored the recommended security baseline." : request!.Note,
+            "two_factor.policy_restored_defaults", http, policy, audit);
+
+    /// <summary>The audit column's capacity (<c>audit.AuditEntry.Reason</c>, nvarchar(512)).</summary>
+    public const int AuditReasonMaxLength = 512;
+
+    /// <summary>
+    /// The audit reason for a policy change: WHAT CHANGED (added / removed), not the full before-and-after
+    /// lists. The full lists are always recoverable — every save is its own row in the append-only policy
+    /// history — whereas writing both lists out overflowed the audit column once the catalog grew past a
+    /// dozen actions, failing the audit write AFTER the policy had already saved (the operator saw a 500 for
+    /// a change that had in fact happened). Capped to the column, ending with a pointer to the history so a
+    /// shortened entry never reads as the whole story.
+    /// </summary>
+    public static string DescribePolicyChange(
+        IReadOnlyCollection<string> before, IReadOnlyCollection<string> after, string? note)
+    {
+        var added = after.Except(before, StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+        var removed = before.Except(after, StringComparer.Ordinal).Order(StringComparer.Ordinal).ToList();
+
+        var text = added.Count == 0 && removed.Count == 0
+            ? "Guarded actions saved unchanged."
+            : "Guarded actions changed." +
+              (added.Count > 0 ? $" Added: {string.Join(", ", added)}." : "") +
+              (removed.Count > 0 ? $" Removed: {string.Join(", ", removed)}." : "");
+
+        if (!string.IsNullOrWhiteSpace(note))
+            text += $" Note: {note.Trim()}";
+
+        const string suffix = " ... (truncated; full list in the two-factor policy history)";
+        return text.Length <= AuditReasonMaxLength
+            ? text
+            : text[..(AuditReasonMaxLength - suffix.Length)] + suffix;
+    }
+
+    /// <summary>The recommended baseline as the policy stores it: the self-protecting action included, sorted
+    /// — the same shape <c>guardedActions</c> is returned in, so the UI can compare the two directly.</summary>
+    private static IReadOnlyList<string> RecommendedPolicy() =>
+        [.. GuardedActions.RecommendedCodes.Append(GuardedActions.TwoFactorPolicy).Distinct().Order(StringComparer.Ordinal)];
+
+    private static async Task<IResult> SaveAndAuditAsync(
+        IReadOnlyCollection<string> guardedActions, string? note, string auditAction,
+        HttpContext http, ITwoFactorPolicyService policy, IAuditLogger audit)
+    {
         var actor = AuditActor.From(http);
 
         var before = await policy.GetAsync(http.RequestAborted);
-        var result = await policy.SaveAsync(request.GuardedActions, request.Note, actor.Username, http.RequestAborted);
+        var result = await policy.SaveAsync(guardedActions, note, actor.Username, http.RequestAborted);
         if (result.IsFailure)
             return OpsResults.Fail(result.Error!);
 
         await audit.LogAsync(
             new LogAuditEntryCommand(
                 actor.StaffUserId, actor.Username,
-                "two_factor.policy_changed", "TwoFactorPolicy", "platform",
-                // Before AND after, so the trail answers "what changed" without diffing two rows by hand.
-                Reason: $"Guarded actions changed from [{string.Join(", ", before.Current.GuardedActions)}] " +
-                        $"to [{string.Join(", ", result.Value.GuardedActions)}]." +
-                        (string.IsNullOrWhiteSpace(request.Note) ? "" : $" Note: {request.Note}"),
+                auditAction, "TwoFactorPolicy", "platform",
+                Reason: DescribePolicyChange(before.Current.GuardedActions, result.Value.GuardedActions, note),
                 actor.IpAddress),
             http.RequestAborted);
 

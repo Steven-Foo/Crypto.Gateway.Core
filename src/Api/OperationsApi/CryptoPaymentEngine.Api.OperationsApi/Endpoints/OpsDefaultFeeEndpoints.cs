@@ -20,7 +20,8 @@ public static class OpsDefaultFeeEndpoints
     public static void MapOpsDefaultFeeApi(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/v1/ops/merchants/default-fees", ListAsync).RequirePermission(OpsPermissions.Fees.View);
-        app.MapPut("/api/v1/ops/merchants/default-fees", SetAsync).RequirePermission(OpsPermissions.Fees.Manage);
+        app.MapPut("/api/v1/ops/merchants/default-fees", SetAsync).RequirePermission(OpsPermissions.Fees.Manage)
+            .RequireTwoFactor(GuardedActions.MerchantPricing);
     }
 
     private static async Task<IResult> ListAsync(

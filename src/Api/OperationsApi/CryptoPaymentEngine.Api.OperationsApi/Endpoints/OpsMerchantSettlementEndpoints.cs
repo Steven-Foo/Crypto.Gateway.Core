@@ -20,7 +20,8 @@ public static class OpsMerchantSettlementEndpoints
 {
     public static void MapOpsMerchantSettlementApi(this IEndpointRouteBuilder app)
     {
-        app.MapPut("/api/v1/ops/merchants/{id:guid}/settlement-period", SetSettlementPeriodAsync).RequirePermission(OpsPermissions.Merchants.Manage);
+        app.MapPut("/api/v1/ops/merchants/{id:guid}/settlement-period", SetSettlementPeriodAsync).RequirePermission(OpsPermissions.Merchants.Manage)
+            .RequireTwoFactor(GuardedActions.MerchantSettlementPeriod);
         // Every settlement-wallet write decides where a merchant's earnings are paid, which is exactly the
         // change a compromised staff session would make. Guarded as one action.
         app.MapPut("/api/v1/ops/merchants/{id:guid}/settlement-wallet", SetSettlementWalletAsync)
@@ -43,9 +44,12 @@ public static class OpsMerchantSettlementEndpoints
         // it controls the merchant's process, not its pricing.
         app.MapPut("/api/v1/ops/merchants/{id:guid}/payout-approval", SetPayoutApprovalAsync).RequirePermission(OpsPermissions.Merchants.Manage)
             .RequireTwoFactor(GuardedActions.MerchantRiskControls);
-        app.MapPut("/api/v1/ops/merchants/{id:guid}/withdrawal-cap", SetWithdrawalCapAsync).RequirePermission(OpsPermissions.Fees.Manage);
-        app.MapPut("/api/v1/ops/merchants/{id:guid}/withdrawal-limits", SetWithdrawalLimitsAsync).RequirePermission(OpsPermissions.Fees.Manage);
-        app.MapPut("/api/v1/ops/merchants/{id:guid}/deposit-limits", SetDepositLimitsAsync).RequirePermission(OpsPermissions.Fees.Manage);
+        app.MapPut("/api/v1/ops/merchants/{id:guid}/withdrawal-cap", SetWithdrawalCapAsync).RequirePermission(OpsPermissions.Fees.Manage)
+            .RequireTwoFactor(GuardedActions.MerchantPricing);
+        app.MapPut("/api/v1/ops/merchants/{id:guid}/withdrawal-limits", SetWithdrawalLimitsAsync).RequirePermission(OpsPermissions.Fees.Manage)
+            .RequireTwoFactor(GuardedActions.MerchantPricing);
+        app.MapPut("/api/v1/ops/merchants/{id:guid}/deposit-limits", SetDepositLimitsAsync).RequirePermission(OpsPermissions.Fees.Manage)
+            .RequireTwoFactor(GuardedActions.MerchantPricing);
         app.MapPut("/api/v1/ops/merchants/{id:guid}/approval-threshold", SetApprovalThresholdAsync).RequirePermission(OpsPermissions.Fees.Manage)
             .RequireTwoFactor(GuardedActions.MerchantRiskControls);
     }

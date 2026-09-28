@@ -43,7 +43,8 @@ public static class OpsTreasuryEndpoints
         // refreshes a verdict. Making an operator produce a code to look something up is how a control
         // becomes the thing people work around.
         app.MapPost("/api/v1/ops/treasury/cold-wallets/{walletId:guid}/re-screen", ReScreenColdAsync)
-            .RequirePermission(OpsPermissions.Treasury.Manage);
+            .RequirePermission(OpsPermissions.Treasury.Manage)
+            .RequireTwoFactor(GuardedActions.ComplianceRescreen);
 
         // Records company funds an admin has ALREADY moved into a hot wallet from a company wallet outside
         // platform custody, after on-chain verification. Nothing is sent from here.
