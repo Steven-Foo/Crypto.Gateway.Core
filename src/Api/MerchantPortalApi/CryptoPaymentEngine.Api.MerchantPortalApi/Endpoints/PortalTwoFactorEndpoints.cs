@@ -156,7 +156,9 @@ public static class PortalTwoFactorEndpoints
         await LogAsync(audit, http, PortalAuditActions.TwoFactorReset, id.ToString(),
             $"Two-factor authentication was reset for '{account.Username}'. They must enroll again at next sign-in.");
 
-        return PortalResults.Ok(new { merchantUserId = id, reset = true });
+        // A reset removes the binding, so twoFactorBound is false — the same field the account list reports,
+        // letting the UI update the row without re-fetching.
+        return PortalResults.Ok(new { merchantUserId = id, reset = true, twoFactorBound = false });
     }
 
     /// <summary>Every entry is stamped with the tenant by PortalAuditActor, so it shows in that merchant's

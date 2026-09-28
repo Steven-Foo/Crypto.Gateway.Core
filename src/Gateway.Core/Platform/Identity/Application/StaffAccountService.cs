@@ -4,9 +4,13 @@ using CryptoPaymentEngine.SharedKernel;
 
 namespace CryptoPaymentEngine.Gateway.Core.Platform.Identity.Application;
 
+/// <param name="RequireTwoFactor">The switch: whether this account is ASKED for a second factor.</param>
+/// <param name="TwoFactorBound">Whether the account has actually bound an authenticator (an ACTIVE factor —
+/// a setup that was started but never confirmed reads false). Independent of the switch: an account can be
+/// bound with the switch off, or required but not yet bound. A 2FA reset makes it false again.</param>
 public sealed record StaffAccountView(
     Guid StaffUserId, string Username, Guid RoleId, string RoleName, string Status, bool RequireTwoFactor,
-    DateTimeOffset CreatedAt);
+    bool TwoFactorBound, DateTimeOffset CreatedAt);
 
 /// <summary>The one-time-visible result of creating an account or resetting its password — mirrors the
 /// Merchant module's one-time-secret convention (§10-adjacent).</summary>
@@ -44,6 +48,7 @@ public interface IStaffAccountService
 public sealed class StaffAccountService(
     IStaffUserRepository userRepository,
     IRoleRepository roleRepository,
+    IStaffTwoFactorRepository twoFactorRepository,
     IStaffPasswordHasher passwordHasher,
     IStaffPasswordGenerator passwordGenerator,
     TimeProvider timeProvider) : IStaffAccountService
@@ -88,9 +93,14 @@ public sealed class StaffAccountService(
         int page, int pageSize, CancellationToken cancellationToken = default)
     {
         var (items, total) = await userRepository.GetPagedAsync(page, pageSize, cancellationToken);
+
+        // One read for the whole page rather than one per row. Ids only, no secrets (the staff population is
+        // small, so the full enrolled set is cheaper than a paged IN-list).
+        var bound = await twoFactorRepository.ListEnrolledStaffUserIdsAsync(cancellationToken);
+
         var views = new List<StaffAccountView>(items.Count);
         foreach (var user in items)
-            views.Add(await ToViewAsync(user, cancellationToken));
+            views.Add(await ToViewAsync(user, bound.Contains(user.Id), cancellationToken));
 
         return (views, total);
     }
@@ -171,9 +181,15 @@ public sealed class StaffAccountService(
 
     private async Task<StaffAccountView> ToViewAsync(StaffUser user, CancellationToken cancellationToken)
     {
+        var factor = await twoFactorRepository.FindByStaffUserIdAsync(user.Id, cancellationToken);
+        return await ToViewAsync(user, factor?.IsEnrolled == true, cancellationToken);
+    }
+
+    private async Task<StaffAccountView> ToViewAsync(StaffUser user, bool twoFactorBound, CancellationToken cancellationToken)
+    {
         var role = await roleRepository.GetByIdAsync(user.RoleId, cancellationToken);
         return new StaffAccountView(
             user.Id, user.Username, user.RoleId, role?.Name ?? "(unknown role)", user.Status.ToString(),
-            user.RequireTwoFactor, user.CreatedAt);
+            user.RequireTwoFactor, twoFactorBound, user.CreatedAt);
     }
 }

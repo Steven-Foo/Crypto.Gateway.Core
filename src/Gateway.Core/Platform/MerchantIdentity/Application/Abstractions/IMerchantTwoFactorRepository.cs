@@ -25,6 +25,10 @@ public interface IMerchantTwoFactorRepository
     /// </summary>
     Task<MerchantUserTwoFactor?> FindByUserAsync(Guid merchantUserId, CancellationToken cancellationToken = default);
 
+    /// <summary>The users of ONE merchant holding an ACTIVE (bound) factor, for the account list's
+    /// <c>TwoFactorBound</c>. Tenant-scoped; ids only — no secrets are loaded.</summary>
+    Task<IReadOnlyCollection<Guid>> ListBoundUserIdsAsync(Guid merchantId, CancellationToken cancellationToken = default);
+
     void Add(MerchantUserTwoFactor factor);
 
     Task<IReadOnlyList<MerchantUserRecoveryCode>> ListRecoveryCodesAsync(

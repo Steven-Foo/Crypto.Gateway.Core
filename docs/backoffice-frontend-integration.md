@@ -640,6 +640,10 @@ Returns a fresh `recoveryCodes` array and **invalidates the previous ten immedia
 Requires `ops.accounts.manage` **and** a code (this action is guarded — see §3c). The target account is
 unenrolled and forced back through setup at its next sign-in. Audited.
 
+Response 200: `{ "staffUserId": "guid", "reset": true, "twoFactorBound": false }`. `twoFactorBound` is the
+same field the account rows carry (§7), so the UI can flip that row's "bound" badge without re-fetching.
+Resetting an account that never bound anything is still a 200 (idempotent), not an error.
+
 ### Recovery codes — what they can and cannot do
 
 A recovery code is accepted **in the login `code` field** and signs the user in. It is **single-use**.
@@ -798,7 +802,9 @@ fires for it, on any route, while the switch stays off.
   in the UI rather than let the user discover the refusal after submitting — same treatment as the existing
   "cannot disable your own account" rule on `PATCH .../status`.
 - Every account row (`GET /accounts`, `GET /accounts/{id}`) carries the current `requireTwoFactor` value, so
-  a settings screen can render a toggle per row with no extra call.
+  a settings screen can render a toggle per row with no extra call — and `twoFactorBound`, whether the account
+  has actually bound an authenticator. The two are independent: show them as two separate things (a
+  "Force 2FA" toggle and a "2FA bound" badge), never as one.
 
 ### This isn't platform-wide config — a role can't turn 2FA off for a class of accounts
 
@@ -890,11 +896,24 @@ button and an explicit "this will never be shown again" warning, same treatment 
 ### `GET /api/v1/ops/accounts` — `ops.accounts.view`
 Paginated. Row:
 ```json
-{ "staffUserId": "guid", "username": "admin", "roleId": "guid", "roleName": "Admin", "status": "Active", "requireTwoFactor": true, "createdAt": "..." }
+{ "staffUserId": "guid", "username": "admin", "roleId": "guid", "roleName": "Admin", "status": "Active", "requireTwoFactor": true, "twoFactorBound": false, "createdAt": "..." }
 ```
 `status` is `"Active"` or `"Disabled"` (PascalCase — note this differs from the lowercase-snake vocab used
 on deposit/withdrawal status, see §14). `requireTwoFactor` is the LIVE force/optional switch (§3d) —
 independent of whether the account has actually finished setting up an authenticator.
+
+`twoFactorBound` answers that second question: **`true`** = the account has bound an authenticator (setup
+completed with a confirmed code); **`false`** = it hasn't — never started, started but never confirmed the
+first code, or an admin reset it (`POST .../2fa/reset` makes it `false` again). Use it for a "2FA bound /
+not bound" column, and to decide whether to offer the reset button (resetting an unbound account does
+nothing useful). The four combinations:
+
+| `requireTwoFactor` | `twoFactorBound` | Meaning |
+|---|---|---|
+| `true` | `false` | Must set up 2FA — will be sent to setup at next login |
+| `true` | `true` | Protected — asked for a code at every login |
+| `false` | `false` | 2FA off, never set up |
+| `false` | `true` | Has an authenticator, but the switch is off, so it isn't asked for a code |
 
 ### `GET /api/v1/ops/accounts/{id}` — `ops.accounts.view`
 Same row shape.
@@ -1127,7 +1146,7 @@ Response 200:
     "accounts": [
       { "merchantUserId": "guid", "username": "me00002", "displayName": "...", "roleId": "guid|null",
         "roleName": "Admin|null", "status": "Active|Disabled", "mustChangePassword": true, "createdAt": "...",
-        "isPrimary": true, "requireTwoFactor": true }
+        "isPrimary": true, "requireTwoFactor": true, "twoFactorBound": false }
     ]
   },
   "error": null
@@ -1138,6 +1157,9 @@ Response 200:
 Staff-triggered password reset of the merchant's **primary account only** — for when that admin is locked out
 and has nobody else inside its own portal to reset it for them. No body. **Invalidates the old password
 immediately.**
+
+`twoFactorBound` on the row above says whether that merchant admin has actually bound an authenticator (same
+meaning as the staff account field, §7) — read-only here like everything else on this row.
 
 `requireTwoFactor` on the row above is **read-only from this host** — this Ops API has no write endpoint for
 it. Flipping a merchant portal account's switch after creation is done by the merchant's own portal admin,

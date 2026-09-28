@@ -63,6 +63,14 @@ public sealed class MerchantTwoFactorRepository(MerchantIdentityDbContext db) : 
         Guid merchantUserId, CancellationToken cancellationToken = default) =>
         db.MerchantUserTwoFactors.FirstOrDefaultAsync(f => f.MerchantUserId == merchantUserId, cancellationToken);
 
+    public async Task<IReadOnlyCollection<Guid>> ListBoundUserIdsAsync(
+        Guid merchantId, CancellationToken cancellationToken = default) =>
+        await db.MerchantUserTwoFactors
+            .AsNoTracking()
+            .Where(f => f.MerchantId == merchantId && f.Status == MerchantTwoFactorStatus.Active)
+            .Select(f => f.MerchantUserId) // ids only — never drag secrets into memory for a list screen
+            .ToListAsync(cancellationToken);
+
     public void Add(MerchantUserTwoFactor factor) => db.MerchantUserTwoFactors.Add(factor);
 
     public async Task<IReadOnlyList<MerchantUserRecoveryCode>> ListRecoveryCodesAsync(

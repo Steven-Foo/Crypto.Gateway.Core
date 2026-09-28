@@ -13,7 +13,10 @@ public sealed record MerchantAccountView(
     bool IsPrimary = false,
     /// <summary>The live 2FA switch (§ MerchantUser.RequireTwoFactor) — independent of whether the account
     /// has actually bound an authenticator.</summary>
-    bool RequireTwoFactor = true);
+    bool RequireTwoFactor = true,
+    /// <summary>Whether the account has actually bound an authenticator (an ACTIVE factor — a setup started
+    /// but never confirmed reads false). Independent of the switch; a 2FA reset makes it false again.</summary>
+    bool TwoFactorBound = false);
 
 /// <summary>The generated one-time password, readable exactly once — at creation or reset. Never stored
 /// recoverably (only its PBKDF2 hash is), never logged.</summary>
@@ -71,6 +74,7 @@ public interface IMerchantAccountService
 public sealed class MerchantAccountService(
     IMerchantUserRepository users,
     IMerchantRoleRepository roles,
+    IMerchantTwoFactorRepository twoFactors,
     IMerchantPasswordHasher hasher,
     IMerchantPasswordGenerator passwordGenerator,
     TimeProvider timeProvider) : IMerchantAccountService
@@ -113,9 +117,10 @@ public sealed class MerchantAccountService(
     {
         var accounts = await users.ListAsync(merchantId, cancellationToken);
         var roleNames = (await roles.ListAsync(merchantId, cancellationToken)).ToDictionary(r => r.Id, r => r.Name);
+        var bound = await twoFactors.ListBoundUserIdsAsync(merchantId, cancellationToken);
 
         IReadOnlyList<MerchantAccountView> views = accounts
-            .Select(u => ToView(u, roleNames))
+            .Select(u => ToView(u, roleNames, bound))
             .ToList();
 
         return Result.Success(views);
@@ -130,13 +135,16 @@ public sealed class MerchantAccountService(
             return Result.Success<MerchantAccountView?>(null);
 
         var roleNames = (await roles.ListAsync(merchantId, cancellationToken)).ToDictionary(r => r.Id, r => r.Name);
-        return Result.Success<MerchantAccountView?>(ToView(primary, roleNames));
+        var bound = await twoFactors.ListBoundUserIdsAsync(merchantId, cancellationToken);
+        return Result.Success<MerchantAccountView?>(ToView(primary, roleNames, bound));
     }
 
-    private static MerchantAccountView ToView(MerchantUser u, IReadOnlyDictionary<Guid, string> roleNames) =>
+    private static MerchantAccountView ToView(
+        MerchantUser u, IReadOnlyDictionary<Guid, string> roleNames, IReadOnlyCollection<Guid> boundUserIds) =>
         new(u.Id, u.Username, u.DisplayName, u.RoleId,
             u.RoleId is { } rid ? roleNames.GetValueOrDefault(rid) : null,
-            u.Status.ToString(), u.MustChangePassword, u.CreatedAt, u.IsPrimary, u.RequireTwoFactor);
+            u.Status.ToString(), u.MustChangePassword, u.CreatedAt, u.IsPrimary, u.RequireTwoFactor,
+            boundUserIds.Contains(u.Id));
 
     public async Task<Result> SetStatusAsync(
         Guid merchantId, Guid targetUserId, Guid actingUserId, bool active, CancellationToken cancellationToken = default)

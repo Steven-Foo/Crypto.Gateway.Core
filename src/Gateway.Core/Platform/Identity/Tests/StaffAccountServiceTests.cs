@@ -22,8 +22,8 @@ public sealed class StaffAccountServiceTests : IAsyncLifetime
         new(new DbContextOptionsBuilder<IdentityDbContext>().UseSqlServer(ConnectionString).Options);
 
     private static StaffAccountService Service(IdentityDbContext context) =>
-        new(new StaffUserRepository(context), new RoleRepository(context), new StaffPasswordHasher(),
-            new StaffPasswordGenerator(), TimeProvider.System);
+        new(new StaffUserRepository(context), new RoleRepository(context), new StaffTwoFactorRepository(context),
+            new StaffPasswordHasher(), new StaffPasswordGenerator(), TimeProvider.System);
 
     public async ValueTask InitializeAsync()
     {
@@ -208,6 +208,53 @@ public sealed class StaffAccountServiceTests : IAsyncLifetime
 
         await using var verify = Context();
         (await verify.StaffUsers.SingleAsync(u => u.Id == account.StaffUserId, Ct)).RequireTwoFactor.ShouldBeTrue();
+    }
+
+    /// <summary>
+    /// twoFactorBound reports the BINDING, not the switch: a started-but-unconfirmed setup is not bound, a
+    /// confirmed one is, and a reset makes it unbound again. The list and the single read must agree.
+    /// </summary>
+    [Fact]
+    public async Task Two_factor_bound_reflects_a_confirmed_factor_and_clears_on_reset()
+    {
+        var roleId = await SeedRoleAsync();
+
+        await using var create = Context();
+        var service = Service(create);
+        var bound = (await service.CreateAsync("ops.bound", roleId, true, Ct)).Value;
+        var pending = (await service.CreateAsync("ops.pending", roleId, true, Ct)).Value;
+        var none = (await service.CreateAsync("ops.none", roleId, false, Ct)).Value;
+
+        await using (var seed = Context())
+        {
+            var now = DateTimeOffset.UtcNow;
+            var confirmed = StaffTwoFactor.Begin(bound.StaffUserId, "ciphertext", now).Value;
+            confirmed.Confirm(now).IsSuccess.ShouldBeTrue();
+            seed.StaffTwoFactors.Add(confirmed);
+            seed.StaffTwoFactors.Add(StaffTwoFactor.Begin(pending.StaffUserId, "ciphertext", now).Value);
+            await seed.SaveChangesAsync(Ct);
+        }
+
+        await using (var read = Context())
+        {
+            var (items, _) = await Service(read).ListAsync(1, 50, Ct);
+            items.Single(v => v.StaffUserId == bound.StaffUserId).TwoFactorBound.ShouldBeTrue();
+            items.Single(v => v.StaffUserId == pending.StaffUserId).TwoFactorBound.ShouldBeFalse();
+            items.Single(v => v.StaffUserId == none.StaffUserId).TwoFactorBound.ShouldBeFalse();
+
+            (await Service(read).GetAsync(bound.StaffUserId, Ct)).Value.TwoFactorBound.ShouldBeTrue();
+            (await Service(read).GetAsync(pending.StaffUserId, Ct)).Value.TwoFactorBound.ShouldBeFalse();
+        }
+
+        await using (var reset = Context())
+        {
+            var factor = await reset.StaffTwoFactors.SingleAsync(f => f.StaffUserId == bound.StaffUserId, Ct);
+            factor.Disable().IsSuccess.ShouldBeTrue();
+            await reset.SaveChangesAsync(Ct);
+        }
+
+        await using var after = Context();
+        (await Service(after).GetAsync(bound.StaffUserId, Ct)).Value.TwoFactorBound.ShouldBeFalse();
     }
 
     [Fact]

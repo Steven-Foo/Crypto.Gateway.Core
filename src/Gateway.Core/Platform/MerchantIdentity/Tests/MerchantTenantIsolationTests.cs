@@ -36,8 +36,8 @@ public sealed class MerchantTenantIsolationTests : IAsyncLifetime
         new(new MerchantRoleRepository(c), new MerchantUserRepository(c), TimeProvider.System);
 
     private static MerchantAccountService Accounts(MerchantIdentityDbContext c) =>
-        new(new MerchantUserRepository(c), new MerchantRoleRepository(c), new MerchantPasswordHasher(),
-            new MerchantPasswordGenerator(), TimeProvider.System);
+        new(new MerchantUserRepository(c), new MerchantRoleRepository(c), new MerchantTwoFactorRepository(c),
+            new MerchantPasswordHasher(), new MerchantPasswordGenerator(), TimeProvider.System);
 
     public async ValueTask InitializeAsync()
     {

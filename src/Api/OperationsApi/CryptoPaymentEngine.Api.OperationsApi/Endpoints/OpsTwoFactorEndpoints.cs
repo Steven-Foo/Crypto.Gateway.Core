@@ -188,7 +188,9 @@ public static class OpsTwoFactorEndpoints
                 Reason: $"Two-factor authentication was reset for '{account.Username}'. They must enroll again at next sign-in.", actor.IpAddress),
                 http.RequestAborted);
 
-        return OpsResults.Ok(new { staffUserId = id, reset = true });
+        // A reset removes the binding, so twoFactorBound is false — the same field the account list reports,
+        // letting the UI update the row without re-fetching.
+        return OpsResults.Ok(new { staffUserId = id, reset = true, twoFactorBound = false });
     }
 
     /// <summary>The catalog a settings screen renders. Grouped, and labelled for humans — a checkbox list of

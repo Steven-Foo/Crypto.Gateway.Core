@@ -256,7 +256,20 @@ this switch to affect — it is purely a login-time gate.
 - Tenant-scoped like every other account write: a foreign merchant's account id reads as **not found**, never
   actionable.
 - Every account row (`GET /api/v1/portal/accounts`) carries the current `requireTwoFactor`, so the accounts
-  screen can render a toggle per row with no extra call.
+  screen can render a toggle per row with no extra call — and `twoFactorBound`, whether that account has
+  actually bound an authenticator. They are independent: show a "Force 2FA" toggle and a separate "2FA bound"
+  badge, never one merged control.
+- `twoFactorBound`: **`true`** = setup completed with a confirmed code; **`false`** = never started, started
+  but never confirmed, or reset. `POST /accounts/{id}/2fa/reset` returns
+  `{ "merchantUserId": "guid", "reset": true, "twoFactorBound": false }`, so the row can be updated without
+  re-fetching; resetting an account that never bound anything is still a 200.
+
+| `requireTwoFactor` | `twoFactorBound` | Meaning |
+|---|---|---|
+| `true` | `false` | Must set up 2FA — will be sent to setup at next login |
+| `true` | `true` | Protected — asked for a code at every login |
+| `false` | `false` | 2FA off, never set up |
+| `false` | `true` | Has an authenticator, but the switch is off, so it isn't asked for a code |
 
 ---
 
@@ -633,7 +646,7 @@ Row shape (`GET /accounts`):
 ```json
 { "merchantUserId": "guid", "username": "...", "displayName": "...", "roleId": "guid|null",
   "roleName": "...|null", "status": "Active|Disabled", "mustChangePassword": true, "createdAt": "...",
-  "isPrimary": false, "requireTwoFactor": true }
+  "isPrimary": false, "requireTwoFactor": true, "twoFactorBound": false }
 ```
 
 - Create and reset return a **generated one-time password**, shown once. Administrators never choose it.

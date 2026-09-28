@@ -29,8 +29,8 @@ public sealed class MerchantPrimaryAccountTests : IAsyncLifetime
         new(new DbContextOptionsBuilder<MerchantIdentityDbContext>().UseSqlServer(ConnectionString).Options);
 
     private static MerchantAccountService Accounts(MerchantIdentityDbContext c) =>
-        new(new MerchantUserRepository(c), new MerchantRoleRepository(c), new MerchantPasswordHasher(),
-            new MerchantPasswordGenerator(), TimeProvider.System);
+        new(new MerchantUserRepository(c), new MerchantRoleRepository(c), new MerchantTwoFactorRepository(c),
+            new MerchantPasswordHasher(), new MerchantPasswordGenerator(), TimeProvider.System);
 
     public async ValueTask InitializeAsync()
     {
@@ -75,6 +75,39 @@ public sealed class MerchantPrimaryAccountTests : IAsyncLifetime
         // Exactly one primary — the database's filtered unique index is the real arbiter, this just confirms
         // the application-level computation agrees with it.
         (await accounts.GetPrimaryAsync(Tenant, Ct)).Value!.Username.ShouldBe("first");
+    }
+
+    /// <summary>
+    /// twoFactorBound reports the BINDING, not the switch: an unconfirmed setup is not bound, a confirmed one
+    /// is, a reset clears it — and another merchant's bound user never makes this merchant's row read bound.
+    /// </summary>
+    [Fact]
+    public async Task Two_factor_bound_reflects_a_confirmed_factor_and_clears_on_reset()
+    {
+        await using var context = Context();
+        var accounts = Accounts(context);
+        var bound = (await accounts.CreateAsync(Tenant, "bound", "Bound", null, true, Ct)).Value;
+        var pending = (await accounts.CreateAsync(Tenant, "pending", "Pending", null, true, Ct)).Value;
+
+        var now = DateTimeOffset.UtcNow;
+        var confirmed = MerchantUserTwoFactor.Begin(bound.MerchantUserId, Tenant, "ciphertext", now).Value;
+        confirmed.Confirm(now).IsSuccess.ShouldBeTrue();
+        context.MerchantUserTwoFactors.Add(confirmed);
+        context.MerchantUserTwoFactors.Add(MerchantUserTwoFactor.Begin(pending.MerchantUserId, Tenant, "ciphertext", now).Value);
+        // Same user id under a DIFFERENT tenant must not leak into this tenant's answer.
+        var foreign = MerchantUserTwoFactor.Begin(Guid.CreateVersion7(), Guid.CreateVersion7(), "ciphertext", now).Value;
+        foreign.Confirm(now);
+        context.MerchantUserTwoFactors.Add(foreign);
+        await context.SaveChangesAsync(Ct);
+
+        var all = (await accounts.ListAsync(Tenant, Ct)).Value;
+        all.Single(a => a.Username == "bound").TwoFactorBound.ShouldBeTrue();
+        all.Single(a => a.Username == "pending").TwoFactorBound.ShouldBeFalse();
+        (await accounts.GetPrimaryAsync(Tenant, Ct)).Value!.TwoFactorBound.ShouldBeTrue(); // "bound" is primary
+
+        confirmed.Disable().IsSuccess.ShouldBeTrue();
+        await context.SaveChangesAsync(Ct);
+        (await accounts.ListAsync(Tenant, Ct)).Value.Single(a => a.Username == "bound").TwoFactorBound.ShouldBeFalse();
     }
 
     [Fact]
