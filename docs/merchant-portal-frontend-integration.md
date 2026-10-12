@@ -50,6 +50,11 @@ Codes come from two places:
   `portal.invalid_credentials`, `portal.csrf_invalid`, `portal.permission_denied`, `portal.invalid_chain`,
   `portal.invalid_asset`, `portal.invalid_amount`, `portal.invalid_status`, `portal.invalid_permission_code`,
   `portal.invalid_ip_address`, `portal.network_required`, `portal.address_required`, `portal.not_found`.
+- **Two catch-all codes (2026-10-12) that guarantee every response is an envelope**, even when no endpoint ran:
+  - **`portal.malformed_request`** (400) — the request couldn't be read at all: a body that isn't valid JSON, or a
+    field of the wrong type (e.g. `"roleId": ""` — send a real id or `null`, never an empty string). Fix the request.
+  - **`portal.internal_error`** (500) — an unexpected server fault. The real cause is in the server log, never in
+    the response. Show a generic "something went wrong, try again" and report it with the time it happened.
 - **`<module>.*`** — a business rule refused it, passed through unchanged from where it was decided:
   `withdrawal.insufficient_balance`, `withdrawal.exceeds_settled_balance`,
   `withdrawal.duplicate_reference`, `withdrawal.merchant_cannot_transact`,
@@ -439,9 +444,9 @@ the user's *next login*, not immediately. Gate UI on these codes and expect the 
 
 `["*"]` is the wildcard held by a tenant's Administrator role — it passes every check.
 
-**A user with no role gets an empty permission list and can do nothing.** This is deliberate (fail-closed): an
-account can sign in and see nothing rather than accidentally inheriting access. Render that state as "your
-administrator has not assigned you a role" rather than as an error.
+**Every user always has a role (since 2026-10-12).** There is no "no role" / "不指派角色" state: creating a user
+without a role, or changing a user's role to none, is refused with **400 `merchant_user.role_required`**. To stop
+someone using the portal, **disable the account** (`PATCH /accounts/{id}/status`) — don't try to remove their role.
 
 | Code | Grants |
 |---|---|
@@ -803,10 +808,20 @@ Top-ups appear in the normal deposit history (`/transactions/payin`) once detect
 
 Row shape (`GET /accounts`):
 ```json
-{ "merchantUserId": "guid", "username": "...", "displayName": "...", "roleId": "guid|null",
-  "roleName": "...|null", "status": "Active|Disabled", "mustChangePassword": true, "createdAt": "...",
+{ "merchantUserId": "guid", "username": "...", "displayName": "...", "roleId": "guid",
+  "roleName": "...", "status": "Active|Disabled", "mustChangePassword": true, "createdAt": "...",
   "isPrimary": false, "requireTwoFactor": true, "twoFactorBound": false }
 ```
+
+- **A role is mandatory** (since 2026-10-12). `roleId` is always a real role of this merchant, never `null`.
+  - `POST /accounts` — `roleId` is **required**: `{ "username": "...", "displayName": "...", "roleId": "guid", "requireTwoFactor": true }`.
+  - `PATCH /accounts/{id}/role` — body `{ "roleId": "guid" }`, **required**. It moves the user to another role;
+    a role can be **changed, never removed**.
+  - Missing or `null` `roleId` → **400 `merchant_user.role_required`**. A role from another merchant →
+    `merchant_user.role_not_in_tenant`. Send a real GUID or `null` — **never an empty string `""`**, which isn't
+    valid JSON for an id and fails before any rule runs.
+  - **UI:** make the role dropdown required, with **no "不指派角色" / "no role" option**; pre-select a role when
+    creating a user. To block a user, use disable instead.
 
 - Create and reset return a **generated one-time password**, shown once. Administrators never choose it.
 - Guards that will reject you, and should be reflected in the UI: you cannot disable **yourself**, and you

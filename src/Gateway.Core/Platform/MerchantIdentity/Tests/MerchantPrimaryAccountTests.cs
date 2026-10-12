@@ -32,6 +32,20 @@ public sealed class MerchantPrimaryAccountTests : IAsyncLifetime
         new(new MerchantUserRepository(c), new MerchantRoleRepository(c), new MerchantTwoFactorRepository(c),
             new MerchantPasswordHasher(), new MerchantPasswordGenerator(), TimeProvider.System);
 
+    /// <summary>Every account needs a role, so tests that don't care which one share a per-tenant "Member" role.</summary>
+    private static async Task<Guid> MemberRoleAsync(Guid tenant)
+    {
+        await using var c = Context();
+        var existing = await c.MerchantRoles.FirstOrDefaultAsync(r => r.MerchantId == tenant && r.Name == "Member", Ct);
+        if (existing is not null)
+            return existing.Id;
+
+        var role = MerchantRole.Create(tenant, "Member", null, ["portal.overview.view"], DateTimeOffset.UtcNow).Value;
+        c.MerchantRoles.Add(role);
+        await c.SaveChangesAsync(Ct);
+        return role.Id;
+    }
+
     public async ValueTask InitializeAsync()
     {
         await using var context = Context();
@@ -51,7 +65,7 @@ public sealed class MerchantPrimaryAccountTests : IAsyncLifetime
         await using var context = Context();
         var accounts = Accounts(context);
 
-        await accounts.CreateAsync(Tenant, "first", "First", null, true, Ct);
+        await accounts.CreateAsync(Tenant, "first", "First", await MemberRoleAsync(Tenant), true, Ct);
 
         var primary = (await accounts.GetPrimaryAsync(Tenant, Ct)).Value;
         primary.ShouldNotBeNull();
@@ -65,8 +79,8 @@ public sealed class MerchantPrimaryAccountTests : IAsyncLifetime
         await using var context = Context();
         var accounts = Accounts(context);
 
-        await accounts.CreateAsync(Tenant, "first", "First", null, true, Ct);
-        await accounts.CreateAsync(Tenant, "second", "Second", null, true, Ct);
+        await accounts.CreateAsync(Tenant, "first", "First", await MemberRoleAsync(Tenant), true, Ct);
+        await accounts.CreateAsync(Tenant, "second", "Second", await MemberRoleAsync(Tenant), true, Ct);
 
         var all = (await accounts.ListAsync(Tenant, Ct)).Value;
         all.Single(a => a.Username == "first").IsPrimary.ShouldBeTrue();
@@ -86,8 +100,8 @@ public sealed class MerchantPrimaryAccountTests : IAsyncLifetime
     {
         await using var context = Context();
         var accounts = Accounts(context);
-        var bound = (await accounts.CreateAsync(Tenant, "bound", "Bound", null, true, Ct)).Value;
-        var pending = (await accounts.CreateAsync(Tenant, "pending", "Pending", null, true, Ct)).Value;
+        var bound = (await accounts.CreateAsync(Tenant, "bound", "Bound", await MemberRoleAsync(Tenant), true, Ct)).Value;
+        var pending = (await accounts.CreateAsync(Tenant, "pending", "Pending", await MemberRoleAsync(Tenant), true, Ct)).Value;
 
         var now = DateTimeOffset.UtcNow;
         var confirmed = MerchantUserTwoFactor.Begin(bound.MerchantUserId, Tenant, "ciphertext", now).Value;
@@ -122,10 +136,10 @@ public sealed class MerchantPrimaryAccountTests : IAsyncLifetime
     {
         await using var context = Context();
         var accounts = Accounts(context);
-        var primaryId = (await accounts.CreateAsync(Tenant, "boss", "Boss", null, true, Ct)).Value.MerchantUserId;
+        var primaryId = (await accounts.CreateAsync(Tenant, "boss", "Boss", await MemberRoleAsync(Tenant), true, Ct)).Value.MerchantUserId;
         // A second account so the pre-existing "last active account" guard doesn't fire first and mask the
         // primary-account guard this test is actually checking.
-        await accounts.CreateAsync(Tenant, "teammate", "Teammate", null, true, Ct);
+        await accounts.CreateAsync(Tenant, "teammate", "Teammate", await MemberRoleAsync(Tenant), true, Ct);
 
         // A different acting user too, so this isn't masked by the unrelated "cannot disable self" guard.
         var result = await accounts.SetStatusAsync(Tenant, primaryId, Guid.CreateVersion7(), active: false, Ct);
@@ -139,8 +153,8 @@ public sealed class MerchantPrimaryAccountTests : IAsyncLifetime
     {
         await using var context = Context();
         var accounts = Accounts(context);
-        await accounts.CreateAsync(Tenant, "boss", "Boss", null, true, Ct);
-        var teammateId = (await accounts.CreateAsync(Tenant, "teammate", "Teammate", null, true, Ct)).Value.MerchantUserId;
+        await accounts.CreateAsync(Tenant, "boss", "Boss", await MemberRoleAsync(Tenant), true, Ct);
+        var teammateId = (await accounts.CreateAsync(Tenant, "teammate", "Teammate", await MemberRoleAsync(Tenant), true, Ct)).Value.MerchantUserId;
 
         (await accounts.SetStatusAsync(Tenant, teammateId, Guid.CreateVersion7(), active: false, Ct))
             .IsSuccess.ShouldBeTrue();
@@ -151,8 +165,8 @@ public sealed class MerchantPrimaryAccountTests : IAsyncLifetime
     {
         await using var context = Context();
         var accounts = Accounts(context);
-        var primaryId = (await accounts.CreateAsync(Tenant, "boss", "Boss", null, true, Ct)).Value.MerchantUserId;
-        var teammateId = (await accounts.CreateAsync(Tenant, "teammate", "Teammate", null, true, Ct)).Value.MerchantUserId;
+        var primaryId = (await accounts.CreateAsync(Tenant, "boss", "Boss", await MemberRoleAsync(Tenant), true, Ct)).Value.MerchantUserId;
+        var teammateId = (await accounts.CreateAsync(Tenant, "teammate", "Teammate", await MemberRoleAsync(Tenant), true, Ct)).Value.MerchantUserId;
 
         (await accounts.ResetPrimaryPasswordAsync(Tenant, primaryId, Ct)).IsSuccess.ShouldBeTrue();
 
@@ -168,8 +182,8 @@ public sealed class MerchantPrimaryAccountTests : IAsyncLifetime
         // only the platform-staff path (ResetPrimaryPasswordAsync) is primary-only.
         await using var context = Context();
         var accounts = Accounts(context);
-        await accounts.CreateAsync(Tenant, "boss", "Boss", null, true, Ct);
-        var teammateId = (await accounts.CreateAsync(Tenant, "teammate", "Teammate", null, true, Ct)).Value.MerchantUserId;
+        await accounts.CreateAsync(Tenant, "boss", "Boss", await MemberRoleAsync(Tenant), true, Ct);
+        var teammateId = (await accounts.CreateAsync(Tenant, "teammate", "Teammate", await MemberRoleAsync(Tenant), true, Ct)).Value.MerchantUserId;
 
         (await accounts.ResetPasswordAsync(Tenant, teammateId, Ct)).IsSuccess.ShouldBeTrue();
     }

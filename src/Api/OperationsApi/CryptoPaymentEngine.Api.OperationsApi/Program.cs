@@ -124,13 +124,15 @@ builder.Services.AddAuditModule(dbConnection); // staff-action logging, called d
 builder.Services.AddMerchantIdentityModule(config, dbConnection);
 builder.Services.AddTreasuryModule(config, dbConnection); // hot-pool directory + cold-wallet registrar (composes Wallet/KeyManagement Contracts)
 
-// Recording a hot-pool top-up or a merchant settlement verifies the operator's transaction hash on-chain, so this
-// host needs a transaction VERIFIER: read-only and keyless, it never builds, signs or broadcasts (§10). The real
-// TRON verifier is used outside Development, and in Development when Chains:Tron:Live=true (a box running as
-// Development against Nile); otherwise the in-memory one from the Development block below answers. Registered
-// before that block on purpose: the in-memory registration only fills a gap (TryAdd), so the real one wins.
+// Two read-only chain needs: recording a hot-pool top-up or a merchant settlement verifies the operator's
+// transaction hash on-chain, and the treasury screens show live hot-pool / cold-wallet balances. Both are
+// read-only and keyless — this host never builds, signs or broadcasts (§10). The real TRON reads are used outside
+// Development, and in Development when Chains:Tron:Live=true (a box running as Development against Nile);
+// otherwise the in-memory ones from the Development block below answer. Registered before that block on purpose:
+// the in-memory registrations only fill a gap (TryAdd), so the real ones win — without that, a staging box showed
+// every hot wallet as 0 while it actually held funds.
 if (!builder.Environment.IsDevelopment() || config.GetValue<bool>("Chains:Tron:Live"))
-    builder.Services.AddTronTransactionVerifier(config);
+    builder.Services.AddTronOperatorReads(config);
 
 // Read-only custody-status view over the reconciliation snapshots the money host's worker writes to Mongo.
 // Registers only the read store (+ shared Mongo client) — NOT the compute ReconciliationService or its worker,
@@ -178,6 +180,11 @@ if (builder.Environment.IsDevelopment())
     builder.Services.AddInMemoryTransactionEngine();
     builder.Services.AddInMemorySigner();
 }
+
+// Make a request that fails binding (a malformed JSON body, a missing required query parameter) THROW in every
+// environment, not just Development. Outside Development the framework otherwise answers with a bare, bodyless
+// 400 — the exception middleware below never sees it, and the client gets no envelope and no errorCode.
+builder.Services.Configure<Microsoft.AspNetCore.Routing.RouteHandlerOptions>(o => o.ThrowOnBadRequest = true);
 
 var app = builder.Build();
 

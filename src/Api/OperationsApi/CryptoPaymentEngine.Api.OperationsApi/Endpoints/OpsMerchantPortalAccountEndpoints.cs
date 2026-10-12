@@ -173,6 +173,6 @@ public static class OpsMerchantPortalAccountEndpoints
         }
 
         var username = merchantCode.Trim().ToLowerInvariant();
-        return await accounts.CreateAsync(merchantId, username, merchantName, adminRoleId, requireTwoFactor, cancellationToken);
+        return await accounts.CreateAsync(merchantId, username, merchantName, adminRoleId.Value, requireTwoFactor, cancellationToken);
     }
 }

@@ -5,7 +5,7 @@ using CryptoPaymentEngine.SharedKernel;
 namespace CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Application;
 
 public sealed record MerchantAccountView(
-    Guid MerchantUserId, string Username, string DisplayName, Guid? RoleId, string? RoleName, string Status,
+    Guid MerchantUserId, string Username, string DisplayName, Guid RoleId, string? RoleName, string Status,
     bool MustChangePassword, DateTimeOffset CreatedAt,
     /// <summary>The merchant's original super-admin — see <c>MerchantUser.IsPrimary</c>. Platform staff may
     /// only reset this one account's password; every other account is the merchant's own business, managed
@@ -29,8 +29,10 @@ public sealed record MerchantAccountCredential(Guid MerchantUserId, string Usern
 /// </summary>
 public interface IMerchantAccountService
 {
+    /// <summary>Every account must have a role: <paramref name="roleId"/> is required and must belong to this
+    /// merchant (<see cref="MerchantUserErrors.RoleRequired"/> / <see cref="MerchantUserErrors.RoleNotInTenant"/>).</summary>
     Task<Result<MerchantAccountCredential>> CreateAsync(
-        Guid merchantId, string username, string displayName, Guid? roleId, bool requireTwoFactor,
+        Guid merchantId, string username, string displayName, Guid roleId, bool requireTwoFactor,
         CancellationToken cancellationToken = default);
 
     Task<Result<IReadOnlyList<MerchantAccountView>>> ListAsync(Guid merchantId, CancellationToken cancellationToken = default);
@@ -43,7 +45,8 @@ public interface IMerchantAccountService
     Task<Result> SetStatusAsync(
         Guid merchantId, Guid targetUserId, Guid actingUserId, bool active, CancellationToken cancellationToken = default);
 
-    Task<Result> AssignRoleAsync(Guid merchantId, Guid targetUserId, Guid? roleId, CancellationToken cancellationToken = default);
+    /// <summary>Moves an account to another of this merchant's roles. A role can be changed, never removed.</summary>
+    Task<Result> AssignRoleAsync(Guid merchantId, Guid targetUserId, Guid roleId, CancellationToken cancellationToken = default);
 
     Task<Result<MerchantAccountCredential>> ResetPasswordAsync(
         Guid merchantId, Guid targetUserId, CancellationToken cancellationToken = default);
@@ -82,15 +85,19 @@ public sealed class MerchantAccountService(
     private const int MinimumPasswordLength = 12;
 
     public async Task<Result<MerchantAccountCredential>> CreateAsync(
-        Guid merchantId, string username, string displayName, Guid? roleId, bool requireTwoFactor,
+        Guid merchantId, string username, string displayName, Guid roleId, bool requireTwoFactor,
         CancellationToken cancellationToken = default)
     {
+        // Checked first, so a missing role reads as "role required" rather than as a role that doesn't exist.
+        if (roleId == Guid.Empty)
+            return Result.Failure<MerchantAccountCredential>(MerchantUserErrors.RoleRequired);
+
         var normalised = username.Trim();
         if (await users.UsernameExistsAsync(normalised, cancellationToken))
             return Result.Failure<MerchantAccountCredential>(MerchantUserErrors.UsernameAlreadyExists);
 
         // A role from another tenant must never be assignable — verified against THIS merchant's roles.
-        if (roleId is { } id && await roles.FindByIdAsync(merchantId, id, cancellationToken) is null)
+        if (await roles.FindByIdAsync(merchantId, roleId, cancellationToken) is null)
             return Result.Failure<MerchantAccountCredential>(MerchantUserErrors.RoleNotInTenant);
 
         // The merchant's first-ever account (any status) becomes its permanent primary/super-admin — see
@@ -142,7 +149,7 @@ public sealed class MerchantAccountService(
     private static MerchantAccountView ToView(
         MerchantUser u, IReadOnlyDictionary<Guid, string> roleNames, IReadOnlyCollection<Guid> boundUserIds) =>
         new(u.Id, u.Username, u.DisplayName, u.RoleId,
-            u.RoleId is { } rid ? roleNames.GetValueOrDefault(rid) : null,
+            roleNames.GetValueOrDefault(u.RoleId),
             u.Status.ToString(), u.MustChangePassword, u.CreatedAt, u.IsPrimary, u.RequireTwoFactor,
             boundUserIds.Contains(u.Id));
 
@@ -173,16 +180,21 @@ public sealed class MerchantAccountService(
     }
 
     public async Task<Result> AssignRoleAsync(
-        Guid merchantId, Guid targetUserId, Guid? roleId, CancellationToken cancellationToken = default)
+        Guid merchantId, Guid targetUserId, Guid roleId, CancellationToken cancellationToken = default)
     {
         var user = await users.FindByIdAsync(merchantId, targetUserId, cancellationToken);
         if (user is null)
             return Result.Failure(MerchantUserErrors.NotFound);
 
-        if (roleId is { } id && await roles.FindByIdAsync(merchantId, id, cancellationToken) is null)
+        if (roleId == Guid.Empty)
+            return Result.Failure(MerchantUserErrors.RoleRequired);
+
+        if (await roles.FindByIdAsync(merchantId, roleId, cancellationToken) is null)
             return Result.Failure(MerchantUserErrors.RoleNotInTenant);
 
-        user.AssignRole(roleId);
+        var assigned = user.AssignRole(roleId);
+        if (assigned.IsFailure)
+            return assigned;
         await users.SaveChangesAsync(cancellationToken);
         return Result.Success();
     }

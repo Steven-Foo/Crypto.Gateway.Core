@@ -108,14 +108,10 @@ public sealed class MerchantAuthService(
             method = factorResult.Value;
         }
 
-        // Resolve the tenant's role for this account. No role (or a role that has since been deleted) ⇒ no
-        // permissions at all, so the user can sign in and see nothing rather than silently inheriting access.
-        IReadOnlyList<string> permissions = [];
-        if (user.RoleId is { } roleId)
-        {
-            var role = await roleRepository.FindByIdAsync(user.MerchantId, roleId, cancellationToken);
-            permissions = role?.PermissionCodes ?? [];
-        }
+        // Resolve the tenant's role for this account. Every account has one (a role in use can't be deleted); if
+        // it somehow can't be found, fail closed — no permissions — rather than silently inheriting access.
+        var role = await roleRepository.FindByIdAsync(user.MerchantId, user.RoleId, cancellationToken);
+        IReadOnlyList<string> permissions = role?.PermissionCodes ?? [];
 
         var now = timeProvider.GetUtcNow();
         var token = tokenGenerator.Generate();

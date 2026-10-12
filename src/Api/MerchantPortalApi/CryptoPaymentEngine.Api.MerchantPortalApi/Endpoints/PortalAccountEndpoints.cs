@@ -62,7 +62,7 @@ public static class PortalAccountEndpoints
         CreatePortalAccountRequest request, IMerchantAccountService accounts, IAuditLogger audit, HttpContext http)
     {
         var result = await accounts.CreateAsync(
-            PortalTenant.MerchantId(http), request.Username, request.DisplayName ?? "", request.RoleId,
+            PortalTenant.MerchantId(http), request.Username, request.DisplayName ?? "", request.RoleId ?? Guid.Empty,
             request.RequireTwoFactor, http.RequestAborted);
 
         if (result.IsFailure)
@@ -108,7 +108,10 @@ public static class PortalAccountEndpoints
     private static async Task<IResult> AssignAccountRoleAsync(
         Guid id, AssignPortalRoleRequest request, IMerchantAccountService accounts, IAuditLogger audit, HttpContext http)
     {
-        var result = await accounts.AssignRoleAsync(PortalTenant.MerchantId(http), id, request.RoleId, http.RequestAborted);
+        // Missing/null reaches the service as Guid.Empty and is refused there as merchant_user.role_required —
+        // a role can be changed, never removed.
+        var result = await accounts.AssignRoleAsync(
+            PortalTenant.MerchantId(http), id, request.RoleId ?? Guid.Empty, http.RequestAborted);
 
         if (result.IsFailure)
             return Fail(result.Error!);
@@ -116,7 +119,7 @@ public static class PortalAccountEndpoints
         await audit.LogAsync(
             PortalAuditActor.From(http).Entry(
                 PortalAuditActions.AccountRoleChanged, PortalAuditActions.EntityAccount, id.ToString(),
-                $"roleId={request.RoleId?.ToString() ?? "none"}"),
+                $"roleId={request.RoleId}"),
             http.RequestAborted);
 
         return Ok(new { merchantUserId = id, roleId = request.RoleId });

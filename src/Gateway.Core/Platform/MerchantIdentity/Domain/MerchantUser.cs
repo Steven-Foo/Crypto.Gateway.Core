@@ -10,13 +10,14 @@ namespace CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Domain;
 /// portal (a request never names its own merchant, § tenant-isolation).
 ///
 /// <para>Access is a reference to a per-tenant <see cref="MerchantRole"/> whose codes are snapshotted onto the
-/// session at login. <see cref="RoleId"/> is nullable and <b>fail-closed</b>: an account with no role resolves
-/// to an empty permission set, so it can sign in but do nothing — never a silent grant.</para>
+/// session at login. <b>Every account has a role</b> (product decision, 2026-10-12): there is no "no role"
+/// state. An account that can sign in but do nothing looked broken to merchants, and blocking someone already
+/// has its proper control — disabling the account (<see cref="SetStatus"/>).</para>
 /// </summary>
 public sealed class MerchantUser : Entity<Guid>
 {
     private MerchantUser(
-        Guid id, Guid merchantId, string username, string displayName, string passwordHash, Guid? roleId,
+        Guid id, Guid merchantId, string username, string displayName, string passwordHash, Guid roleId,
         bool mustChangePassword, bool isPrimary, bool requireTwoFactor, DateTimeOffset now) : base(id)
     {
         MerchantId = merchantId;
@@ -45,9 +46,9 @@ public sealed class MerchantUser : Entity<Guid>
     public string DisplayName { get; private set; } = null!;
     public string PasswordHash { get; private set; } = null!;
 
-    /// <summary>The tenant-owned role granting this account's portal permissions. Null ⇒ no permissions at all
-    /// (fail-closed), never an implicit grant.</summary>
-    public Guid? RoleId { get; private set; }
+    /// <summary>The tenant-owned role granting this account's portal permissions. Always set — see the class
+    /// remarks. The caller verifies it belongs to the SAME merchant.</summary>
+    public Guid RoleId { get; private set; }
 
     /// <summary>Set when an admin creates the account or resets its password (the value handed over is a
     /// generated one-time password); cleared once the user sets their own. The portal uses it to force a
@@ -76,11 +77,14 @@ public sealed class MerchantUser : Entity<Guid>
     public bool CanLogIn => Status == MerchantUserStatus.Active;
 
     public static Result<MerchantUser> Create(
-        Guid merchantId, string username, string displayName, string passwordHash, Guid? roleId,
+        Guid merchantId, string username, string displayName, string passwordHash, Guid roleId,
         bool mustChangePassword, bool isPrimary, bool requireTwoFactor, DateTimeOffset now)
     {
         if (merchantId == Guid.Empty)
             return Result.Failure<MerchantUser>(MerchantUserErrors.MerchantRequired);
+
+        if (roleId == Guid.Empty)
+            return Result.Failure<MerchantUser>(MerchantUserErrors.RoleRequired);
 
         if (string.IsNullOrWhiteSpace(username))
             return Result.Failure<MerchantUser>(MerchantUserErrors.UsernameRequired);
@@ -101,10 +105,14 @@ public sealed class MerchantUser : Entity<Guid>
         return Result.Success();
     }
 
-    /// <summary>Assigns (or clears) the account's role. The caller must have verified the role belongs to the
-    /// SAME merchant — cross-tenant assignment is a tenant-isolation break, not a validation nicety.</summary>
-    public Result AssignRole(Guid? roleId)
+    /// <summary>Moves the account to another role. A role can be changed but never removed. The caller must have
+    /// verified the role belongs to the SAME merchant — cross-tenant assignment is a tenant-isolation break, not a
+    /// validation nicety.</summary>
+    public Result AssignRole(Guid roleId)
     {
+        if (roleId == Guid.Empty)
+            return Result.Failure(MerchantUserErrors.RoleRequired);
+
         RoleId = roleId;
         return Result.Success();
     }

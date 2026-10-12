@@ -431,3 +431,40 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [merchantidentity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261012090550_MakeMerchantUserRoleRequired'
+)
+BEGIN
+    IF EXISTS (SELECT 1 FROM [merchantidentity].[MerchantUser] WHERE [RoleId] IS NULL) BEGIN IF @@TRANCOUNT > 0 ROLLBACK; THROW 50001, 'MakeMerchantUserRoleRequired: some merchant portal accounts have no role. Assign every account a role, then run this again.', 1; END
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchantidentity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261012090550_MakeMerchantUserRoleRequired'
+)
+BEGIN
+    DROP INDEX [IX_MerchantUser_RoleId] ON [merchantidentity].[MerchantUser];
+    DECLARE @var nvarchar(max);
+    SELECT @var = QUOTENAME([d].[name])
+    FROM [sys].[default_constraints] [d]
+    INNER JOIN [sys].[columns] [c] ON [d].[parent_column_id] = [c].[column_id] AND [d].[parent_object_id] = [c].[object_id]
+    WHERE ([d].[parent_object_id] = OBJECT_ID(N'[merchantidentity].[MerchantUser]') AND [c].[name] = N'RoleId');
+    IF @var IS NOT NULL EXEC(N'ALTER TABLE [merchantidentity].[MerchantUser] DROP CONSTRAINT ' + @var + ';');
+    ALTER TABLE [merchantidentity].[MerchantUser] ALTER COLUMN [RoleId] uniqueidentifier NOT NULL;
+    CREATE INDEX [IX_MerchantUser_RoleId] ON [merchantidentity].[MerchantUser] ([RoleId]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchantidentity].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261012090550_MakeMerchantUserRoleRequired'
+)
+BEGIN
+    INSERT INTO [merchantidentity].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261012090550_MakeMerchantUserRoleRequired', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

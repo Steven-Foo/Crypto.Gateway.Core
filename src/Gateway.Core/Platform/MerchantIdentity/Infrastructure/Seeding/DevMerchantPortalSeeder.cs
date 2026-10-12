@@ -76,20 +76,7 @@ public sealed class DevMerchantPortalSeeder(
             var existing = await userRepository.FindByUsernameAsync(seed.Username, cancellationToken);
             if (existing is not null)
             {
-                // Idempotent UPGRADE path: a login seeded before roles existed has no RoleId, which is
-                // fail-closed (no permissions). Bind it to the Administrator role so an existing dev DB keeps
-                // working after this migration instead of silently losing access.
-                if (existing.RoleId is null)
-                {
-                    existing.AssignRole(adminRoleId);
-                    await userRepository.SaveChangesAsync(cancellationToken);
-                    logger.LogInformation(
-                        "Dev merchant-portal user '{Username}' adopted the {Role} role.", seed.Username, AdministratorRoleName);
-                }
-                else
-                {
-                    logger.LogInformation("Dev merchant-portal user '{Username}' already present.", seed.Username);
-                }
+                logger.LogInformation("Dev merchant-portal user '{Username}' already present.", seed.Username);
 
                 return;
             }

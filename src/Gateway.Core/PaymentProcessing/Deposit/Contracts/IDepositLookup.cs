@@ -38,4 +38,18 @@ public interface IDepositLookup
     /// zero, never an error.</summary>
     Task<DepositAmountTotals> SumByIdsAsync(
         IReadOnlyCollection<Guid> depositIds, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// For each address: the total of <paramref name="assetId"/> our records say ARRIVED there and stays there —
+    /// the input to the Ops "recorded balance" (received − swept). One query for a whole page of addresses.
+    ///
+    /// <para>Counts <c>Confirmed</c> deposits AND <c>Ignored</c> ones (dust below the minimum): dust is never
+    /// credited, but it physically sits on the address and a sweep moves it with everything else — leaving it out
+    /// would make received − swept go below what is really there after the first sweep. Excludes <c>Detected</c>
+    /// (not confirmed yet — the live chain will show it first) and <c>Orphaned</c> (reorged out, never arrived).
+    /// The full gross amount counts, not net of fee: the fee is an accounting split, the coins are all on the
+    /// address. Exact base-unit integer strings (§14); addresses with nothing recorded are absent.</para>
+    /// </summary>
+    Task<IReadOnlyDictionary<string, string>> SumReceivedByAddressesAsync(
+        Chain chain, Guid assetId, IReadOnlyCollection<string> addresses, CancellationToken cancellationToken = default);
 }

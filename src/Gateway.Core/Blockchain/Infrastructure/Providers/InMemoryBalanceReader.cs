@@ -11,9 +11,16 @@ namespace CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers;
 /// <see cref="Set"/>; an unset address reads as zero (never held ⇒ nothing on chain). Thread-safe: the
 /// reconciliation worker and a test may touch it concurrently.
 /// </summary>
-public sealed class InMemoryBalanceReader : IBalanceReader
+public sealed class InMemoryBalanceReader : IBalanceReader, INativeBalanceReader
 {
     private readonly ConcurrentDictionary<string, BigInteger> _byKey = new(StringComparer.OrdinalIgnoreCase);
+    private readonly ConcurrentDictionary<string, BigInteger> _native = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Declares an address's native-coin (gas) balance on the fake chain.</summary>
+    public void SetNative(Chain chain, string address, BigInteger balance) => _native[$"{chain}:{address}"] = balance;
+
+    public Task<BigInteger> GetNativeBalanceAsync(Chain chain, string address, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_native.GetValueOrDefault($"{chain}:{address}", BigInteger.Zero));
 
     public void Set(Chain chain, string address, Guid assetId, BigInteger balance) =>
         _byKey[Key(chain, address, assetId)] = balance;

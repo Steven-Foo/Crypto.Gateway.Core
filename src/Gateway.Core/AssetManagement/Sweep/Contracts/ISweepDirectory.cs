@@ -30,6 +30,9 @@ public sealed record SweepAdminRow(
     DateTimeOffset CreatedAt,
     DateTimeOffset UpdatedAt);
 
+/// <summary>What has been swept out of one wallet: the exact total (base units, §14) and how many sweeps.</summary>
+public sealed record SweptTotal(string TotalBaseUnits, int Count);
+
 /// <summary>Optional narrowing for a sweep search. All fields are AND-combined; a null field is not applied.
 /// <see cref="Status"/> is a domain status name (case-insensitive); an unrecognised value is simply ignored
 /// (no narrowing) — the host validates it upstream.</summary>
@@ -51,4 +54,12 @@ public interface ISweepDirectory
     /// above the list. Keyed by the domain status name.</summary>
     Task<IReadOnlyDictionary<string, int>> GetStatusCountsAsync(
         Chain? chain, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// For each wallet: the lifetime total of <paramref name="assetId"/> swept OUT of it, counting <c>Confirmed</c>
+    /// sweeps only — a sweep still signing/broadcasting hasn't left yet, so the funds are still on the address.
+    /// One query for a page of wallets; wallets never swept are absent.
+    /// </summary>
+    Task<IReadOnlyDictionary<Guid, SweptTotal>> GetConfirmedTotalsByWalletAsync(
+        IReadOnlyCollection<Guid> walletIds, Guid assetId, CancellationToken cancellationToken = default);
 }

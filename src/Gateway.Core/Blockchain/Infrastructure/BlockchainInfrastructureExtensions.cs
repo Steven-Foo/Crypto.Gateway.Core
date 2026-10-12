@@ -56,6 +56,7 @@ public static class BlockchainInfrastructureExtensions
         // adapter — the Reconciliation monitor reads on-chain balances through this same §8 seam.
         services.TryAddSingleton<InMemoryBalanceReader>();
         services.TryAddSingleton<IBalanceReader>(sp => sp.GetRequiredService<InMemoryBalanceReader>());
+        services.TryAddSingleton<INativeBalanceReader>(sp => sp.GetRequiredService<InMemoryBalanceReader>());
 
         // Dev counterpart of the TRON transaction verifier. Registered BOTH concretely and as the port, so a
         // dev tool or test can declare what the fake chain shows — the resource reader's registration being
@@ -125,6 +126,7 @@ public static class BlockchainInfrastructureExtensions
         // On-chain balance reads (Reconciliation) go through the same read-only TRON RPC — eth_call
         // balanceOf for TRC-20, eth_getBalance for native TRX. Read-only, keyless (§10).
         services.TryAddScoped<IBalanceReader, TronBalanceReader>();
+        services.TryAddScoped<INativeBalanceReader, TronBalanceReader>(); // gas (TRX) balance, same read-only RPC
 
         // Confirms a transaction an operator recorded (a hot-wallet top-up, or a merchant settlement paid from
         // a company wallet) really happened as claimed. Read-only, keyless (§10), and registered with the
@@ -142,17 +144,25 @@ public static class BlockchainInfrastructureExtensions
     }
 
     /// <summary>
-    /// Registers ONLY the TRON <see cref="ITransactionVerifier"/> and the read-only RPC client it reads through, for
-    /// a host that must confirm an operator's transaction hash but runs no chain workers (the Ops host records
-    /// hot-pool top-ups and merchant settlements). Read-only and keyless (§10). <see cref="AddTronChainAdapter"/>
-    /// registers the same verifier as part of the full read-only adapter; a host needs one or the other.
+    /// The read-only TRON access an OPERATOR host needs, and nothing else: the <see cref="ITransactionVerifier"/>
+    /// (confirm an operator's transaction hash when recording a hot-pool top-up or a merchant settlement) and the
+    /// <see cref="IBalanceReader"/> (live hot-pool and cold-wallet balances on the treasury screens), both over one
+    /// read-only RPC client. For a host that runs no chain workers — the Ops host. Read-only and keyless (§10):
+    /// nothing here builds, signs or broadcasts. <see cref="AddTronChainAdapter"/> registers the same two as part
+    /// of the full adapter; a host needs one or the other.
+    ///
+    /// <para>The balance reader was missing at first, so on a box running as Development against Nile the Ops
+    /// host fell back to the in-memory reader and showed every wallet as 0, and outside Development it had no
+    /// reader at all. Registering both here keeps the hash check and the balances on the same chain.</para>
     /// </summary>
-    public static IServiceCollection AddTronTransactionVerifier(this IServiceCollection services, IConfiguration configuration)
+    public static IServiceCollection AddTronOperatorReads(this IServiceCollection services, IConfiguration configuration)
     {
         var options = ReadTronOptions(configuration);
 
         services.AddHttpClient<ITronRpc, TronRpc>(ConfigureTronClient(options)).AddStandardResilienceHandler();
         services.TryAddScoped<ITransactionVerifier, TronTransactionVerifier>();
+        services.TryAddScoped<IBalanceReader, TronBalanceReader>();
+        services.TryAddScoped<INativeBalanceReader, TronBalanceReader>(); // gas (TRX) balance on the wallet detail
         return services;
     }
 

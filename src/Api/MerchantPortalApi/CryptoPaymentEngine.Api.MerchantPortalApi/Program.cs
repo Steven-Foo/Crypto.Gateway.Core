@@ -93,6 +93,11 @@ if (builder.Environment.IsDevelopment())
     builder.Services.AddInMemorySigner();
 }
 
+// Make a request that fails binding (a malformed JSON body, a missing required query parameter) THROW in every
+// environment, not just Development. Outside Development the framework otherwise answers with a bare, bodyless
+// 400 — the exception middleware below never sees it, and the client gets no envelope and no errorCode.
+builder.Services.Configure<Microsoft.AspNetCore.Routing.RouteHandlerOptions>(o => o.ThrowOnBadRequest = true);
+
 var app = builder.Build();
 
 if (app.Environment.IsDevelopment())
@@ -100,6 +105,11 @@ if (app.Environment.IsDevelopment())
     app.UseSwagger();
     app.UseSwaggerUI(o => o.SwaggerEndpoint("/swagger/v1/swagger.json", "Merchant Portal API v1"));
 }
+
+// FIRST, so it wraps CORS, the session middleware and routing: a binding failure or an exception thrown in any
+// of them would otherwise escape as a raw framework response (a stack-trace page in Development) with no
+// envelope and no errorCode.
+app.UseMiddleware<PortalExceptionMiddleware>();
 
 // CORS before auth so preflight (OPTIONS) and 401/403 responses carry CORS headers.
 app.UseCors();

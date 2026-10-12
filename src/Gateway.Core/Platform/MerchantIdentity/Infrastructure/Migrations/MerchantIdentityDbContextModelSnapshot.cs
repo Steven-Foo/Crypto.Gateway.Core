@@ -136,7 +136,7 @@ namespace CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Infrastruct
                     b.Property<bool>("RequireTwoFactor")
                         .HasColumnType("bit");
 
-                    b.Property<Guid?>("RoleId")
+                    b.Property<Guid>("RoleId")
                         .HasColumnType("uniqueidentifier");
 
                     b.Property<string>("Status")
@@ -392,7 +392,8 @@ namespace CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Infrastruct
                     b.HasOne("CryptoPaymentEngine.Gateway.Core.Platform.MerchantIdentity.Domain.MerchantRole", null)
                         .WithMany()
                         .HasForeignKey("RoleId")
-                        .OnDelete(DeleteBehavior.Restrict);
+                        .OnDelete(DeleteBehavior.Restrict)
+                        .IsRequired();
                 });
 #pragma warning restore 612, 618
         }

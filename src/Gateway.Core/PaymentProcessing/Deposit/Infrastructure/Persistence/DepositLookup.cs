@@ -53,4 +53,27 @@ public sealed class DepositLookup(DepositDbContext context) : IDepositLookup
         return new DepositAmountTotals(
             totalAmount.ToString(CultureInfo.InvariantCulture), totalFee.ToString(CultureInfo.InvariantCulture));
     }
+
+    public async Task<IReadOnlyDictionary<string, string>> SumReceivedByAddressesAsync(
+        Chain chain, Guid assetId, IReadOnlyCollection<string> addresses, CancellationToken cancellationToken = default)
+    {
+        if (addresses.Count == 0)
+            return new Dictionary<string, string>();
+
+        // Narrow projection folded client-side, like SumByIdsAsync (no SQL SUM translation for BigInteger, §14).
+        var rows = await context.Deposits.AsNoTracking()
+            .Where(d => d.Chain == chain
+                        && d.AssetId == assetId
+                        && addresses.Contains(d.Address)
+                        && (d.Status == DepositStatus.Confirmed || d.Status == DepositStatus.Ignored))
+            .Select(d => new { d.Address, d.Amount })
+            .ToListAsync(cancellationToken);
+
+        return rows
+            .GroupBy(r => r.Address, StringComparer.Ordinal)
+            .ToDictionary(
+                g => g.Key,
+                g => g.Aggregate(BigInteger.Zero, (sum, r) => sum + r.Amount).ToString(CultureInfo.InvariantCulture),
+                StringComparer.Ordinal);
+    }
 }

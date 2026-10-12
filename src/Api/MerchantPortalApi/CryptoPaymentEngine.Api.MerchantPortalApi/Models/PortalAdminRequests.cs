@@ -9,8 +9,9 @@ public sealed class CreatePortalAccountRequest
     [Required, MaxLength(64)] public string Username { get; init; } = null!;
     [MaxLength(128)] public string? DisplayName { get; init; }
 
-    /// <summary>The role to grant. Optional: an account created without one has NO permissions until a role is
-    /// assigned (fail-closed).</summary>
+    /// <summary>The role to grant. <b>Required</b> — every portal account must have a role. Missing or null ⇒
+    /// 400 <c>merchant_user.role_required</c>. Typed nullable only so a missing value is reported as exactly that,
+    /// rather than reaching the service as an all-zero id.</summary>
     public Guid? RoleId { get; init; }
 
     /// <summary>The live 2FA switch for this account (§ MerchantUser.RequireTwoFactor) — true forces it
@@ -31,7 +32,8 @@ public sealed class SetPortalAccountRequireTwoFactorRequest
 
 public sealed class AssignPortalRoleRequest
 {
-    /// <summary>Null clears the role, leaving the account with no permissions.</summary>
+    /// <summary>Required — the role to move the account to. A role can be changed but never removed: there is no
+    /// "no role" option. Missing or null ⇒ 400 <c>merchant_user.role_required</c>.</summary>
     public Guid? RoleId { get; init; }
 }
 

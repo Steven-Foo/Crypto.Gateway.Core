@@ -69,6 +69,47 @@ public sealed class SweepDirectoryTests : IAsyncLifetime
         await context.SaveChangesAsync(Ct);
     }
 
+    /// <summary>
+    /// The Ops wallet detail's "total swept" and the recorded balance's "out" side: only CONFIRMED sweeps of the
+    /// asset count — one still in flight hasn't left the address, a failed one never did — summed exactly beyond
+    /// Int64 (§14), with a count.
+    /// </summary>
+    [Fact]
+    public async Task Confirmed_totals_per_wallet_count_only_confirmed_sweeps_of_the_asset()
+    {
+        var wallet = Guid.CreateVersion7();
+        var otherAsset = Guid.CreateVersion7();
+
+        SweepEntity Confirmed(Guid w, Guid asset, BigInteger amount, int minute)
+        {
+            var s = SweepEntity.Create(w, Chain.Tron, asset, "TFromX", "TCold", amount, SweepDestinationKind.Safe, null, null, T0.AddMinutes(minute)).Value;
+            s.RecordSigned(Guid.CreateVersion7(), [1], T0.AddMinutes(minute + 1)).IsSuccess.ShouldBeTrue();
+            s.MarkBroadcast("tx-" + Guid.NewGuid().ToString("N"), T0.AddMinutes(minute + 2)).IsSuccess.ShouldBeTrue();
+            s.Confirm(T0.AddMinutes(minute + 3)).IsSuccess.ShouldBeTrue();
+            return s;
+        }
+
+        var one = Confirmed(wallet, Asset, BigAmount, 10);
+        var two = Confirmed(wallet, Asset, new BigInteger(2_000_000), 20);
+        var otherAssetSweep = Confirmed(wallet, otherAsset, new BigInteger(7_000_000), 30);
+        var failed = SweepEntity.Create(wallet, Chain.Tron, Asset, "TFromX", "TCold", new BigInteger(4_000_000), SweepDestinationKind.Safe, null, null, T0.AddMinutes(40)).Value;
+        failed.Fail("no energy", T0.AddMinutes(41)).IsSuccess.ShouldBeTrue();
+        var inFlight = SweepEntity.Create(wallet, Chain.Tron, Asset, "TFromX", "TCold", new BigInteger(9_000_000), SweepDestinationKind.Safe, null, null, T0.AddMinutes(50)).Value;
+
+        await using (var seed = NewContext())
+        {
+            seed.Sweeps.AddRange(one, two, otherAssetSweep, failed, inFlight);
+            await seed.SaveChangesAsync(Ct);
+        }
+
+        await using var context = NewContext();
+        var totals = await new SweepDirectory(context).GetConfirmedTotalsByWalletAsync([wallet, PendingWallet], Asset, Ct);
+
+        totals[wallet].TotalBaseUnits.ShouldBe((BigAmount + 2_000_000).ToString());
+        totals[wallet].Count.ShouldBe(2);
+        totals.ContainsKey(PendingWallet).ShouldBeFalse(); // only a pending sweep — nothing has left yet
+    }
+
     [Fact]
     public async Task Search_orders_newest_first_and_maps_fields_exactly()
     {

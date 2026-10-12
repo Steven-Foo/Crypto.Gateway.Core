@@ -13,8 +13,17 @@ namespace CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers.T
 /// or native TRX via <c>eth_getBalance</c>. Amounts are exact base units (sun for TRX, the token's own base
 /// units for TRC-20) — never a scaled display value (§14). Read-only: no key ever crosses it (§10).
 /// </summary>
-public sealed class TronBalanceReader(ITronRpc rpc, IAssetCatalog assetCatalog) : IBalanceReader
+public sealed class TronBalanceReader(ITronRpc rpc, IAssetCatalog assetCatalog) : IBalanceReader, INativeBalanceReader
 {
+    /// <summary>TRX in sun, via <c>eth_getBalance</c> — the gas the address has for broadcasting (e.g. a sweep).</summary>
+    public Task<BigInteger> GetNativeBalanceAsync(Chain chain, string address, CancellationToken cancellationToken = default)
+    {
+        if (chain != Chain.Tron)
+            throw new ArgumentException($"TronBalanceReader cannot read a {chain} balance.", nameof(chain));
+
+        return rpc.GetNativeBalanceAsync(TronAddress.ToEvmHex(address), cancellationToken);
+    }
+
     public async Task<BigInteger> GetBalanceAsync(
         Chain chain, string address, Guid assetId, CancellationToken cancellationToken = default)
     {

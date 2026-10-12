@@ -53,6 +53,28 @@ public sealed class SweepDirectory(SweepDbContext context) : ISweepDirectory
         return counts.ToDictionary(c => c.Status.ToString(), c => c.Count);
     }
 
+    public async Task<IReadOnlyDictionary<Guid, SweptTotal>> GetConfirmedTotalsByWalletAsync(
+        IReadOnlyCollection<Guid> walletIds, Guid assetId, CancellationToken cancellationToken = default)
+    {
+        if (walletIds.Count == 0)
+            return new Dictionary<Guid, SweptTotal>();
+
+        // Narrow projection folded in memory — a BigInteger amount isn't SQL-summable here (§14).
+        var rows = await context.Sweeps.AsNoTracking()
+            .Where(s => walletIds.Contains(s.WalletId) && s.AssetId == assetId && s.Status == SweepStatus.Confirmed)
+            .Select(s => new { s.WalletId, s.Amount })
+            .ToListAsync(cancellationToken);
+
+        return rows
+            .GroupBy(r => r.WalletId)
+            .ToDictionary(
+                g => g.Key,
+                g => new SweptTotal(
+                    g.Aggregate(System.Numerics.BigInteger.Zero, (sum, r) => sum + r.Amount)
+                        .ToString(CultureInfo.InvariantCulture),
+                    g.Count()));
+    }
+
     private static SweepAdminRow ToAdminRow(SweepEntity sweep) => new(
         sweep.Id,
         sweep.WalletId,

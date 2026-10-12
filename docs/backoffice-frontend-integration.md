@@ -1383,7 +1383,7 @@ Response 200:
   "data": {
     "merchantId": "guid",
     "accounts": [
-      { "merchantUserId": "guid", "username": "me00002", "displayName": "...", "roleId": "guid|null",
+      { "merchantUserId": "guid", "username": "me00002", "displayName": "...", "roleId": "guid",
         "roleName": "Admin|null", "status": "Active|Disabled", "mustChangePassword": true, "createdAt": "...",
         "isPrimary": true, "requireTwoFactor": true, "twoFactorBound": false }
     ]
@@ -1801,9 +1801,23 @@ Row:
 {
   "walletId": "guid", "merchantId": "guid|null", "merchantName": "string|null", "chain": 1, "address": "T...",
   "walletType": "Deposit", "status": "Active", "statusReason": "string|null",
-  "depositsReceivedCount": 3, "createdAt": "...", "updatedAt": "..."
+  "depositsReceivedCount": 3,
+  "coin": "USDT", "balance": 12.5, "balanceBaseUnits": "12500000",
+  "createdAt": "...", "updatedAt": "..."
 }
 ```
+**`balance` / `balanceBaseUnits` — 当前余额 (added 2026-10-12): the system-recorded balance waiting to be swept.**
+It is what our own records say sits on this deposit address: **received − swept**, where
+- *received* = confirmed deposits of USDT to this address, plus dust (deposits below the minimum — never credited
+  to the merchant, but physically on the address, and a sweep moves them too);
+- *swept* = confirmed sweeps out of this address. A sweep still in progress hasn't left yet, so it isn't subtracted.
+
+It is **not** a ledger figure (the ledger tracks money by owner, not by address) and **no blockchain call** is made,
+so it's cheap enough for every row. Suggested label: **"系统记录余额（待归集）"**. It's only filled for
+**`Deposit`** wallets; for every other wallet type (`HotWithdrawal`, `Energy`, …) `coin`/`balance`/`balanceBaseUnits`
+are **`null`** — money moves through those wallets in ways these records don't cover, so a number would mislead.
+For the live figure use the detail page's `onChainBalance`. Render from `balanceBaseUnits` if you need exact
+precision; `balance` is the display decimal.
 **Note:** `chain` here serializes as a **numeric enum value** (`1` = Tron), not a string — unlike almost
 everywhere else in this API where chain is a string like `"Tron"`. Map it client-side (`1` = Tron; today
 this is the only chain live). `statusReason` is only non-null while `status == "Suspended"`. `merchantName`
@@ -1811,9 +1825,43 @@ is `null` whenever `merchantId` is — platform wallets (hot pool, staking, trea
 a merchant; only deposit wallets are.
 
 ### `GET /api/v1/ops/wallets/{id}` — `ops.wallets.view`
-The single-record detail view. Returns **one row object** in `data`, in the **exact same shape** as an item
-in the list above (it is built by the same projection, so the table and the record it opens can never
-disagree about a field). Unknown id → **404** `ops.not_found`.
+The single-record detail view (收款钱包 → 查看详情). Returns **one object** in `data`: **every field of the list row
+above, built by the same projection** (so the table and the record it opens can never disagree), **plus** these
+detail-only fields (added 2026-10-12). Unknown id → **404** `ops.not_found`.
+
+```json
+{
+  "...": "all list-row fields, including balance / balanceBaseUnits",
+  "onChainBalance": 12.5,      "onChainBalanceBaseUnits": "12500000",
+  "gasSymbol": "TRX",          "gasDecimals": 6,
+  "gasBalance": 35.2,          "gasBalanceBaseUnits": "35200000",
+  "totalSwept": 1500,          "totalSweptBaseUnits": "1500000000",
+  "sweepCount": 4
+}
+```
+
+| Field | 中文 | Meaning |
+|---|---|---|
+| `onChainBalance` / `…BaseUnits` | 链上余额 | **Live** USDT on the address, read from the blockchain when you open the page. The same figure the sweep trigger uses. |
+| `gasSymbol`, `gasDecimals` | — | The chain's gas coin: `TRX` / `6` on TRON. Use these; don't hard-code TRX — a future chain returns its own. |
+| `gasBalance` / `…BaseUnits` | Gas余额 | **Live** gas-coin balance on the address — whether it can pay to broadcast a sweep right now. |
+| `totalSwept` / `…BaseUnits` | 累计归集 | **Lifetime** total of USDT swept out of this address (confirmed sweeps only). |
+| `sweepCount` | 归集次数 | How many confirmed sweeps that total covers. |
+
+**`null` means "couldn't read the chain right now", never zero.** If the blockchain node doesn't answer,
+`onChainBalance` / `gasBalance` (and their `…BaseUnits`) come back `null` — show "unavailable / 读取失败", **not
+0**: an address shown as empty while it actually holds funds is the dangerous mistake. Reload to retry.
+
+**When 当前余额 and 链上余额 differ** — that is the point of showing both. Common reasons:
+- on-chain **higher**: a deposit has arrived but isn't confirmed yet; or someone sent USDT straight to the address
+  with no order behind it;
+- on-chain **lower**: a sweep has been broadcast but isn't confirmed yet (it's subtracted only once confirmed).
+
+A difference that doesn't settle after a few minutes is worth investigating.
+
+**Cost:** the two live figures are one blockchain read each, so they're on the detail endpoint only, not the
+list. `totalSwept` comes from our own records (no chain call). Risk level/score (风险等级/风险分数) are not part of
+this response — keep using `POST /ops/compliance/screenings/latest` for those.
 
 ### `POST /api/v1/ops/wallets/{id}/suspend` — `ops.wallets.manage`
 Request: `{ "reason": "string, optional, max 512" }`

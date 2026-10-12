@@ -109,4 +109,9 @@ public static class PortalErrorCodes
     public const string NetworkRequired = "portal.network_required";
     public const string AddressRequired = "portal.address_required";
     public const string NotFound = "portal.not_found";
+
+    // Raised by PortalExceptionMiddleware, never by an endpoint: a request that failed before any handler ran
+    // (malformed body / missing parameter), or an unexpected server fault (detail in the log, never the response).
+    public const string MalformedRequest = "portal.malformed_request";
+    public const string InternalError = "portal.internal_error";
 }

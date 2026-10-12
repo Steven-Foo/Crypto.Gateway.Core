@@ -52,6 +52,53 @@ public sealed class DepositLookupTests : IAsyncLifetime
             BigInteger.Parse(amount), BigInteger.Parse(fee), txHash, outputIndex: 0,
             blockNumber: 100, blockHash: "h100", Policy, DateTimeOffset.UtcNow).Value;
 
+    private static DepositEntity At(string address, string txHash, string amount, Guid? assetId = null) =>
+        DepositEntity.Record(
+            Chain.Tron, address, WalletId, MerchantId, assetId ?? AssetId,
+            BigInteger.Parse(amount), BigInteger.Zero, txHash, outputIndex: 0,
+            blockNumber: 100, blockHash: "h100", Policy, DateTimeOffset.UtcNow).Value;
+
+    private static DepositEntity Confirmed(DepositEntity d)
+    {
+        d.RegisterConfirmations(Policy.RequiredConfirmations, isFinalized: false, Policy, DateTimeOffset.UtcNow).IsSuccess.ShouldBeTrue();
+        d.Status.ShouldBe(DepositStatus.Confirmed);
+        return d;
+    }
+
+    /// <summary>
+    /// The Ops "recorded balance" input: what arrived at each address and is still physically there. Confirmed
+    /// counts; dust (Ignored) counts too — it's never credited, but it sits on the address and a sweep moves it;
+    /// a still-unconfirmed (Detected) deposit and a reorged-out (Orphaned) one don't; another asset doesn't.
+    /// </summary>
+    [Fact]
+    public async Task SumReceivedByAddressesAsync_counts_confirmed_and_dust_only_per_address()
+    {
+        var aConfirmed = Confirmed(At("TAddrA", "0xa1", "1000000"));
+        var aDust = At("TAddrA", "0xa2", "500");                                   // below the 1000 minimum → Ignored
+        var aUnconfirmed = At("TAddrA", "0xa3", "7000000");                        // Detected
+        var aOrphaned = Confirmed(At("TAddrA", "0xa4", "3000000"));
+        aOrphaned.MarkOrphaned(DateTimeOffset.UtcNow).IsSuccess.ShouldBeTrue();
+        var aOtherAsset = Confirmed(At("TAddrA", "0xa5", "9000000", Guid.CreateVersion7()));
+        var bConfirmed = Confirmed(At("TAddrB", "0xb1", "2000000"));
+
+        aDust.Status.ShouldBe(DepositStatus.Ignored);
+        aUnconfirmed.Status.ShouldBe(DepositStatus.Detected);
+
+        await using (var ctx = Context())
+        {
+            ctx.Deposits.AddRange(aConfirmed, aDust, aUnconfirmed, aOrphaned, aOtherAsset, bConfirmed);
+            await ctx.SaveChangesAsync(Ct);
+        }
+
+        await using var verify = Context();
+        var sums = await new DepositLookup(verify).SumReceivedByAddressesAsync(
+            Chain.Tron, AssetId, ["TAddrA", "TAddrB", "TNothingHere"], Ct);
+
+        sums["TAddrA"].ShouldBe("1000500");
+        sums["TAddrB"].ShouldBe("2000000");
+        sums.ContainsKey("TNothingHere").ShouldBeFalse();
+    }
+
     [Fact]
     public async Task SumByIdsAsync_sums_amount_and_fee_across_the_given_ids()
     {

@@ -10,6 +10,10 @@ public static class MerchantUserErrors
     public static readonly Error UsernameRequired =
         Error.Validation("merchant_user.username_required", "Username is required.");
 
+    /// <summary>Every portal account must have a role — there is no "no role" option.</summary>
+    public static readonly Error RoleRequired =
+        Error.Validation("merchant_user.role_required", "A role is required. Every portal account must have a role.");
+
     public static readonly Error PasswordHashRequired =
         Error.Validation("merchant_user.password_hash_required", "A password hash is required.");
 

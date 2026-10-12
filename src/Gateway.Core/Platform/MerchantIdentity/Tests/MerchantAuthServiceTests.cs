@@ -84,9 +84,11 @@ public sealed class MerchantAuthServiceTests : IAsyncLifetime
     private static async Task<Guid> SeedUserAsync(
         Guid merchantId, string username, string password, Guid? roleId = null, bool requireTwoFactor = true)
     {
+        // Every account must have a role; a test that doesn't care gets a role with no portal permissions.
+        var role = roleId ?? await SeedRoleAsync(merchantId, "Member-" + username);
         await using var context = Context();
         var user = MerchantUser.Create(
-            merchantId, username, "Ops", new MerchantPasswordHasher().Hash(password), roleId,
+            merchantId, username, "Ops", new MerchantPasswordHasher().Hash(password), role,
             mustChangePassword: false, isPrimary: false, requireTwoFactor, DateTimeOffset.UtcNow).Value;
         context.MerchantUsers.Add(user);
         await context.SaveChangesAsync(Ct);
@@ -160,17 +162,16 @@ public sealed class MerchantAuthServiceTests : IAsyncLifetime
         login.Value.Permissions.ShouldNotContain("portal.payouts.create"); // never an implicit grant
     }
 
+    /// <summary>There is no "no role" state any more (2026-10-12): the domain refuses to create an account without
+    /// one, so a login can never resolve to an account that signs in and can do nothing.</summary>
     [Fact]
-    public async Task An_account_with_no_role_gets_no_permissions_at_all()
+    public void An_account_cannot_exist_without_a_role()
     {
-        // Fail-closed: the account can sign in, but the portal gate will refuse every permissioned route.
-        await SeedUserAsync(Tenant, "noroles01", "s3cret-password", roleId: null);
+        var created = MerchantUser.Create(
+            Tenant, "noroles01", "Ops", new MerchantPasswordHasher().Hash("s3cret-password"), Guid.Empty,
+            mustChangePassword: false, isPrimary: false, requireTwoFactor: true, DateTimeOffset.UtcNow);
 
-        await using var context = Context();
-        var login = await Service(context).LoginAsync(new MerchantLoginCommand("noroles01", "s3cret-password"), Ct);
-
-        login.IsSuccess.ShouldBeTrue();
-        login.Value.Permissions.ShouldBeEmpty();
+        created.Error!.Code.ShouldBe(MerchantUserErrors.RoleRequired.Code);
     }
 
     [Fact]

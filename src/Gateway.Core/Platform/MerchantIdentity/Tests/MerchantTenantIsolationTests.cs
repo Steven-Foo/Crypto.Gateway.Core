@@ -39,6 +39,50 @@ public sealed class MerchantTenantIsolationTests : IAsyncLifetime
         new(new MerchantUserRepository(c), new MerchantRoleRepository(c), new MerchantTwoFactorRepository(c),
             new MerchantPasswordHasher(), new MerchantPasswordGenerator(), TimeProvider.System);
 
+    /// <summary>Every portal account must have a role (product decision 2026-10-12): creating one without a role
+    /// is refused, and nothing is written.</summary>
+    [Fact]
+    public async Task An_account_cannot_be_created_without_a_role()
+    {
+        await using var context = Context();
+        var result = await Accounts(context).CreateAsync(TenantA, "no-role", "A", Guid.Empty, true, Ct);
+
+        result.Error!.Code.ShouldBe(MerchantUserErrors.RoleRequired.Code);
+        (await context.MerchantUsers.AnyAsync(u => u.Username == "no-role", Ct)).ShouldBeFalse();
+    }
+
+    /// <summary>A role can be changed but never removed — "no role" is refused and the existing role stays.</summary>
+    [Fact]
+    public async Task A_role_can_be_changed_but_never_removed()
+    {
+        var member = await MemberRoleAsync(TenantA);
+        await using var context = Context();
+        var userId = (await Accounts(context).CreateAsync(TenantA, "keeps-role", "A", member, true, Ct)).Value.MerchantUserId;
+
+        (await Accounts(context).AssignRoleAsync(TenantA, userId, Guid.Empty, Ct))
+            .Error!.Code.ShouldBe(MerchantUserErrors.RoleRequired.Code);
+
+        var finance = (await Roles(context).CreateAsync(TenantA, "Finance", null, ["portal.overview.view"], Ct)).Value.RoleId;
+        (await Accounts(context).AssignRoleAsync(TenantA, userId, finance, Ct)).IsSuccess.ShouldBeTrue();
+
+        await using var verify = Context();
+        (await verify.MerchantUsers.SingleAsync(u => u.Id == userId, Ct)).RoleId.ShouldBe(finance);
+    }
+
+    /// <summary>Every account needs a role, so tests that don't care which one share a per-tenant "Member" role.</summary>
+    private static async Task<Guid> MemberRoleAsync(Guid tenant)
+    {
+        await using var c = Context();
+        var existing = await c.MerchantRoles.FirstOrDefaultAsync(r => r.MerchantId == tenant && r.Name == "Member", Ct);
+        if (existing is not null)
+            return existing.Id;
+
+        var role = MerchantRole.Create(tenant, "Member", null, ["portal.overview.view"], DateTimeOffset.UtcNow).Value;
+        c.MerchantRoles.Add(role);
+        await c.SaveChangesAsync(Ct);
+        return role.Id;
+    }
+
     public async ValueTask InitializeAsync()
     {
         await using var context = Context();
@@ -56,10 +100,10 @@ public sealed class MerchantTenantIsolationTests : IAsyncLifetime
     public async Task A_merchant_only_sees_its_own_roles_and_accounts()
     {
         await using var context = Context();
-        (await Roles(context).CreateAsync(TenantA, "Finance", null, ["portal.overview.view"], Ct)).IsSuccess.ShouldBeTrue();
-        (await Roles(context).CreateAsync(TenantB, "Support", null, ["portal.overview.view"], Ct)).IsSuccess.ShouldBeTrue();
-        (await Accounts(context).CreateAsync(TenantA, "a-user", "A", null, true, Ct)).IsSuccess.ShouldBeTrue();
-        (await Accounts(context).CreateAsync(TenantB, "b-user", "B", null, true, Ct)).IsSuccess.ShouldBeTrue();
+        var finance = (await Roles(context).CreateAsync(TenantA, "Finance", null, ["portal.overview.view"], Ct)).Value.RoleId;
+        var support = (await Roles(context).CreateAsync(TenantB, "Support", null, ["portal.overview.view"], Ct)).Value.RoleId;
+        (await Accounts(context).CreateAsync(TenantA, "a-user", "A", finance, true, Ct)).IsSuccess.ShouldBeTrue();
+        (await Accounts(context).CreateAsync(TenantB, "b-user", "B", support, true, Ct)).IsSuccess.ShouldBeTrue();
 
         var rolesOfA = (await Roles(context).ListAsync(TenantA, Ct)).Value;
         var accountsOfA = (await Accounts(context).ListAsync(TenantA, Ct)).Value;
@@ -91,13 +135,13 @@ public sealed class MerchantTenantIsolationTests : IAsyncLifetime
     public async Task Merchant_A_cannot_disable_or_reset_merchant_Bs_account()
     {
         await using var context = Context();
-        var bUserId = (await Accounts(context).CreateAsync(TenantB, "b-victim", "B", null, true, Ct)).Value.MerchantUserId;
+        var bUserId = (await Accounts(context).CreateAsync(TenantB, "b-victim", "B", await MemberRoleAsync(TenantB), true, Ct)).Value.MerchantUserId;
 
         (await Accounts(context).SetStatusAsync(TenantA, bUserId, Guid.CreateVersion7(), active: false, Ct))
             .Error!.Code.ShouldBe(MerchantUserErrors.NotFound.Code);
         (await Accounts(context).ResetPasswordAsync(TenantA, bUserId, Ct))
             .Error!.Code.ShouldBe(MerchantUserErrors.NotFound.Code);
-        (await Accounts(context).AssignRoleAsync(TenantA, bUserId, null, Ct))
+        (await Accounts(context).AssignRoleAsync(TenantA, bUserId, await MemberRoleAsync(TenantA), Ct))
             .Error!.Code.ShouldBe(MerchantUserErrors.NotFound.Code);
     }
 
@@ -106,7 +150,7 @@ public sealed class MerchantTenantIsolationTests : IAsyncLifetime
     {
         await using var context = Context();
         var bRoleId = (await Roles(context).CreateAsync(TenantB, "B-Admin", null, ["*"], Ct)).Value.RoleId;
-        var aUserId = (await Accounts(context).CreateAsync(TenantA, "a-user2", "A", null, true, Ct)).Value.MerchantUserId;
+        var aUserId = (await Accounts(context).CreateAsync(TenantA, "a-user2", "A", await MemberRoleAsync(TenantA), true, Ct)).Value.MerchantUserId;
 
         // The dangerous case: A tries to grant its own user a role object belonging to B.
         (await Accounts(context).AssignRoleAsync(TenantA, aUserId, bRoleId, Ct))
@@ -144,7 +188,7 @@ public sealed class MerchantTenantIsolationTests : IAsyncLifetime
     public async Task The_last_active_account_and_your_own_account_cannot_be_disabled()
     {
         await using var context = Context();
-        var soleUserId = (await Accounts(context).CreateAsync(TenantA, "a-sole", "A", null, true, Ct)).Value.MerchantUserId;
+        var soleUserId = (await Accounts(context).CreateAsync(TenantA, "a-sole", "A", await MemberRoleAsync(TenantA), true, Ct)).Value.MerchantUserId;
 
         // Self-disable is refused before the last-account rule is even reached.
         (await Accounts(context).SetStatusAsync(TenantA, soleUserId, soleUserId, active: false, Ct))
@@ -159,7 +203,7 @@ public sealed class MerchantTenantIsolationTests : IAsyncLifetime
     public async Task Changing_your_own_password_requires_the_current_one_and_a_long_enough_new_one()
     {
         await using var context = Context();
-        var created = (await Accounts(context).CreateAsync(TenantA, "a-pw", "A", null, true, Ct)).Value;
+        var created = (await Accounts(context).CreateAsync(TenantA, "a-pw", "A", await MemberRoleAsync(TenantA), true, Ct)).Value;
 
         (await Accounts(context).ChangeOwnPasswordAsync(TenantA, created.MerchantUserId, "wrong", "a-long-enough-password", Ct))
             .Error!.Code.ShouldBe(MerchantUserErrors.CurrentPasswordIncorrect.Code);
@@ -180,9 +224,9 @@ public sealed class MerchantTenantIsolationTests : IAsyncLifetime
     {
         // Usernames resolve a tenant at login, so they cannot collide even across merchants.
         await using var context = Context();
-        (await Accounts(context).CreateAsync(TenantA, "shared-name", "A", null, true, Ct)).IsSuccess.ShouldBeTrue();
+        (await Accounts(context).CreateAsync(TenantA, "shared-name", "A", await MemberRoleAsync(TenantA), true, Ct)).IsSuccess.ShouldBeTrue();
 
-        (await Accounts(context).CreateAsync(TenantB, "shared-name", "B", null, true, Ct))
+        (await Accounts(context).CreateAsync(TenantB, "shared-name", "B", await MemberRoleAsync(TenantB), true, Ct))
             .Error!.Code.ShouldBe(MerchantUserErrors.UsernameAlreadyExists.Code);
     }
 
@@ -190,8 +234,8 @@ public sealed class MerchantTenantIsolationTests : IAsyncLifetime
     public async Task An_account_cannot_change_its_own_two_factor_switch_and_a_foreign_tenant_cannot_reach_it()
     {
         await using var context = Context();
-        var admin = (await Accounts(context).CreateAsync(TenantA, "tfa-admin", "A", null, true, Ct)).Value;
-        var target = (await Accounts(context).CreateAsync(TenantA, "tfa-target", "A", null, true, Ct)).Value;
+        var admin = (await Accounts(context).CreateAsync(TenantA, "tfa-admin", "A", await MemberRoleAsync(TenantA), true, Ct)).Value;
+        var target = (await Accounts(context).CreateAsync(TenantA, "tfa-target", "A", await MemberRoleAsync(TenantA), true, Ct)).Value;
 
         // Self-target is refused before anything else.
         (await Accounts(context).SetRequireTwoFactorAsync(TenantA, target.MerchantUserId, target.MerchantUserId, false, Ct))
