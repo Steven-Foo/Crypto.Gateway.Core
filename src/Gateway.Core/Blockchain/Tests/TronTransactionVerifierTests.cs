@@ -161,6 +161,45 @@ public sealed class TronTransactionVerifierTests
         result.Error!.Code.ShouldBe(TransactionVerificationErrors.AssetMismatch.Code);
     }
 
+    /// <summary>
+    /// The shape a REAL node returns, captured from Nile (tx 75795b8f…, 2026-10-12): <c>eth_getLogs</c> reports
+    /// <c>transactionHash</c> WITH <c>0x</c>, while an operator pastes the hash as Tronscan shows it — without.
+    /// The verifier used to compare the two as typed, so no log ever matched and every genuine TRC-20 transfer
+    /// was refused as <c>asset_mismatch</c>. The fixtures above hid it by using <c>0x</c> on both sides.
+    /// </summary>
+    [Fact]
+    public async Task A_hash_pasted_without_0x_matches_the_node_log_that_carries_0x()
+    {
+        const string bare = "75795b8fa4d6aa7a1390e9baefe263d36a0b4943aea976161e8dbf29df5444f4";
+        var log = TransferLog("0xf4240", hash: "0x" + bare);
+        var info = new TronTransactionInfoDto { Id = bare, BlockNumber = 100 };
+
+        var result = await Verifier(info, 200, log)
+            .VerifyAsync(new VerifyTransferRequest(Chain.Tron, bare, Recipient, UsdtAssetId, OneUsdt), Ct);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.TransactionHash.ShouldBe(bare);
+    }
+
+    /// <summary>
+    /// The hash handed back is what callers store under a unique index. It must be ONE canonical form (no 0x,
+    /// lowercase) whatever the operator typed — otherwise "0xABC…" and "abc…" would be two different strings
+    /// and the same transfer could be recorded twice, discharging two obligations.
+    /// </summary>
+    [Fact]
+    public async Task The_returned_hash_is_canonical_whatever_form_was_submitted()
+    {
+        const string bare = "75795b8fa4d6aa7a1390e9baefe263d36a0b4943aea976161e8dbf29df5444f4";
+        var log = TransferLog("0xf4240", hash: "0x" + bare);
+        var info = new TronTransactionInfoDto { Id = bare, BlockNumber = 100 };
+
+        var result = await Verifier(info, 200, log).VerifyAsync(
+            new VerifyTransferRequest(Chain.Tron, "  0X" + bare.ToUpperInvariant() + " ", Recipient, UsdtAssetId, OneUsdt), Ct);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.TransactionHash.ShouldBe(bare);
+    }
+
     [Fact]
     public async Task A_non_tron_chain_is_unsupported_rather_than_silently_passing()
     {

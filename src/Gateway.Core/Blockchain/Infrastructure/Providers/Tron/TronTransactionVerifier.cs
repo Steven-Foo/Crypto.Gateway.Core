@@ -123,5 +123,22 @@ public sealed class TronTransactionVerifier(
         return map;
     }
 
-    private static string Normalize(string? value) => (value ?? string.Empty).Trim();
+    /// <summary>
+    /// One canonical form for a transaction hash: trimmed, no <c>0x</c>, lowercase.
+    ///
+    /// <para><b>Load-bearing in two directions.</b> (1) Matching: the JSON-RPC <c>eth_getLogs</c> endpoint reports
+    /// <c>transactionHash</c> WITH a <c>0x</c> prefix, while an operator pastes a TRON hash without one (as
+    /// Tronscan shows it). Comparing them as typed meant no log ever matched, so every real TRC-20 transfer was
+    /// refused as <c>asset_mismatch</c> — top-up and settlement recording could never pass on a live node.
+    /// (2) Storage: the hash returned in <see cref="VerifiedTransfer"/> is what the callers persist under a
+    /// unique index. If "0xABC…" and "abc…" were stored as different strings, the same on-chain transfer could
+    /// be recorded twice and discharge two obligations; one canonical form keeps the index the arbiter.</para>
+    /// </summary>
+    internal static string Normalize(string? value)
+    {
+        var trimmed = (value ?? string.Empty).Trim();
+        if (trimmed.StartsWith("0x", StringComparison.OrdinalIgnoreCase))
+            trimmed = trimmed[2..];
+        return trimmed.ToLowerInvariant();
+    }
 }
