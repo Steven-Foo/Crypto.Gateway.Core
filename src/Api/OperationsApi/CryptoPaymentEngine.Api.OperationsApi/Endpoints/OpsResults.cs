@@ -145,6 +145,7 @@ public static class OpsErrorCodes
 
     // ── request validation ──
     public const string InvalidChain = "ops.invalid_chain";
+    public const string InvalidAddress = "ops.invalid_address";
     public const string InvalidStatus = "ops.invalid_status";
     public const string InvalidDecision = "ops.invalid_decision";
     public const string InvalidPurpose = "ops.invalid_purpose";

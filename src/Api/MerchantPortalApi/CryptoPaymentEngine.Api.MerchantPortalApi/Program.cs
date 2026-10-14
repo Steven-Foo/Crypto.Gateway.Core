@@ -126,6 +126,7 @@ app.MapPortalTransactionApi();
 app.MapPortalAccountApi();
 app.MapPortalCredentialApi();
 app.MapPortalMoneyOutApi();
+app.MapPortalSettlementWalletApi();
 app.MapPortalTopUpApi();
 app.MapPortalActivityApi();
 app.MapPortalTwoFactorApi();

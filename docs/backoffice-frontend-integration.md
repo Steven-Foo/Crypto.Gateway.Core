@@ -237,6 +237,9 @@ the interceptor that covers all 38 of them and every one added later.
 | POST | `/api/v1/ops/merchants/{id:guid}/settlement-wallets` | `ops.merchants.manage` | yes | 19 |
 | POST | `/api/v1/ops/merchants/{id:guid}/settlement-wallets/{walletId:guid}/activate` | `ops.merchants.manage` | yes | 19 |
 | POST | `/api/v1/ops/merchants/{id:guid}/settlement-wallets/{walletId:guid}/retire` | `ops.merchants.manage` | yes | 19 |
+| POST | `/api/v1/ops/merchants/{id:guid}/settlement-wallets/{walletId:guid}/approve` | `ops.merchants.manage` | yes | 19c |
+| POST | `/api/v1/ops/merchants/{id:guid}/settlement-wallets/{walletId:guid}/reject` | `ops.merchants.manage` | yes | 19c |
+| GET | `/api/v1/ops/settlement-wallet-requests` | `ops.merchants.view` |  | 19c |
 | PATCH | `/api/v1/ops/merchants/{id:guid}/status` | `ops.merchants.manage` | yes | 9 |
 | PUT | `/api/v1/ops/merchants/{id:guid}/withdrawal-cap` | `ops.fees.manage` | yes | 9 |
 | PUT | `/api/v1/ops/merchants/{id:guid}/withdrawal-limits` | `ops.fees.manage` | yes | 9 |
@@ -778,7 +781,7 @@ table**; it is here so you can prepare translations and understand what each swi
 | `ops.withdrawals.record-settlement` | Withdrawals | ✅ | `POST /withdrawals/{id}/record-settlement` |
 | `ops.withdrawals.funding` | Withdrawals | ✅ | `POST /withdrawals/{id}/release`, `/cancel` |
 | `ops.balances.adjust` | Merchants | ✅ | `POST /merchants/{id}/balance/credit`, `/debit` |
-| `ops.merchants.settlement-wallet` | Merchants | ✅ | `PUT /merchants/{id}/settlement-wallet`, `POST .../settlement-wallets` (+ activate / retire) |
+| `ops.merchants.settlement-wallet` | Merchants | ✅ | `PUT /merchants/{id}/settlement-wallet`, `POST .../settlement-wallets` (+ activate / retire / approve / reject) |
 | `ops.merchants.rotate-key` | Merchants | ✅ | `POST /merchants/{id}/regenerate-key` |
 | `ops.merchants.risk-controls` | Merchants | ✅ | `PUT /merchants/{id}/approval-threshold`, `/payout-approval` |
 | `ops.merchants.allowed-ips` | Merchants | ✅ | `PUT /merchants/{id}/allowed-ips` |
@@ -984,6 +987,7 @@ a fresh code. Your §3c interceptor handles it with no extra work.
 | `portal.payouts.create` | Payouts | ✅ | Submitting a payout |
 | `portal.payouts.approve` | Payouts | ✅ | Approving / rejecting a payout |
 | `portal.cashout.create` | Cash-out | ✅ | Submitting a cash-out |
+| `portal.settlement.manage` | Cash-out | ✅ | Submitting, cancelling or switching the cash-out address |
 | `portal.topup.create` | Top-up | — | Creating a top-up invoice |
 | `portal.api.rotate-key` | API | ✅ | Rotating the API key |
 | `portal.api.allowed-ips` | API | ✅ | Changing the API IP whitelist |
@@ -2312,8 +2316,97 @@ value cannot be shown:
 The fees read preserves `null` as `null` — it never coalesces an unset policy to `0`, so an empty form field
 and a configured zero stay distinguishable, which is the whole reason the distinction above matters.
 
-**The settlement wallet is staff-only, permanently.** A merchant cannot set its own cash-out destination from
-the portal — that is the control preventing a compromised merchant credential from redirecting earnings (§10).
+**Cash-out addresses: staff add directly, or approve the merchant's own submission (since 2026-10-14).** A
+merchant can now *propose* an address from the merchant BO, but it is `PendingApproval` and **can never receive
+money until staff approve it here** — so a compromised merchant login still can't redirect earnings on its own
+(§10). See **§19c** for the approval queue and the full lifecycle.
+
+---
+
+## 19c. Cash-out (settlement) addresses — the approval workflow
+
+### The rules (SOP)
+
+- **Only the merchant starts a cash-out** (merchant BO or API). Staff approve or reject it (§19b) — staff can
+  never create a cash-out on a merchant's behalf.
+- An address gets on file **two ways**:
+  1. **Staff add it** here (`PUT .../settlement-wallet` or `POST .../settlement-wallets`) → **approved on the spot**.
+  2. **The merchant submits it** in the merchant BO → **`PendingApproval`** until staff approve or reject it.
+- **Many addresses per network may be approved; exactly one is `Active`** — the one cash-outs are paid to.
+  **Staff and the merchant** can both switch which *approved* address is active; the previous one goes to standby.
+- **The first approved address becomes active automatically** (when the merchant has none active on that
+  network). Later approvals go on **standby** — the money keeps going where it went until someone switches.
+- AML screening runs when staff add an address and **when staff approve** a merchant's one. A **sanctioned**
+  (`Block`) address can't be approved or made active.
+- Every action is audited (`merchant.settlement_wallet_approved` / `_rejected` / `_activated`; portal side
+  `portal.settlement_wallet.*`).
+
+### Statuses (`status` on every settlement-wallet row)
+
+| `status` | 中文 | Meaning | Paid to? |
+|---|---|---|---|
+| `PendingApproval` | 待审核 | merchant submitted it; waiting for staff | No |
+| `Rejected` | 已拒绝 | staff refused it — `rejectionReason` says why | No |
+| `Cancelled` | 已取消 | the merchant withdrew its own request | No |
+| `Retired` | 已审核/备用 | **approved, on standby** (the name predates this feature) | No |
+| `Active` | 使用中 | approved and in use — **one per network** | **Yes** |
+
+Each row also carries `source` (`Staff` / `Merchant`), `submittedBy`, `reviewedBy`, `reviewedAt`,
+`rejectionReason`, `createdAt`, `updatedAt`, plus the screening fields.
+
+### `GET /api/v1/ops/settlement-wallet-requests` — the approval queue (`ops.merchants.view`)
+
+Across all merchants, newest first. Query: `status` (default **`PendingApproval`** — the work waiting for you;
+or `Active`, `Retired`, `Rejected`, `Cancelled`, or `all`), `merchantId` (optional), `page`, `pageSize` (≤ 200).
+Unknown status → **400 `ops.invalid_status`**.
+
+```json
+{ "page": 1, "pageSize": 50, "totalCount": 1,
+  "items": [ {
+    "merchantId": "guid", "merchantCode": "ME00001", "merchantName": "Acme",
+    "walletId": "guid", "network": "Tron", "address": "T...", "label": "finance ledger",
+    "status": "PendingApproval", "source": "Merchant", "submittedBy": "merchant001",
+    "reviewedBy": null, "reviewedAt": null, "rejectionReason": null,
+    "screeningDecision": null, "screenedAt": null,
+    "createdAt": "...", "updatedAt": "..." } ] }
+```
+
+`screeningDecision` is null on a fresh submission — the merchant BO doesn't screen; screening runs when you
+approve. Use `POST /ops/compliance/screenings/re-screen` first if you want to see the verdict before deciding.
+
+### `POST /api/v1/ops/merchants/{id}/settlement-wallets/{walletId}/approve` (`ops.merchants.manage` + 2FA)
+
+No body. Screens the address, then approves it. Response: the same settlement-wallet shape as §19 —
+`status` is **`Active`** if this was the merchant's first approved address on that network, otherwise
+**`Retired`** (standby).
+
+| Error | When |
+|---|---|
+| `merchant.settlement_wallet_blocked` (400) | screening found it sanctioned — it stays pending, verdict recorded; reject it |
+| `merchant.settlement_wallet_not_pending` (409) | it isn't waiting for approval (already approved, rejected or cancelled) |
+| `merchant.settlement_wallet_not_found` (404) | no such wallet for this merchant |
+
+### `POST /api/v1/ops/merchants/{id}/settlement-wallets/{walletId}/reject` (`ops.merchants.manage` + 2FA)
+
+Body `{ "reason": "string, required, max 512" }` — **the merchant sees this reason**, so write it for them.
+Missing/blank → **400 `merchant.settlement_wallet_rejection_reason_required`**. The merchant may submit the same
+address again afterwards (it goes back to `PendingApproval`).
+
+### Also changed on the existing endpoints
+
+- **`activate`** now refuses an address that isn't approved: **409 `merchant.settlement_wallet_not_approved`**.
+- **`PUT .../settlement-wallet` / `POST .../settlement-wallets`** now check the **address format** first —
+  a malformed one is **400 `ops.invalid_address`** (there was no check before). Adding an address the merchant
+  had already submitted **approves it**.
+- `POST .../settlement-wallets` (add without activating) now **auto-activates** when the merchant has no active
+  address on that network yet.
+- `GET /ops/merchants/{id}` → `settlementWallets[]` now includes every status plus the new fields above.
+
+### Suggested screens
+
+- **待审核收款地址 (approval queue):** `GET /settlement-wallet-requests`; each row Approve / Reject (reason box).
+- **Merchant detail → 收款地址:** list all statuses with a status tag; actions per row: Activate (approved
+  only), Retire (standby only); add-address form.
 
 ---
 

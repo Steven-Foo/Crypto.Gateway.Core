@@ -335,6 +335,9 @@ public sealed class MerchantAssetPolicyServiceTests
             throw new NotSupportedException();
         public Task<IReadOnlyList<string>> GetAllAllowedIpsExceptAsync(Guid merchantId, CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
+        public Task<(IReadOnlyList<(MerchantSettlementWallet Wallet, string MerchantCode, string MerchantName)> Items, int TotalCount)>
+            GetSettlementWalletsPagedAsync(SettlementWalletStatus? status, Guid? merchantId, int page, int pageSize, CancellationToken cancellationToken = default) =>
+            throw new NotSupportedException();
         public Task<IReadOnlyList<string>> GetAllAllowedIpsAsync(CancellationToken cancellationToken = default) =>
             throw new NotSupportedException();
         public Task<MerchantApiCredential?> FindActiveCredentialAsync(string apiKey, CancellationToken cancellationToken = default) =>

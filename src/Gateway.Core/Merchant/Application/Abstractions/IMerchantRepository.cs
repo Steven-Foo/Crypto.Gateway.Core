@@ -35,6 +35,13 @@ public interface IMerchantRepository
     /// <summary>The merchant's current (most recently issued) active credential — used to sign outbound callbacks.</summary>
     Task<MerchantApiCredential?> FindActiveCredentialByMerchantAsync(Guid merchantId, CancellationToken cancellationToken = default);
 
+    /// <summary>Settlement wallets across merchants (the admin approval queue), newest first, with the owning
+    /// merchant's code and name. Read-only. <paramref name="status"/> null = every status.</summary>
+    Task<(IReadOnlyList<(Domain.MerchantSettlementWallet Wallet, string MerchantCode, string MerchantName)> Items, int TotalCount)>
+        GetSettlementWalletsPagedAsync(
+            Domain.SettlementWalletStatus? status, Guid? merchantId, int page, int pageSize,
+            CancellationToken cancellationToken = default);
+
     void Add(Domain.Merchant merchant);
 
     /// <summary>Saves a merchant just passed to <see cref="Add"/>, returning false instead of throwing if a

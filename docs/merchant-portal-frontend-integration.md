@@ -305,6 +305,7 @@ action marked `recommended: true` below. So from day one these actions ask for a
 | `portal.payouts.create` | Payouts | ✅ | `POST /payouts` |
 | `portal.payouts.approve` | Payouts | ✅ | `POST /payouts/{id}/approve`, `/reject` |
 | `portal.cashout.create` | Cash-out | ✅ | `POST /cash-outs` |
+| `portal.settlement.manage` | Cash-out | ✅ | `POST /settlement-wallets`, `.../{id}/cancel`, `.../{id}/activate` |
 | `portal.topup.create` | Top-up | — | `POST /top-ups` |
 | `portal.api.rotate-key` | API | ✅ | `POST /api-credential/rotate` |
 | `portal.api.allowed-ips` | API | ✅ | `PUT /allowed-ips` |
@@ -455,6 +456,8 @@ someone using the portal, **disable the account** (`PATCH /accounts/{id}/status`
 | `portal.payouts.create` | **submit** an end-user payout to a request-supplied address |
 | `portal.payouts.approve` | **sign off** a payout someone else submitted |
 | `portal.cashout.create` | initiate an earnings cash-out to the whitelisted settlement wallet |
+| `portal.settlement.view` | see the merchant's cash-out addresses and their approval status (§8.6) |
+| `portal.settlement.manage` | submit a cash-out address for platform approval, cancel a pending one, switch which approved one is active (§8.6) |
 | `portal.topup.create` | raise a merchant top-up invoice (§8.5) — adds **instantly withdrawable** balance, so grant deliberately |
 | `portal.api.view` | read API-key metadata + allowed IPs (never a secret) |
 | `portal.api.manage` | rotate the API credential, update the IP allowlist |
@@ -782,6 +785,68 @@ Top-ups appear in the normal deposit history (`/transactions/payin`) once detect
 
 ---
 
+## 8.6 Cash-out (settlement) addresses — `portal.settlement.view` / `portal.settlement.manage`
+
+**New (2026-10-14).** A merchant can now submit its own cash-out address. **Platform staff must approve it**
+before any money can be paid to it — the merchant can never approve its own address.
+
+**The flow**
+1. Submit an address → status **`PendingApproval` (待审核)**.
+2. Platform staff approve it → **`Retired` (已审核/备用 — approved, standby)**, or straight to **`Active` (使用中)**
+   if the merchant had no active address on that network yet. Or they reject it → **`Rejected` (已拒绝)** with a
+   `rejectionReason` to show the user; the same address can be submitted again.
+3. Switch which **approved** address is active at any time — exactly one is active per network, and cash-outs
+   (`POST /cash-outs`, §8) are always paid to it. The previous active one goes back to standby.
+4. Cancel your own request while it's still pending → **`Cancelled` (已取消)**.
+
+**Cash-outs need an active address.** With none, `POST /cash-outs` fails with
+`withdrawal.settlement_wallet_not_registered` — show "submit a cash-out address and wait for approval".
+
+| Call | Permission | 2FA code? |
+|---|---|---|
+| `GET /api/v1/portal/settlement-wallets` | `portal.settlement.view` | no |
+| `POST /api/v1/portal/settlement-wallets` | `portal.settlement.manage` | **yes** (`portal.settlement.manage`, §3d) |
+| `POST /api/v1/portal/settlement-wallets/{walletId}/cancel` | `portal.settlement.manage` | **yes** |
+| `POST /api/v1/portal/settlement-wallets/{walletId}/activate` | `portal.settlement.manage` | **yes** |
+
+Full-access (`*`) roles have both permissions automatically; other roles need them added in the Roles screen.
+
+### `GET /api/v1/portal/settlement-wallets`
+
+```json
+{ "items": [ {
+    "walletId": "guid", "network": "Tron", "address": "T...", "label": "finance ledger",
+    "status": "Active", "isActive": true,
+    "source": "Merchant", "submittedBy": "merchant001",
+    "reviewedBy": "admin", "reviewedAt": "...", "rejectionReason": null,
+    "createdAt": "...", "updatedAt": "..." } ] }
+```
+
+Every status is listed (newest change first). Show `status` as a tag; show `rejectionReason` on rejected rows.
+Actions per row: **Activate** only when `status` is `Retired`; **Cancel** only when `PendingApproval`.
+
+### `POST /api/v1/portal/settlement-wallets`
+
+Body `{ "network": "Tron", "address": "T...", "label": "optional, max 128" }`. Response: `{ walletId, network,
+address, label, status: "PendingApproval", isActive: false }`.
+
+| Error | When |
+|---|---|
+| `portal.invalid_address` (400) | not a valid address for that network |
+| `portal.invalid_chain` (400) | unknown network |
+| `merchant.settlement_wallet_already_on_file` (409) | that address is already approved or already pending |
+
+A previously **rejected or cancelled** address can be submitted again — it goes back to `PendingApproval`.
+
+### `POST /api/v1/portal/settlement-wallets/{walletId}/activate`
+
+Makes an approved address the cash-out address. Errors: **409 `merchant.settlement_wallet_not_approved`** (it's
+pending/rejected/cancelled), **400 `merchant.settlement_wallet_blocked`** (screening found it sanctioned).
+
+### `POST /api/v1/portal/settlement-wallets/{walletId}/cancel`
+
+Withdraws a pending request. **409 `merchant.settlement_wallet_not_pending`** if it's no longer pending.
+
 ## 9. Merchant self-administration
 
 ### API credential — `portal.api.view` / `portal.api.manage`
@@ -913,7 +978,7 @@ Read-only — nothing exposes a way to edit or delete an entry.
 | **Merchant notification when a payout awaits approval** | **Done** — a `pending_merchant_approval` webhook fires for portal-submitted payouts (§8.4). Merchants with no registered callback URL still need to poll. |
 | **Portal audit log** | **Done** — `GET /portal/activity` (§9.5). |
 | **Revoking a disabled account's live sessions** | Refused at next login only. The same applies to a two-factor reset: the user's existing session keeps working until it expires. |
-| **Editing the settlement wallet** | Deliberately staff-only, permanently. Not a gap — a security control. |
+| **Cash-out (settlement) address** | **Done (2026-10-14)** — the merchant submits it, platform staff approve it (§8.6). The merchant can never approve its own address. |
 
 ---
 

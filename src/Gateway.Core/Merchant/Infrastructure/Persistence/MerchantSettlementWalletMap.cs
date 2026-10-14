@@ -19,6 +19,18 @@ public sealed class MerchantSettlementWalletMap : IEntityTypeConfiguration<Merch
         builder.Property(w => w.Label).HasMaxLength(128);
         builder.Property(w => w.Status).HasConversion<string>().HasMaxLength(16).IsRequired();
 
+        // The merchant-submission / approval trail (2026-10-14). Source is required; existing rows were all
+        // added by staff, so the migration backfills 'Staff'.
+        builder.Property(w => w.Source).HasConversion<string>().IsUnicode(false).HasMaxLength(16).IsRequired();
+        builder.Property(w => w.SubmittedBy).HasMaxLength(128);
+        builder.Property(w => w.ReviewedBy).HasMaxLength(128);
+        builder.Property(w => w.RejectionReason).HasMaxLength(512);
+        builder.Property(w => w.ScreeningDecision).IsUnicode(false).HasMaxLength(16);
+        builder.Ignore(w => w.IsApproved);
+
+        // The admin approval queue reads by status, newest first.
+        builder.HasIndex(w => new { w.Status, w.UpdatedAt });
+
         builder.Property<byte[]>("RowVersion").IsRowVersion();
 
         builder.Ignore(w => w.IsActive);

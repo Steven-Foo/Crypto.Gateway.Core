@@ -847,3 +847,80 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261014063738_SettlementWalletApproval'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantSettlementWallet] ADD [RejectionReason] nvarchar(512) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261014063738_SettlementWalletApproval'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantSettlementWallet] ADD [ReviewedAt] datetimeoffset NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261014063738_SettlementWalletApproval'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantSettlementWallet] ADD [ReviewedBy] nvarchar(128) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261014063738_SettlementWalletApproval'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantSettlementWallet] ADD [ScreenedAt] datetimeoffset NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261014063738_SettlementWalletApproval'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantSettlementWallet] ADD [ScreeningDecision] varchar(16) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261014063738_SettlementWalletApproval'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantSettlementWallet] ADD [Source] varchar(16) NOT NULL DEFAULT 'Staff';
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261014063738_SettlementWalletApproval'
+)
+BEGIN
+    ALTER TABLE [merchant].[MerchantSettlementWallet] ADD [SubmittedBy] nvarchar(128) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261014063738_SettlementWalletApproval'
+)
+BEGIN
+    CREATE INDEX [IX_MerchantSettlementWallet_Status_UpdatedAt] ON [merchant].[MerchantSettlementWallet] ([Status], [UpdatedAt]);
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261014063738_SettlementWalletApproval'
+)
+BEGIN
+    INSERT INTO [merchant].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261014063738_SettlementWalletApproval', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

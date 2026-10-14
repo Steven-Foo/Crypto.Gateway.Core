@@ -82,6 +82,15 @@ public static class PortalPermissions
         public const string Manage = "portal.api.manage";   // rotate the API credential, update allowed IPs
     }
 
+    /// <summary>The merchant's own cash-out (settlement) addresses (2026-10-14). <c>View</c> lists them;
+    /// <c>Manage</c> submits a new one for platform approval, cancels a pending one, and switches which APPROVED
+    /// one is active. It can never approve an address — only platform staff can.</summary>
+    public static class Settlement
+    {
+        public const string View = "portal.settlement.view";
+        public const string Manage = "portal.settlement.manage";
+    }
+
     public static class Accounts
     {
         public const string View = "portal.accounts.view";
@@ -105,6 +114,7 @@ public static class PortalPermissions
         CashOut.Create,
         TopUp.Create,
         ApiCredentials.View, ApiCredentials.Manage,
+        Settlement.View, Settlement.Manage,
         Accounts.View, Accounts.Manage,
         Roles.View, Roles.Manage,
         Activity.View,

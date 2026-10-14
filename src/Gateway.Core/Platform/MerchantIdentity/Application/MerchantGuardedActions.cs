@@ -36,6 +36,11 @@ public static class MerchantGuardedActions
     public const string ApiKeyRotate = "portal.api.rotate-key";
     public const string AllowedIps = "portal.api.allowed-ips";
 
+    // ── cash-out address ──
+    /// <summary>Submitting a new cash-out address for approval, cancelling one, or switching which approved address
+    /// is active — every one of them decides (or proposes) where the merchant's earnings go.</summary>
+    public const string SettlementWalletManage = "portal.settlement.manage";
+
     // ── team ──
     public const string AccountsManage = "portal.accounts.manage";
     public const string RolesManage = "portal.roles.manage";
@@ -58,6 +63,7 @@ public static class MerchantGuardedActions
         new(PayoutApprove, "Payouts", "Approve or reject a payout", Recommended: true),
         new(CashOutCreate, "Cash-out", "Submit a cash-out to the settlement wallet", Recommended: true),
         new(TopUpCreate, "Top-up", "Create a top-up invoice", Recommended: false),
+        new(SettlementWalletManage, "Cash-out", "Submit, cancel or switch the cash-out address", Recommended: true),
         new(ApiKeyRotate, "API", "Rotate the API key", Recommended: true),
         new(AllowedIps, "API", "Change the API IP whitelist", Recommended: true),
         new(AccountsManage, "Team", "Create, disable or reset a user (including their 2FA)", Recommended: true),

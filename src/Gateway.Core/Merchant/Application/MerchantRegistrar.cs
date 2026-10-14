@@ -50,13 +50,26 @@ public sealed record MerchantSettlementWalletView(
     Guid WalletId = default,
     string? Label = null,
 
-    /// <summary><c>Active</c> is the address this chain's cash-outs are paid to; <c>Retired</c> is on file
-    /// but not in use. Several may be listed per chain — exactly one of them is Active.</summary>
+    /// <summary><c>Active</c> = cash-outs are paid here (one per chain); <c>Retired</c> = approved, on standby;
+    /// <c>PendingApproval</c> / <c>Rejected</c> / <c>Cancelled</c> = the merchant-submission lifecycle.</summary>
     string Status = nameof(SettlementWalletStatus.Active),
     string? ScreeningDecision = null,
     int? ScreeningScore = null,
     Guid? ScreeningId = null,
-    DateTimeOffset? ScreenedAt = null);
+    DateTimeOffset? ScreenedAt = null,
+
+    /// <summary><c>Staff</c> (added in the admin BO) or <c>Merchant</c> (submitted from the merchant BO).</summary>
+    string Source = nameof(SettlementWalletSource.Staff),
+    string? SubmittedBy = null,
+    string? ReviewedBy = null,
+    DateTimeOffset? ReviewedAt = null,
+    string? RejectionReason = null,
+    DateTimeOffset? CreatedAt = null,
+    DateTimeOffset? UpdatedAt = null);
+
+/// <summary>One row of the admin approval queue: a settlement wallet plus whose it is.</summary>
+public sealed record SettlementWalletQueueRow(
+    Guid MerchantId, string MerchantCode, string MerchantName, MerchantSettlementWalletView Wallet);
 
 /// <summary>
 /// The outcome of whitelisting a settlement wallet, including what address screening made of it.
@@ -159,12 +172,47 @@ public interface IMerchantRegistrar
     /// </summary>
     Task<Result<SettlementWalletResult>> AddSettlementWalletAsync(
         Guid merchantId, Chain chain, string address, string? label, bool activate,
+        CancellationToken cancellationToken = default, string? addedBy = null);
+
+    /// <summary>
+    /// A merchant proposes a cash-out address from the merchant BO. Saved as <c>PendingApproval</c>; it can't
+    /// receive money until platform staff approve it (<see cref="ApproveSettlementWalletAsync"/>).
+    /// </summary>
+    Task<Result<SettlementWalletResult>> SubmitSettlementWalletAsync(
+        Guid merchantId, Chain chain, string address, string? label, string submittedBy,
+        CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Staff approve a merchant's submission. Screened first — a directly sanctioned address is refused. The
+    /// approved address goes on standby, EXCEPT when the merchant has no active address on that chain yet: then
+    /// it becomes active straight away, so the merchant can cash out without an extra step.
+    /// </summary>
+    Task<Result<SettlementWalletResult>> ApproveSettlementWalletAsync(
+        Guid merchantId, Guid walletId, string reviewedBy, CancellationToken cancellationToken = default);
+
+    /// <summary>Staff reject a merchant's submission, with a reason the merchant sees.</summary>
+    Task<Result<SettlementWalletResult>> RejectSettlementWalletAsync(
+        Guid merchantId, Guid walletId, string reviewedBy, string reason, CancellationToken cancellationToken = default);
+
+    /// <summary>The merchant withdraws its own submission before staff review it.</summary>
+    Task<Result<SettlementWalletResult>> CancelSettlementWalletAsync(
+        Guid merchantId, Guid walletId, CancellationToken cancellationToken = default);
+
+    /// <summary>One merchant's settlement wallets, every status — the merchant BO's own list. Stored data only.</summary>
+    Task<Result<IReadOnlyList<MerchantSettlementWalletView>>> ListSettlementWalletsAsync(
+        Guid merchantId, CancellationToken cancellationToken = default);
+
+    /// <summary>The admin approval queue across merchants (default: waiting for approval), newest first.</summary>
+    Task<(IReadOnlyList<SettlementWalletQueueRow> Items, int TotalCount)> ListSettlementWalletQueueAsync(
+        SettlementWalletStatus? status, Guid? merchantId, int page, int pageSize,
         CancellationToken cancellationToken = default);
 
     /// <summary>Makes an already-whitelisted address the chain's cash-out destination, retiring the one it
     /// replaces. Re-screened at this point, because this is where it starts receiving earnings.</summary>
+    /// <remarks><paramref name="screenNow"/>: false for a host without a screening module (the merchant BO) —
+    /// the decision stored on the wallet at approval is used instead, and a sanctioned address is still refused.</remarks>
     Task<Result<SettlementWalletResult>> ActivateSettlementWalletAsync(
-        Guid merchantId, Guid walletId, CancellationToken cancellationToken = default);
+        Guid merchantId, Guid walletId, CancellationToken cancellationToken = default, bool screenNow = true);
 
     /// <summary>Takes an address out of use without deleting it. Refused for the active one — activate a
     /// replacement instead, which retires it as part of the same change.</summary>
@@ -380,7 +428,7 @@ public sealed class MerchantRegistrar(
 
     public async Task<Result<SettlementWalletResult>> AddSettlementWalletAsync(
         Guid merchantId, Chain chain, string address, string? label, bool activate,
-        CancellationToken cancellationToken = default)
+        CancellationToken cancellationToken = default, string? addedBy = null)
     {
         var merchant = await repository.GetByIdAsync(merchantId, cancellationToken);
         if (merchant is null)
@@ -404,22 +452,27 @@ public sealed class MerchantRegistrar(
         // MAKING IT THE DESTINATION is the act that moves money, and a direct sanctions designation stops
         // that: every one of this merchant's earnings would be paid to it. The wallet is still saved, so the
         // decision is recorded and reversible by re-screening rather than lost.
-        var blockActivation = activate
-            && verdict?.Decision == ScreeningDecision.Block
+        var isBlocked = verdict?.Decision == ScreeningDecision.Block
             && screeningOptions.Value.BlockActivationOnScreeningBlock;
 
         var now = timeProvider.GetUtcNow();
-        var result = merchant.AddSettlementWallet(chain, trimmed, label, activate: false, now);
+
+        // The first approved address on a chain becomes the destination automatically — the merchant has none
+        // to cash out to yet, so leaving it on standby would only add a step.
+        var autoActivate = !activate && !merchant.HasActiveSettlementWallet(chain);
+
+        var result = merchant.AddSettlementWallet(chain, trimmed, label, activate: false, now, addedBy);
         if (result.IsFailure)
             return Result.Failure<SettlementWalletResult>(result.Error!);
 
         var wallet = result.Value;
+        merchant.RecordSettlementWalletScreening(wallet.Id, verdict?.Decision.ToString(), now);
         await repository.SaveChangesAsync(cancellationToken);
 
-        if (blockActivation)
+        if (activate && isBlocked)
             return Result.Failure<SettlementWalletResult>(MerchantErrors.SettlementWalletBlocked);
 
-        if (activate)
+        if (activate || (autoActivate && !isBlocked))
         {
             var designated = await DesignateAsync(merchant, wallet.Id, now, cancellationToken);
             if (designated.IsFailure)
@@ -430,7 +483,7 @@ public sealed class MerchantRegistrar(
     }
 
     public async Task<Result<SettlementWalletResult>> ActivateSettlementWalletAsync(
-        Guid merchantId, Guid walletId, CancellationToken cancellationToken = default)
+        Guid merchantId, Guid walletId, CancellationToken cancellationToken = default, bool screenNow = true)
     {
         var merchant = await repository.GetByIdAsync(merchantId, cancellationToken);
         if (merchant is null)
@@ -443,20 +496,147 @@ public sealed class MerchantRegistrar(
         // Re-screened at the moment of activation rather than trusting the verdict from when it was added:
         // an address clean on the day it was whitelisted can be designated months later, and this is the
         // point where it would start receiving earnings. A still-fresh verdict costs no provider call.
-        var screened = await ScreenSettlementWalletAsync(
-            wallet.Chain, wallet.Address, force: false, cancellationToken);
+        if (!wallet.IsApproved)
+            return Result.Failure<SettlementWalletResult>(MerchantErrors.SettlementWalletNotApproved);
+
+        var screened = screenNow
+            ? await ScreenSettlementWalletAsync(wallet.Chain, wallet.Address, force: false, cancellationToken)
+            : Result.Success<ScreeningVerdict?>(null);
         if (screened.IsFailure)
             return Result.Failure<SettlementWalletResult>(screened.Error!);
 
-        if (screened.Value?.Decision == ScreeningDecision.Block
+        // When this host screens, the fresh verdict decides. When it doesn't (the merchant BO has no screening
+        // module), fall back to the decision stored on the wallet at approval — so a merchant can never switch
+        // its earnings to an address that was found to be sanctioned.
+        var decision = screened.Value?.Decision.ToString() ?? wallet.ScreeningDecision;
+        if (decision == nameof(ScreeningDecision.Block)
             && screeningOptions.Value.BlockActivationOnScreeningBlock)
             return Result.Failure<SettlementWalletResult>(MerchantErrors.SettlementWalletBlocked);
 
-        var designated = await DesignateAsync(merchant, walletId, timeProvider.GetUtcNow(), cancellationToken);
+        var now = timeProvider.GetUtcNow();
+        merchant.RecordSettlementWalletScreening(walletId, screened.Value?.Decision.ToString(), now);
+
+        var designated = await DesignateAsync(merchant, walletId, now, cancellationToken);
         if (designated.IsFailure)
             return Result.Failure<SettlementWalletResult>(designated.Error!);
 
         return Result.Success(Describe(merchantId, designated.Value, screened.Value));
+    }
+
+    public async Task<Result<SettlementWalletResult>> SubmitSettlementWalletAsync(
+        Guid merchantId, Chain chain, string address, string? label, string submittedBy,
+        CancellationToken cancellationToken = default)
+    {
+        var merchant = await repository.GetByIdAsync(merchantId, cancellationToken);
+        if (merchant is null)
+            return Result.Failure<SettlementWalletResult>(MerchantErrors.NotFound);
+
+        // No screening here: the merchant BO has no screening module, and nothing can be paid to a pending
+        // address anyway. It is screened when staff approve it — before it can ever receive money.
+        var submitted = merchant.SubmitSettlementWallet(chain, address, label, submittedBy, timeProvider.GetUtcNow());
+        if (submitted.IsFailure)
+            return Result.Failure<SettlementWalletResult>(submitted.Error!);
+
+        await repository.SaveChangesAsync(cancellationToken);
+        return Result.Success(Describe(merchantId, submitted.Value, verdict: null));
+    }
+
+    public async Task<Result<SettlementWalletResult>> ApproveSettlementWalletAsync(
+        Guid merchantId, Guid walletId, string reviewedBy, CancellationToken cancellationToken = default)
+    {
+        var merchant = await repository.GetByIdAsync(merchantId, cancellationToken);
+        if (merchant is null)
+            return Result.Failure<SettlementWalletResult>(MerchantErrors.NotFound);
+
+        var wallet = merchant.SettlementWallets.SingleOrDefault(w => w.Id == walletId);
+        if (wallet is null)
+            return Result.Failure<SettlementWalletResult>(MerchantErrors.SettlementWalletNotFound);
+
+        if (wallet.Status != SettlementWalletStatus.PendingApproval)
+            return Result.Failure<SettlementWalletResult>(MerchantErrors.SettlementWalletNotPending);
+
+        // Screened at approval: this is the moment it becomes usable. A directly sanctioned address is refused
+        // outright — and stays pending, so the decision is visible and can be rejected with a reason.
+        var screened = await ScreenSettlementWalletAsync(wallet.Chain, wallet.Address, force: false, cancellationToken);
+        if (screened.IsFailure)
+            return Result.Failure<SettlementWalletResult>(screened.Error!);
+
+        var now = timeProvider.GetUtcNow();
+        merchant.RecordSettlementWalletScreening(walletId, screened.Value?.Decision.ToString(), now);
+
+        if (screened.Value?.Decision == ScreeningDecision.Block
+            && screeningOptions.Value.BlockActivationOnScreeningBlock)
+        {
+            await repository.SaveChangesAsync(cancellationToken); // keep the recorded verdict
+            return Result.Failure<SettlementWalletResult>(MerchantErrors.SettlementWalletBlocked);
+        }
+
+        var autoActivate = !merchant.HasActiveSettlementWallet(wallet.Chain);
+
+        var approved = merchant.ApproveSettlementWallet(walletId, reviewedBy, now);
+        if (approved.IsFailure)
+            return Result.Failure<SettlementWalletResult>(approved.Error!);
+
+        await repository.SaveChangesAsync(cancellationToken);
+
+        if (autoActivate)
+        {
+            var designated = await DesignateAsync(merchant, walletId, now, cancellationToken);
+            if (designated.IsFailure)
+                return Result.Failure<SettlementWalletResult>(designated.Error!);
+        }
+
+        return Result.Success(Describe(merchantId, wallet, screened.Value));
+    }
+
+    public async Task<Result<SettlementWalletResult>> RejectSettlementWalletAsync(
+        Guid merchantId, Guid walletId, string reviewedBy, string reason, CancellationToken cancellationToken = default)
+    {
+        var merchant = await repository.GetByIdAsync(merchantId, cancellationToken);
+        if (merchant is null)
+            return Result.Failure<SettlementWalletResult>(MerchantErrors.NotFound);
+
+        var rejected = merchant.RejectSettlementWallet(walletId, reviewedBy, reason, timeProvider.GetUtcNow());
+        if (rejected.IsFailure)
+            return Result.Failure<SettlementWalletResult>(rejected.Error!);
+
+        await repository.SaveChangesAsync(cancellationToken);
+        return Result.Success(Describe(merchantId, rejected.Value, verdict: null));
+    }
+
+    public async Task<Result<SettlementWalletResult>> CancelSettlementWalletAsync(
+        Guid merchantId, Guid walletId, CancellationToken cancellationToken = default)
+    {
+        var merchant = await repository.GetByIdAsync(merchantId, cancellationToken);
+        if (merchant is null)
+            return Result.Failure<SettlementWalletResult>(MerchantErrors.NotFound);
+
+        var cancelled = merchant.CancelSettlementWallet(walletId, timeProvider.GetUtcNow());
+        if (cancelled.IsFailure)
+            return Result.Failure<SettlementWalletResult>(cancelled.Error!);
+
+        await repository.SaveChangesAsync(cancellationToken);
+        return Result.Success(Describe(merchantId, cancelled.Value, verdict: null));
+    }
+
+    public async Task<Result<IReadOnlyList<MerchantSettlementWalletView>>> ListSettlementWalletsAsync(
+        Guid merchantId, CancellationToken cancellationToken = default)
+    {
+        var merchant = await repository.GetByIdAsync(merchantId, cancellationToken);
+        if (merchant is null)
+            return Result.Failure<IReadOnlyList<MerchantSettlementWalletView>>(MerchantErrors.NotFound);
+
+        IReadOnlyList<MerchantSettlementWalletView> views =
+            [.. merchant.SettlementWallets.OrderByDescending(w => w.UpdatedAt).Select(w => ToWalletView(w, null))];
+        return Result.Success(views);
+    }
+
+    public async Task<(IReadOnlyList<SettlementWalletQueueRow> Items, int TotalCount)> ListSettlementWalletQueueAsync(
+        SettlementWalletStatus? status, Guid? merchantId, int page, int pageSize,
+        CancellationToken cancellationToken = default)
+    {
+        var (items, total) = await repository.GetSettlementWalletsPagedAsync(status, merchantId, page, pageSize, cancellationToken);
+        return ([.. items.Select(i => new SettlementWalletQueueRow(i.Wallet.MerchantId, i.MerchantCode, i.MerchantName, ToWalletView(i.Wallet, null)))], total);
     }
 
     /// <summary>
@@ -649,9 +829,14 @@ public sealed class MerchantRegistrar(
             verdict = found;
         }
 
+        // A full verdict from the evidence store when this host has one; otherwise the decision stored on the
+        // wallet itself (score/evidence id unknown there).
         return new MerchantSettlementWalletView(
             wallet.Chain.ToString(), wallet.Address, wallet.Id, wallet.Label, wallet.Status.ToString(),
-            verdict?.Decision.ToString(), verdict?.Score, verdict?.ScreeningId, verdict?.ScreenedAt);
+            verdict?.Decision.ToString() ?? wallet.ScreeningDecision, verdict?.Score, verdict?.ScreeningId,
+            verdict?.ScreenedAt ?? wallet.ScreenedAt,
+            wallet.Source.ToString(), wallet.SubmittedBy, wallet.ReviewedBy, wallet.ReviewedAt, wallet.RejectionReason,
+            wallet.CreatedAt, wallet.UpdatedAt);
     }
 
     private static MerchantAdminView ToView(

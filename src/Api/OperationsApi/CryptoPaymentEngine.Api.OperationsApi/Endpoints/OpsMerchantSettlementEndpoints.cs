@@ -40,6 +40,18 @@ public static class OpsMerchantSettlementEndpoints
             .RequirePermission(OpsPermissions.Merchants.Manage)
             .RequireTwoFactor(GuardedActions.MerchantSettlementWallet);
 
+        // Merchant-submitted addresses (2026-10-14): a merchant proposes an address from the merchant BO, and
+        // it can't receive money until staff approve it here. The queue is a read; approve/reject decide where a
+        // merchant's earnings can go, so they carry the same guard as every other settlement-wallet write.
+        app.MapGet("/api/v1/ops/settlement-wallet-requests", ListSettlementWalletRequestsAsync)
+            .RequirePermission(OpsPermissions.Merchants.View);
+        app.MapPost("/api/v1/ops/merchants/{id:guid}/settlement-wallets/{walletId:guid}/approve", ApproveSettlementWalletAsync)
+            .RequirePermission(OpsPermissions.Merchants.Manage)
+            .RequireTwoFactor(GuardedActions.MerchantSettlementWallet);
+        app.MapPost("/api/v1/ops/merchants/{id:guid}/settlement-wallets/{walletId:guid}/reject", RejectSettlementWalletAsync)
+            .RequirePermission(OpsPermissions.Merchants.Manage)
+            .RequireTwoFactor(GuardedActions.MerchantSettlementWallet);
+
         // Turns the merchant's OWN payout-approval stage on/off. Merchants.Manage rather than Fees.Manage:
         // it controls the merchant's process, not its pricing.
         app.MapPut("/api/v1/ops/merchants/{id:guid}/payout-approval", SetPayoutApprovalAsync).RequirePermission(OpsPermissions.Merchants.Manage)
@@ -118,8 +130,17 @@ public static class OpsMerchantSettlementEndpoints
         if (!Enum.TryParse<Chain>(request.Chain, ignoreCase: true, out var chain))
             return Bad(OpsErrorCodes.InvalidChain, $"Unknown chain '{request.Chain}'.");
 
+        // A typo here becomes the destination of a merchant's earnings. Refuse a malformed address up front —
+        // the same check a cold collection wallet and a payout destination get.
+        var encoders = http.RequestServices.GetRequiredService<Gateway.Core.Blockchain.Contracts.IAddressEncoderFactory>();
+        if (!string.IsNullOrWhiteSpace(request.Address) && encoders.Supports(chain)
+            && !encoders.For(chain).IsValidAddress(request.Address.Trim()))
+            return Bad(OpsErrorCodes.InvalidAddress, $"'{request.Address.Trim()}' is not a valid {chain} address.");
+
+        // Staff-added addresses are approved on the spot; who added it is recorded from the session.
         var result = await registrar.AddSettlementWalletAsync(
-            id, chain, request.Address, request.Label, request.Activate ?? defaultActivate, http.RequestAborted);
+            id, chain, request.Address, request.Label, request.Activate ?? defaultActivate, http.RequestAborted,
+            addedBy: AuditActor.From(http).Username);
         if (result.IsFailure)
             return OpsResults.Fail(result.Error!);
 
@@ -179,6 +200,98 @@ public static class OpsMerchantSettlementEndpoints
             data = Describe(id, result.Value),
             error = (string?)null, errorCode = (string?)null,
         });
+    }
+
+    /// <summary>
+    /// The approval queue across all merchants. <c>status</c> defaults to <c>PendingApproval</c> (the work
+    /// waiting for staff); pass another status, or <c>all</c>, to browse the history.
+    /// </summary>
+    private static async Task<IResult> ListSettlementWalletRequestsAsync(
+        IMerchantRegistrar registrar, HttpContext http,
+        string? status = null, Guid? merchantId = null, int page = 1, int pageSize = 50)
+    {
+        if (page < 1) page = 1;
+        if (pageSize < 1) pageSize = 50;
+        if (pageSize > 200) pageSize = 200;
+
+        Gateway.Core.Merchant.Domain.SettlementWalletStatus? filter = Gateway.Core.Merchant.Domain.SettlementWalletStatus.PendingApproval;
+        if (string.Equals(status, "all", StringComparison.OrdinalIgnoreCase))
+            filter = null;
+        else if (!string.IsNullOrWhiteSpace(status))
+        {
+            if (!Enum.TryParse<Gateway.Core.Merchant.Domain.SettlementWalletStatus>(status, ignoreCase: true, out var parsed)
+                || int.TryParse(status, out _))
+                return Bad(OpsErrorCodes.InvalidStatus,
+                    $"Unknown status '{status}'. Expected PendingApproval, Active, Retired, Rejected, Cancelled, or all.");
+            filter = parsed;
+        }
+
+        var (items, total) = await registrar.ListSettlementWalletQueueAsync(filter, merchantId, page, pageSize, http.RequestAborted);
+
+        return OpsResults.Ok(new
+        {
+            page, pageSize, totalCount = total,
+            items = items.Select(i => new
+            {
+                i.MerchantId, i.MerchantCode, i.MerchantName,
+                walletId = i.Wallet.WalletId,
+                network = i.Wallet.Chain,
+                i.Wallet.Address,
+                i.Wallet.Label,
+                i.Wallet.Status,
+                i.Wallet.Source,
+                i.Wallet.SubmittedBy,
+                i.Wallet.ReviewedBy,
+                i.Wallet.ReviewedAt,
+                i.Wallet.RejectionReason,
+                i.Wallet.ScreeningDecision,
+                i.Wallet.ScreenedAt,
+                i.Wallet.CreatedAt,
+                i.Wallet.UpdatedAt,
+            }),
+        });
+    }
+
+    /// <summary>Approves a merchant's submitted address. Screened first; a sanctioned address is refused. It
+    /// goes on standby — or straight to active when the merchant has no active address on that network yet.</summary>
+    private static async Task<IResult> ApproveSettlementWalletAsync(
+        Guid id, Guid walletId, IMerchantRegistrar registrar, IAuditLogger audit, HttpContext http)
+    {
+        var actor = AuditActor.From(http);
+        var result = await registrar.ApproveSettlementWalletAsync(id, walletId, actor.Username, http.RequestAborted);
+        if (result.IsFailure)
+            return OpsResults.Fail(result.Error!);
+
+        await audit.LogAsync(new LogAuditEntryCommand(
+            actor.StaffUserId, actor.Username, "merchant.settlement_wallet_approved", "MerchantSettlementWallet",
+            walletId.ToString(), $"{result.Value.Chain} {result.Value.Address} -> {result.Value.Status}", actor.IpAddress),
+            http.RequestAborted);
+
+        return Results.Ok(new
+        {
+            isSuccess = true,
+            data = Describe(id, result.Value),
+            warnings = result.Value.Warnings,
+            error = (string?)null, errorCode = (string?)null,
+        });
+    }
+
+    /// <summary>Rejects a merchant's submitted address with a reason the merchant sees.</summary>
+    private static async Task<IResult> RejectSettlementWalletAsync(
+        Guid id, Guid walletId, RejectSettlementWalletRequest request, IMerchantRegistrar registrar, IAuditLogger audit,
+        HttpContext http)
+    {
+        var actor = AuditActor.From(http);
+        var result = await registrar.RejectSettlementWalletAsync(id, walletId, actor.Username, request.Reason, http.RequestAborted);
+        if (result.IsFailure)
+            return OpsResults.Fail(result.Error!);
+
+        await audit.LogAsync(new LogAuditEntryCommand(
+            actor.StaffUserId, actor.Username, "merchant.settlement_wallet_rejected", "MerchantSettlementWallet",
+            walletId.ToString(), $"{result.Value.Chain} {result.Value.Address}: {request.Reason}", actor.IpAddress),
+            http.RequestAborted);
+
+        return Results.Ok(new { isSuccess = true, data = Describe(id, result.Value), error = (string?)null, errorCode = (string?)null });
     }
 
     private static object Describe(Guid merchantId, SettlementWalletResult saved) => new

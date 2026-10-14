@@ -108,6 +108,7 @@ public static class PortalErrorCodes
     public const string InvalidIpAddress = "portal.invalid_ip_address";
     public const string NetworkRequired = "portal.network_required";
     public const string AddressRequired = "portal.address_required";
+    public const string InvalidAddress = "portal.invalid_address";
     public const string NotFound = "portal.not_found";
 
     // Raised by PortalExceptionMiddleware, never by an endpoint: a request that failed before any handler ran

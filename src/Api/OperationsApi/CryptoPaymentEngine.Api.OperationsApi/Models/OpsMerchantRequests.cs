@@ -114,6 +114,12 @@ public sealed class SetSettlementPeriodRequest
 }
 
 /// <summary>Registers/updates the merchant's whitelisted cash-out (settlement) wallet for a chain.</summary>
+/// <summary>Body for rejecting a merchant-submitted settlement address. The reason is shown to the merchant.</summary>
+public sealed class RejectSettlementWalletRequest
+{
+    [Required, MaxLength(512)] public string Reason { get; init; } = null!;
+}
+
 public sealed class SetSettlementWalletRequest
 {
     [Required, MaxLength(16)] public string Chain { get; init; } = null!;

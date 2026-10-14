@@ -39,6 +39,11 @@ public static class PortalAuditActions
     public const string TwoFactorRecoveryCodesRegenerated = "portal.two_factor.recovery_codes_regenerated";
     public const string TwoFactorReset = "portal.two_factor.reset";
 
+    public const string EntitySettlementWallet = "MerchantSettlementWallet";
+    public const string SettlementWalletSubmitted = "portal.settlement_wallet.submitted";
+    public const string SettlementWalletCancelled = "portal.settlement_wallet.cancelled";
+    public const string SettlementWalletActivated = "portal.settlement_wallet.activated";
+
     public const string EntityTwoFactorPolicy = "MerchantTwoFactorPolicy";
     public const string TwoFactorPolicyChanged = "portal.two_factor_policy.changed";
     public const string TwoFactorPolicyRestoredDefaults = "portal.two_factor_policy.restored_defaults";

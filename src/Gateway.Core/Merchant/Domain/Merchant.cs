@@ -329,7 +329,7 @@ public sealed partial class Merchant : Entity<Guid>
     /// a repeated save is harmless.</para>
     /// </summary>
     public Result<MerchantSettlementWallet> AddSettlementWallet(
-        Chain chain, string address, string? label, bool activate, DateTimeOffset now)
+        Chain chain, string address, string? label, bool activate, DateTimeOffset now, string? addedBy = null)
     {
         if (Status == MerchantStatus.Closed)
             return Result.Failure<MerchantSettlementWallet>(MerchantErrors.Closed);
@@ -343,21 +343,120 @@ public sealed partial class Merchant : Entity<Guid>
 
         if (existing is null)
         {
-            var createResult = MerchantSettlementWallet.Create(Id, chain, trimmed, label, activate: false, now);
+            var createResult = MerchantSettlementWallet.Create(Id, chain, trimmed, label, activate: false, now, addedBy);
             if (createResult.IsFailure)
                 return createResult;
 
             existing = createResult.Value;
             _settlementWallets.Add(existing);
         }
-        else if (!string.IsNullOrWhiteSpace(label))
+        else
         {
-            existing.Rename(label, now);
+            // Staff adding an address a merchant had submitted (or that was rejected/cancelled) IS the approval:
+            // staff-added addresses are approved on the spot.
+            existing.ApproveByStaffAdd(addedBy, now);
+            if (!string.IsNullOrWhiteSpace(label))
+                existing.Rename(label, now);
         }
 
         UpdatedAt = now;
         return Result.Success(existing);
     }
+
+    /// <summary>
+    /// A merchant proposes a cash-out address from the merchant BO. It starts <see cref="SettlementWalletStatus.PendingApproval"/>
+    /// and can't receive money until platform staff approve it — so a stolen merchant login can request a new
+    /// destination but never point earnings at one on its own (§10). Submitting an address that was rejected or
+    /// cancelled before re-opens it for review; one already approved or pending is refused.
+    /// </summary>
+    public Result<MerchantSettlementWallet> SubmitSettlementWallet(
+        Chain chain, string address, string? label, string submittedBy, DateTimeOffset now)
+    {
+        if (Status == MerchantStatus.Closed)
+            return Result.Failure<MerchantSettlementWallet>(MerchantErrors.Closed);
+
+        if (string.IsNullOrWhiteSpace(address))
+            return Result.Failure<MerchantSettlementWallet>(MerchantErrors.SettlementAddressRequired);
+
+        var trimmed = address.Trim();
+        var existing = _settlementWallets.SingleOrDefault(
+            w => w.Chain == chain && string.Equals(w.Address, trimmed, StringComparison.Ordinal));
+
+        if (existing is not null)
+        {
+            if (existing.IsApproved || existing.Status == SettlementWalletStatus.PendingApproval)
+                return Result.Failure<MerchantSettlementWallet>(MerchantErrors.SettlementWalletAlreadyOnFile);
+
+            existing.Resubmit(label, submittedBy, now);
+            UpdatedAt = now;
+            return Result.Success(existing);
+        }
+
+        var created = MerchantSettlementWallet.CreateRequested(Id, chain, trimmed, label, submittedBy, now);
+        if (created.IsFailure)
+            return created;
+
+        _settlementWallets.Add(created.Value);
+        UpdatedAt = now;
+        return Result.Success(created.Value);
+    }
+
+    /// <summary>Staff approve a merchant's submission — it goes on standby. Making it active is a separate step
+    /// (done by the caller when the merchant has no active address yet).</summary>
+    public Result<MerchantSettlementWallet> ApproveSettlementWallet(Guid walletId, string reviewedBy, DateTimeOffset now)
+    {
+        if (Status == MerchantStatus.Closed)
+            return Result.Failure<MerchantSettlementWallet>(MerchantErrors.Closed);
+
+        var wallet = _settlementWallets.SingleOrDefault(w => w.Id == walletId);
+        if (wallet is null)
+            return Result.Failure<MerchantSettlementWallet>(MerchantErrors.SettlementWalletNotFound);
+
+        var approved = wallet.Approve(reviewedBy, now);
+        if (approved.IsFailure)
+            return Result.Failure<MerchantSettlementWallet>(approved.Error!);
+
+        UpdatedAt = now;
+        return Result.Success(wallet);
+    }
+
+    public Result<MerchantSettlementWallet> RejectSettlementWallet(
+        Guid walletId, string reviewedBy, string reason, DateTimeOffset now)
+    {
+        var wallet = _settlementWallets.SingleOrDefault(w => w.Id == walletId);
+        if (wallet is null)
+            return Result.Failure<MerchantSettlementWallet>(MerchantErrors.SettlementWalletNotFound);
+
+        var rejected = wallet.Reject(reviewedBy, reason, now);
+        if (rejected.IsFailure)
+            return Result.Failure<MerchantSettlementWallet>(rejected.Error!);
+
+        UpdatedAt = now;
+        return Result.Success(wallet);
+    }
+
+    /// <summary>The merchant withdraws its own submission before staff review it.</summary>
+    public Result<MerchantSettlementWallet> CancelSettlementWallet(Guid walletId, DateTimeOffset now)
+    {
+        var wallet = _settlementWallets.SingleOrDefault(w => w.Id == walletId);
+        if (wallet is null)
+            return Result.Failure<MerchantSettlementWallet>(MerchantErrors.SettlementWalletNotFound);
+
+        var cancelled = wallet.Cancel(now);
+        if (cancelled.IsFailure)
+            return Result.Failure<MerchantSettlementWallet>(cancelled.Error!);
+
+        UpdatedAt = now;
+        return Result.Success(wallet);
+    }
+
+    /// <summary>Records the latest AML screening decision on the wallet itself (see <see cref="MerchantSettlementWallet.ScreeningDecision"/>).</summary>
+    public void RecordSettlementWalletScreening(Guid walletId, string? decision, DateTimeOffset now) =>
+        _settlementWallets.SingleOrDefault(w => w.Id == walletId)?.RecordScreening(decision, now);
+
+    /// <summary>True when the chain already has an address that cash-outs are paid to.</summary>
+    public bool HasActiveSettlementWallet(Chain chain) =>
+        _settlementWallets.Any(w => w.Chain == chain && w.IsActive);
 
     /// <summary>
     /// Takes every OTHER wallet on this one's chain out of use, in preparation for activating it.
@@ -377,6 +476,10 @@ public sealed partial class Merchant : Entity<Guid>
         if (wallet is null)
             return Result.Failure<MerchantSettlementWallet>(MerchantErrors.SettlementWalletNotFound);
 
+        if (!wallet.IsApproved)
+            return Result.Failure<MerchantSettlementWallet>(MerchantErrors.SettlementWalletNotApproved);
+
+        // Only the currently ACTIVE one goes back to standby — pending/rejected/cancelled ones are untouched.
         foreach (var other in _settlementWallets.Where(w => w.Chain == wallet.Chain && w.Id != wallet.Id))
             other.Retire(now);
 
@@ -397,6 +500,10 @@ public sealed partial class Merchant : Entity<Guid>
         if (wallet is null)
             return Result.Failure<MerchantSettlementWallet>(MerchantErrors.SettlementWalletNotFound);
 
+        // Only an approved address can receive money — never a pending, rejected or cancelled one.
+        if (!wallet.IsApproved)
+            return Result.Failure<MerchantSettlementWallet>(MerchantErrors.SettlementWalletNotApproved);
+
         wallet.Activate(now);
         UpdatedAt = now;
         return Result.Success(wallet);
@@ -415,6 +522,9 @@ public sealed partial class Merchant : Entity<Guid>
 
         if (wallet.IsActive)
             return Result.Failure<MerchantSettlementWallet>(MerchantErrors.CannotRetireActiveSettlementWallet);
+
+        if (!wallet.IsApproved)
+            return Result.Failure<MerchantSettlementWallet>(MerchantErrors.SettlementWalletNotApproved);
 
         wallet.Retire(now);
         UpdatedAt = now;

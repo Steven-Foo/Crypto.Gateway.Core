@@ -93,6 +93,30 @@ public static class MerchantErrors
             "merchant.settlement_wallet_blocked",
             "Address screening refused this settlement wallet. It cannot be made the cash-out destination.");
 
+    /// <summary>Only an approved address (active or on standby) can be made the cash-out destination — never a
+    /// pending, rejected or cancelled one.</summary>
+    public static readonly Error SettlementWalletNotApproved =
+        Error.Conflict(
+            "merchant.settlement_wallet_not_approved",
+            "This address has not been approved, so it cannot be made the cash-out address.");
+
+    /// <summary>Approve / reject / cancel apply only to an address still waiting for review.</summary>
+    public static readonly Error SettlementWalletNotPending =
+        Error.Conflict(
+            "merchant.settlement_wallet_not_pending",
+            "This address is not waiting for approval.");
+
+    public static readonly Error SettlementWalletRejectionReasonRequired =
+        Error.Validation(
+            "merchant.settlement_wallet_rejection_reason_required",
+            "A reason is required to reject an address.");
+
+    /// <summary>The merchant submitted an address it already has on file and approved (or already pending).</summary>
+    public static readonly Error SettlementWalletAlreadyOnFile =
+        Error.Conflict(
+            "merchant.settlement_wallet_already_on_file",
+            "This address is already on file for this network (approved or waiting for approval).");
+
     public static readonly Error SettlementWalletNotFound =
         Error.NotFound("merchant.settlement_wallet_not_found", "No such settlement wallet for this merchant.");
 

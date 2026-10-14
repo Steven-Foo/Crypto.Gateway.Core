@@ -82,6 +82,28 @@ public sealed class MerchantRepository(MerchantDbContext context) : IMerchantRep
         return (items, total);
     }
 
+    public async Task<(IReadOnlyList<(MerchantSettlementWallet Wallet, string MerchantCode, string MerchantName)> Items, int TotalCount)>
+        GetSettlementWalletsPagedAsync(
+            SettlementWalletStatus? status, Guid? merchantId, int page, int pageSize,
+            CancellationToken cancellationToken = default)
+    {
+        var query = context.SettlementWallets.AsNoTracking()
+            .Where(w => status == null || w.Status == status)
+            .Where(w => merchantId == null || w.MerchantId == merchantId);
+
+        var total = await query.CountAsync(cancellationToken);
+
+        var rows = await query
+            .OrderByDescending(w => w.UpdatedAt)
+            .Skip((page - 1) * pageSize)
+            .Take(pageSize)
+            .Join(context.Merchants.AsNoTracking(), w => w.MerchantId, m => m.Id,
+                (w, m) => new { Wallet = w, m.MerchantCode, m.Name })
+            .ToListAsync(cancellationToken);
+
+        return ([.. rows.Select(r => (r.Wallet, r.MerchantCode, r.Name))], total);
+    }
+
     public async Task<IReadOnlyList<string>> GetAllAllowedIpsExceptAsync(Guid merchantId, CancellationToken cancellationToken = default)
     {
         var csvs = await context.Configurations
