@@ -61,6 +61,32 @@ public sealed class PaymentIntentDirectoryTests : IAsyncLifetime
     private static PaymentIntentAdminFilter FilterFor(Guid merchantId) =>
         new(merchantId, null, null, null, null, null, null, null);
 
+    /// <summary>
+    /// The ledger screens key deposit rows by the DEPOSIT id; this maps them back to the ORDER number
+    /// (PublicReference = the deposit screen's systemOrderNumber) so the two screens line up. A deposit with no
+    /// matched order is simply absent (the screen shows null), never mapped to the wrong order.
+    /// </summary>
+    [Fact]
+    public async Task FindPublicReferencesByDepositIdsAsync_maps_each_deposit_to_the_order_it_paid()
+    {
+        var orderA = Persisted("REF-A", "1000000");
+        var orderB = Persisted("REF-B", "2000000");
+        var depositA = Guid.CreateVersion7();
+        var depositB = Guid.CreateVersion7();
+        orderA.MatchTo(depositA, "0xaa", BigInteger.Parse("1000000"), DateTimeOffset.UtcNow);
+        orderB.MatchTo(depositB, "0xbb", BigInteger.Parse("2000000"), DateTimeOffset.UtcNow);
+        Persisted("REF-UNPAID", "3000000");
+        await _context.SaveChangesAsync(Ct);
+
+        var noOrderDeposit = Guid.CreateVersion7();
+        var map = await _directory.FindPublicReferencesByDepositIdsAsync([depositA, depositB, noOrderDeposit], Ct);
+
+        map[depositA].ShouldBe(orderA.PublicReference);
+        map[depositB].ShouldBe(orderB.PublicReference);
+        map.ContainsKey(noOrderDeposit).ShouldBeFalse();
+        (await _directory.FindPublicReferencesByDepositIdsAsync([], Ct)).ShouldBeEmpty();
+    }
+
     [Fact]
     public async Task GetTotalsAsync_sums_expected_amount_across_the_whole_filtered_set_not_just_one_page()
     {

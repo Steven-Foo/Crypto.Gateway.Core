@@ -39,6 +39,21 @@ public sealed class PaymentIntentDirectory(PaymentIntentDbContext context, TimeP
             .Select(i => i.MatchedDepositId)
             .SingleOrDefaultAsync(cancellationToken);
 
+    public async Task<IReadOnlyDictionary<Guid, Guid>> FindPublicReferencesByDepositIdsAsync(
+        IReadOnlyCollection<Guid> depositIds, CancellationToken cancellationToken = default)
+    {
+        if (depositIds.Count == 0)
+            return new Dictionary<Guid, Guid>();
+
+        var rows = await context.PaymentIntents.AsNoTracking()
+            .Where(i => i.MatchedDepositId != null && depositIds.Contains(i.MatchedDepositId.Value))
+            .Select(i => new { DepositId = i.MatchedDepositId!.Value, i.PublicReference })
+            .ToListAsync(cancellationToken);
+
+        // A deposit matches at most one order; GroupBy only guards against an impossible duplicate turning into a crash.
+        return rows.GroupBy(r => r.DepositId).ToDictionary(g => g.Key, g => g.First().PublicReference);
+    }
+
     public async Task<(IReadOnlyList<PaymentIntentAdminRow> Items, int TotalCount)> SearchAsync(
         PaymentIntentAdminFilter filter, int page, int pageSize, CancellationToken cancellationToken = default)
     {

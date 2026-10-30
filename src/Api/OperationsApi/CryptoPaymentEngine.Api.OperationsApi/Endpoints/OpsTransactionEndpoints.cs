@@ -57,6 +57,9 @@ public static class OpsTransactionEndpoints
         foreach (var assetId in items.Select(i => i.AssetId).Distinct())
             assetCache[assetId] = await assets.FindByIdAsync(assetId, http.RequestAborted);
 
+        var orderNumberOf = await LedgerOrderNumbers.ResolveAsync(
+            items.Select(i => (i.ReferenceType, i.ReferenceId)), paymentIntents, http.RequestAborted);
+
         return Results.Ok(new
         {
             isSuccess = true,
@@ -70,6 +73,8 @@ public static class OpsTransactionEndpoints
                     journalId = i.JournalId,
                     referenceType = i.ReferenceType,
                     referenceId = i.ReferenceId,
+                    // The order number (系统流水号) the deposit/withdrawal screens show — see LedgerOrderNumbers.
+                    systemOrderNumber = orderNumberOf(i.ReferenceType, i.ReferenceId),
                     assetId = i.AssetId,
                     // Null for a gas-denominated journal (§5c GasCost): the gas AssetId is deliberately kept
                     // OUT of the deposit catalog, so it has no symbol here. A consumer must render those rows

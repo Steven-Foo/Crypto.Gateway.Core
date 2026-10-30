@@ -122,6 +122,15 @@ public interface IPaymentIntentDirectory
     /// </summary>
     Task<Guid?> FindMatchedDepositIdAsync(Guid merchantId, string merchantTransactionId, CancellationToken cancellationToken = default);
 
+    /// <summary>
+    /// The reverse bridge: for each deposit id, the order (invoice) it paid — its <c>PublicReference</c>, the
+    /// <c>systemOrderNumber</c> the deposit screens show. The Ledger keys deposit journals by the DEPOSIT id
+    /// (one per on-chain payment, and a deposit can arrive with no order at all), so a ledger screen uses this to
+    /// show the order number staff recognise. One query for a page; deposits with no matched order are absent.
+    /// </summary>
+    Task<IReadOnlyDictionary<Guid, Guid>> FindPublicReferencesByDepositIdsAsync(
+        IReadOnlyCollection<Guid> depositIds, CancellationToken cancellationToken = default);
+
     /// <summary>Paged, filtered search behind the Ops deposit-transactions screen — newest first.</summary>
     Task<(IReadOnlyList<PaymentIntentAdminRow> Items, int TotalCount)> SearchAsync(
         PaymentIntentAdminFilter filter, int page, int pageSize, CancellationToken cancellationToken = default);

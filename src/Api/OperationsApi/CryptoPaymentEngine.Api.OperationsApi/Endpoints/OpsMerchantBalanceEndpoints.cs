@@ -95,7 +95,9 @@ public static class OpsMerchantBalanceEndpoints
     /// sensitive money-moving action (that's <see cref="OpsPermissions.Balances.Adjust"/>, above).
     /// </summary>
     private static async Task<IResult> HistoryAsync(
-        Guid id, ILedgerQuery ledger, IAssetCatalog assets, HttpContext http,
+        Guid id, ILedgerQuery ledger, IAssetCatalog assets,
+        CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Contracts.IPaymentIntentDirectory paymentIntents,
+        HttpContext http,
         string? chain = null, string? coin = null,
         DateTimeOffset? fromDate = null, DateTimeOffset? toDate = null,
         int page = 1, int pageSize = 50)
@@ -124,6 +126,9 @@ public static class OpsMerchantBalanceEndpoints
         foreach (var distinctAssetId in items.Select(i => i.AssetId).Distinct())
             assetsById[distinctAssetId] = await assets.FindByIdAsync(distinctAssetId, http.RequestAborted);
 
+        var orderNumberOf = await LedgerOrderNumbers.ResolveAsync(
+            items.Select(i => (i.ReferenceType, i.ReferenceId)), paymentIntents, http.RequestAborted);
+
         return OpsResults.Ok(new
         {
                 merchantId = id,
@@ -140,6 +145,7 @@ public static class OpsMerchantBalanceEndpoints
                         type = FriendlyType(i.ReferenceType, i.Direction),
                         referenceType = i.ReferenceType,
                         referenceId = i.ReferenceId,
+                        systemOrderNumber = orderNumberOf(i.ReferenceType, i.ReferenceId),
                         direction = i.Direction,
                         amount = AmountConversion.ToDisplay(i.Amount, decimals),
                         amountBaseUnits = i.Amount.ToString(),

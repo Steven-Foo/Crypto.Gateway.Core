@@ -1560,6 +1560,7 @@ Response `data` — same level as `page`/`pageSize`/`items`:
       "type": "manual_debit",
       "referenceType": "Adjustment",
       "referenceId": "guid",
+      "systemOrderNumber": "guid|null",
       "direction": "Debit",
       "amount": 1.0,
       "amountBaseUnits": "1000000",
@@ -1574,6 +1575,9 @@ Response `data` — same level as `page`/`pageSize`/`items`:
   ]
 }
 ```
+
+`systemOrderNumber` — the order number (系统流水号) for the row, or null; see the explanation under
+`GET /api/v1/ops/transactions` below (same rule, same meaning).
 
 **`type`** is the field to build UI around — a friendly category derived from the raw `referenceType` +
 `direction`:
@@ -2197,6 +2201,7 @@ Row:
 ```json
 {
   "journalId": "guid", "referenceType": "string", "referenceId": "guid",
+  "systemOrderNumber": "guid|null",
   "assetId": "guid", "coin": "USDT|null", "decimals": 6,
   "description": "string", "direction": "Debit|Credit",
   "amount": "base-unit integer string — NOT display decimal, unlike everywhere else in this API",
@@ -2211,6 +2216,24 @@ can format it without a second lookup against the asset catalog.
 `coin` and `decimals` are **null** on a gas-denominated journal (`referenceType: "GasCost"`): the gas asset
 is deliberately kept out of the deposit catalog, so it has no symbol or published precision. Render those
 rows as raw base units — do **not** fall back to a guessed 6.
+
+**`systemOrderNumber` vs `referenceId` (added 2026-10-30) — use `systemOrderNumber` to link to an order.**
+
+- `referenceId` is the record that **caused** the ledger entry. It is also the ledger's duplicate-protection key,
+  so it never changes. For **withdrawals / payouts / cash-outs** that record *is* the order, so `referenceId` equals
+  the order number. For **deposits / top-ups** it is the **on-chain deposit**, a different record from the
+  **order** (invoice) the deposit screen shows — that is why it didn't match the deposit's 系统流水号.
+- `systemOrderNumber` is the **order number shown on the deposit / withdrawal screens** — the same value
+  `GET /transactions/deposits/{systemOrderNumber}` and `GET /transactions/withdrawals/{systemOrderNumber}` take:
+
+| `referenceType` | `systemOrderNumber` |
+|---|---|
+| `Deposit`, `DepositReversal`, `MerchantTopUp`, `MerchantTopUpReversal` | the order (invoice) this deposit paid; **null** if the deposit arrived with **no order** (a direct transfer) |
+| `Withdrawal`, `WithdrawalReserve`, `WithdrawalSettle`, `WithdrawalRelease` | the withdrawal's order number (same as `referenceId`) |
+| `Adjustment`, `WithdrawalWalletTopUp`, `GasCost`, others | **null** — not tied to a customer order |
+
+Show `systemOrderNumber` as the 系统流水号 column and use it for links; show a dash when it is null. It is looked
+up when the page is read, so **historical rows are covered too — no backfill needed**.
 
 ---
 
