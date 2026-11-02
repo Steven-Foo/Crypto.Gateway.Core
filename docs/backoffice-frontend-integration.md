@@ -10,7 +10,7 @@ the client snippet in section 0 exactly as printed. Section 23b records what tha
 not.
 
 **New here? Start at section 0.** It gets a backend running, hands you a working API client, and lists the
-five conventions that otherwise cost an afternoon each.
+six conventions that otherwise cost an afternoon each.
 
 **Related documents**
 - `docs/merchant-portal-frontend-integration.md` — the **merchant-facing portal** API (`Api/MerchantPortalApi`,
@@ -50,11 +50,12 @@ to `Cors:AllowedOrigins` in the Ops host's `appsettings.Development.json`.
 5. **Money crosses as a display decimal AND an exact base-unit string.** Render the decimal, compare and
    total the integer. Section 5.
 6. **Two-factor is mandatory, and some actions demand a code per use.** Login takes a `code`; a session that
-   has not enrolled can reach nothing but the setup endpoints; and any of 37 routes may answer
+   has not enrolled can reach nothing but the setup endpoints; and any route marked `yes` in the 2FA column of
+   section 0a may answer
    `403 ops.two_factor_required`, at which point you prompt for a code and **replay the same request** with
    an `X-2FA-Code` header. Sections 3b and 3c — build it early, it is one interceptor.
 
-### A client that gets all five right
+### A client that gets all six right
 
 Copy this. It is the whole contract in about sixty lines, and it was run against a live host exactly as
 printed — login, an authenticated read, session restore, a CSRF-carrying write, a typed 404, the 401
@@ -173,14 +174,15 @@ Generated from the endpoint source, so it cannot drift from what the host actual
 is the section in this document that describes the payload.
 
 `{id}` stands for a GUID path parameter. `_any session_` means any authenticated staff member, with no
-specific permission — used only for login, the session endpoints, two-factor enrollment, and the two
-landing-page reads where gating would hand a new account a blank screen.
+specific permission — used only for the session endpoints, two-factor enrollment, and the two landing-page
+reads where gating would hand a new account a blank screen. (`POST /auth/login` is listed the same way but needs
+no session at all.)
 
 **The `2FA` column** marks a route that can demand a fresh authenticator code in the `X-2FA-Code` header —
 *if* an admin has marked that action as guarded in the back office (§3c). It is not a fixed property of the
 route: the platform-wide policy decides, and it can change at any time. Treat every `yes` row as "may return
 `403 ops.two_factor_required` at any moment", and handle it in one place rather than per screen — §3c shows
-the interceptor that covers all 38 of them and every one added later.
+the interceptor that covers all of them and every one added later.
 
 | Method | Route | Permission | 2FA | §  |
 |---|---|---|---|---|
@@ -371,7 +373,7 @@ Codes come from two places:
 | `ops.unknown_guarded_action` | 400 | A saved policy named an action this host does not enforce |
 | `two_factor.code_required` | 401 | Login: the account is enrolled and sent no code |
 | `two_factor.invalid_code` | 401 | Wrong or expired authenticator code (login or a guarded action) |
-| `two_factor.locked_out` | 403 | Too many wrong codes; the factor is locked for ~15 minutes |
+| `two_factor.locked_out` | 401 | Too many wrong codes; the factor is locked for ~15 minutes |
 | `ops.not_found` | 404 | A single-record detail lookup matched nothing |
 | `ops.invalid_chain` | 400 | Unparseable `chain` / `network` |
 | `ops.invalid_status` | 400 | Unknown `status` filter value |
@@ -396,8 +398,8 @@ Codes come from two places:
 |---|---|
 | 200 | Success |
 | 400 | Bad request — validation failure, malformed input, unknown enum value in a query param |
-| 401 | No/invalid/expired bearer token |
-| 403 | Valid session, but missing the required permission code for this route |
+| 401 | No/invalid/expired session (cookie or bearer), wrong login, or a wrong/locked 2FA code — check `errorCode` |
+| 403 | Valid session, but refused: missing permission, missing CSRF token, or a 2FA code is required (`errorCode` says which) |
 | 404 | Entity not found |
 | 409 | Conflict — invalid state transition (e.g. approving an already-approved withdrawal, resuming a wallet that isn't suspended) |
 | 500 | Unexpected server error |
@@ -514,8 +516,9 @@ refuse such a session.
 
 ### The permission model — read this carefully, it drives every screen's visibility
 
-- Every route requires one specific **permission code** (e.g. `ops.wallets.manage`) except
-  `/auth/login`, `/auth/logout`, `/auth/me`, and `/health`.
+- Every route requires one specific **permission code** (e.g. `ops.wallets.manage`) except the ones marked
+  `_any session_` in section 0a: login/logout/`/auth/me`, the two-factor setup routes, `/dashboard`,
+  `/reconciliation`, and `/health`.
 - A permission code is either held or not — there's no partial/read-vs-write split beyond what the code
   name itself encodes (e.g. `ops.merchants.view` vs `ops.merchants.manage` are two separate codes).
 - The special code **`"*"`** (wildcard) grants everything — the seeded dev Admin role holds only `["*"]`.
@@ -538,7 +541,7 @@ The full, current list (also use this endpoint at runtime — don't hardcode, th
 | Code | Grants |
 |---|---|
 | `ops.merchants.view` | Read merchant list/detail/allowed-IPs |
-| `ops.merchants.manage` | Create merchant, activate/suspend, update allowed IPs |
+| `ops.merchants.manage` | Create merchant, activate/freeze/close, update allowed IPs, settlement wallets |
 | `ops.merchants.rotate-key` | Regenerate a merchant's API credential |
 | `ops.fees.view` | Read a merchant's fee schedule |
 | `ops.fees.manage` | Set a merchant's fee schedule |
@@ -636,7 +639,7 @@ Request: `{ "code": "418392" }`
 saved them before you navigate away.
 
 Failures: `401 two_factor.invalid_code` (wrong or expired — let them retype),
-`403 two_factor.locked_out`, `404 two_factor.enrollment_not_started` (call `/enroll` first).
+`401 two_factor.locked_out`, `404 two_factor.enrollment_not_started` (call `/enroll` first).
 
 ### `POST /api/v1/ops/auth/2fa/recovery-codes` — replace the set
 
@@ -698,7 +701,7 @@ works with no frontend change at all.
   consumed.
 - **Do not cache the code.** It is a per-action prompt by design; holding it in memory to auto-fill later
   requests defeats the control the operator asked for.
-- After ~10 consecutive wrong codes the factor locks for 15 minutes (`403 ops.two_factor_locked`).
+- After ~10 consecutive wrong codes the factor locks for 15 minutes (`401 two_factor.locked_out`).
 
 ### Failure codes on a guarded action
 
@@ -706,7 +709,7 @@ works with no frontend change at all.
 | --- | --- | --- |
 | `ops.two_factor_required` | 403 | No `X-2FA-Code` header. `data.action` says what is guarded. Prompt and replay. |
 | `two_factor.invalid_code` | 401 | Wrong or expired code. Keep the form, clear the code, let them retype. |
-| `two_factor.locked_out` | 403 | Too many wrong codes. |
+| `two_factor.locked_out` | 401 | Too many wrong codes; locked ~15 minutes. Like `invalid_code`, this 401 is **not** a logout. |
 | `ops.two_factor_recovery_not_accepted` | 403 | This session signed in with a recovery code. They must sign in with the authenticator. |
 | `ops.two_factor_not_enrolled` | 403 | No active factor (should be unreachable — enrollment is forced). |
 
@@ -1073,9 +1076,16 @@ Response shape:
 
 ## 5. Money / decimals
 
-All monetary fields on the wire are **decimal display values** (e.g. `1.5` USDT), already converted from
-base units server-side. Never send/parse money as strings elsewhere in this API — this is the one place it
-crosses to display form.
+**On the way in**, send every amount as a **display decimal** (e.g. `1.5` for 1.5 USDT). The server converts
+it and **refuses** a value with more decimals than the coin allows (a 400, never a silent round).
+
+**On the way out**, most amounts come **twice**: a display decimal for showing (`balance: 1.5`) and the exact
+integer in the coin's smallest unit as a **string** (`balanceBaseUnits: "1500000"` — USDT has 6 decimals).
+Show the decimal. Use the `…BaseUnits` string whenever you compare, add up or store an amount — parse it with
+`BigInt` or a decimal library, never JavaScript `number`, which loses precision on large values.
+
+**One exception:** the ledger-wide search (§17 `GET /transactions`) returns `amount`/`balanceBefore`/
+`balanceAfter` **only** as base-unit strings, plus the row's `decimals` to format them. The ledger never rounds.
 
 ### Percent vs basis points — standardized, read this before building any rate field
 
@@ -1142,7 +1152,7 @@ Paginated. Row:
 { "staffUserId": "guid", "username": "admin", "roleId": "guid", "roleName": "Admin", "status": "Active", "requireTwoFactor": true, "twoFactorBound": false, "createdAt": "..." }
 ```
 `status` is `"Active"` or `"Disabled"` (PascalCase — note this differs from the lowercase-snake vocab used
-on deposit/withdrawal status, see §14). `requireTwoFactor` is the LIVE force/optional switch (§3d) —
+on deposit/withdrawal status, see §18). `requireTwoFactor` is the LIVE force/optional switch (§3d) —
 independent of whether the account has actually finished setting up an authenticator.
 
 `twoFactorBound` answers that second question: **`true`** = the account has bound an authenticator (setup
@@ -1406,7 +1416,7 @@ meaning as the staff account field, §7) — read-only here like everything else
 
 `requireTwoFactor` on the row above is **read-only from this host** — this Ops API has no write endpoint for
 it. Flipping a merchant portal account's switch after creation is done by the merchant's own portal admin,
-from inside the portal (`merchant-portal-frontend-integration.md` §3b/§7), not by platform staff.
+from inside the portal (`merchant-portal-frontend-integration.md` §3c/§9), not by platform staff.
 
 **403 `merchant_user.only_primary_resettable_by_staff` for any other account id** — a teammate's password is
 the merchant's own business, reset by its own admin inside the portal, never by staff. This is enforced at the
@@ -1504,7 +1514,10 @@ other code — by default only the seeded Admin role (`"*"`) can call these two 
 this exact code added explicitly via §6. Posts immediately — there is no second-approver/threshold step
 today, regardless of amount, so treat this as a sensitive, rarely-used action in the UI (e.g. a confirmation
 dialog), not a routine one. Every call is fully audit-logged (§8: `merchant.balance_credited` /
-`merchant.balance_debited`, with the amount/asset/reason in `reason`).
+`merchant.balance_debited`, with the merchant id + amount/asset/reason in `reason`). Since 2026-10-30 these
+entries have `entityType: "MerchantBalanceAdjustment"` and `entityId` = the `adjustmentId` (older ones:
+`entityType: "Merchant"`, `entityId` = merchant id) — so an audit filter on entity type `Merchant` no longer
+catches new adjustments; filter by action instead.
 
 Both endpoints share the same request body:
 ```json
@@ -1524,8 +1537,10 @@ twice. There is no idempotency without it beyond the usual "don't double-click" 
 ### `POST /api/v1/ops/merchants/{id}/balance/credit` — `ops.balances.adjust`
 Adds `amount` to the merchant's balance. Response:
 ```json
-{ "isSuccess": true, "data": { "merchantId": "guid", "assetId": "guid", "coin": "USDT", "network": "Tron", "outcome": "Posted" }, "error": null }
+{ "isSuccess": true, "data": { "merchantId": "guid", "adjustmentId": "guid", "assetId": "guid", "coin": "USDT", "network": "Tron", "outcome": "Posted" }, "error": null }
 ```
+`adjustmentId` is the one you sent, or the one minted for you — it is the row's `referenceId` on the ledger
+screens and is what links the row to who made it (`operator`).
 `outcome` is `"Posted"` normally, or `"AlreadyPosted"` if `adjustmentId` matches a prior call (safe replay,
 nothing double-credited).
 
@@ -1564,8 +1579,11 @@ Response `data` — same level as `page`/`pageSize`/`items`:
       "direction": "Debit",
       "amount": 1.0,
       "amountBaseUnits": "1000000",
+      "balanceBefore": 35.5,
+      "balanceBeforeBaseUnits": "35500000",
       "balanceAfter": 34.5,
       "balanceAfterBaseUnits": "34500000",
+      "operator": "admin",
       "assetId": "guid",
       "coin": "USDT",
       "network": "Tron",
@@ -1601,7 +1619,11 @@ posted — reading top to bottom (newest first) shows the balance stepping backw
 on every page, not just the first, and each asset's running total is independent — if `chain`/`coin` are
 omitted and the merchant holds more than one asset, rows for different assets are interleaved and each keeps
 its own separate `balanceAfter` sequence rather than sharing one running total. `balanceAfterBaseUnits` is the
-exact integer string, same rounding caveat as `amountBaseUnits`.
+exact integer string, same rounding caveat as `amountBaseUnits`. **`balanceBefore`** (+ `balanceBeforeBaseUnits`,
+added 2026-10-30) is the balance just before the entry — `balanceAfter` minus a credit, plus a debit.
+
+**`operator`** (added 2026-10-30) — the staff username on a `manual_credit` / `manual_debit` row; null on every
+other row. Only adjustments made after this release carry one (see the same note under `GET /transactions`).
 
 **Two things that trip people up:**
 - **A successful withdrawal shows only ONE row here, not two.** The money actually leaves the merchant's
@@ -1615,10 +1637,7 @@ exact integer string, same rounding caveat as `amountBaseUnits`.
   useful for deep-linking to §12/§13, but don't expect it to match `systemOrderNumber` on those screens for
   every row (an intent-less deposit, for instance, has no `PaymentIntent` at all).
 
-**Known gaps, not built today:** no running balance-after-this-entry column (would need a historical balance
-snapshot per posting, not just the current cache); no way to see which staff member made a `manual_credit`/
-`manual_debit` row directly here — cross-reference `audit.AuditEntry` via §8 for that; no `type` filter query
-param (client-side filter on the returned page for now).
+**Known gap, not built today:** no `type` filter query param (client-side filter on the returned page for now).
 
 ---
 
@@ -1647,7 +1666,7 @@ param (client-side filter on the returned page for now).
 ```
 An unpriced merchant simply has an empty `fees` array. **This is not necessarily zero fee** — correcting an
 earlier version of this doc: if `Merchant:DefaultFee` config is set to a non-zero platform default, an unpriced
-merchant is charged *that* at deposit/withdrawal time instead (see §9b's `topUpFee*` note below for the one
+merchant is charged *that* at deposit/withdrawal time instead (see the `topUpFee*` note below for the one
 schedule that's a genuine, unconditional zero). An empty array only guarantees "this merchant has no fee
 explicitly declared" — not what it will actually be charged.
 `minimumDeposit`/`maximumDeposit`/`minimumWithdrawal`/`maximumWithdrawal`/`merchantWithdrawalCapFlat`/
@@ -1765,23 +1784,25 @@ since a crypto deposit can't be rejected after it's already arrived on-chain.
 
 Response 200: `{ "merchantId": "guid", "assetId": "guid", "coin": "USDT", "network": "Tron" }`.
 
-#### Fees are deducted from what arrives — not added on top
+#### How fees are taken — deposits: out of what arrives; payouts and cash-outs: on top
 
-A 100 USDT deposit at 100 bps means the payer sends **100**, the merchant is credited **99**, and the
-platform earns **1**. The invoice always shows exactly the amount requested. (An earlier version grossed
-deposits up so the merchant netted its target — that behaviour was removed; do not describe fees to staff
-as "charged to the payer on top".)
+**Deposits.** A 100 USDT deposit at a 1% fee means the payer sends **100**, the merchant is credited **99**,
+and the platform earns **1**. The invoice always shows exactly the amount requested. (An earlier version
+grossed deposits up so the merchant netted its target — that behaviour was removed.)
 
-Because the fee is deducted, `depositFeeBps` accepts the full `0…10000` range — 10000 (100%) is legal,
-and simply means the merchant is credited nothing. It is absurd, not impossible, so the platform is
-allowed to set it.
+**Payouts and merchant cash-outs** work the other way round: the recipient gets the **full amount** and the
+fee is taken from the merchant's balance **on top** — a 500 cash-out with a 2.5 fee pays out 500 and takes
+502.5 from the balance.
+
+Because a deposit fee comes out of what arrives, `depositFeePercent` accepts the full `0…100` range — 100%
+is legal and simply means the merchant is credited nothing. It is absurd, not impossible.
 
 #### `topUpFee*` — merchant top-ups are priced separately
 
-A **merchant top-up** is the merchant funding its own balance on-chain (portal §8.4), not a customer
-payment. It has its own schedule which **defaults to zero and never inherits `Merchant:DefaultFee`** — so
-an unpriced merchant tops up free even while its customer deposits are charged the platform default.
-Setting `topUpFeeBps` non-zero charges the merchant for adding its own funds; that is a deliberate
+A **merchant top-up** is the merchant funding its own balance on-chain (merchant portal doc §8.5), not a
+customer payment. It has its own schedule which **defaults to zero and never inherits `Merchant:DefaultFee`** —
+so an unpriced merchant tops up free even while its customer deposits are charged the platform default.
+Setting `topUpFeePercent` above zero charges the merchant for adding its own funds; that is a deliberate
 commercial choice, not the norm.
 
 Top-up balance is also **exempt from the merchant's settlement period (T+N)** — it is spendable as soon as
@@ -1945,8 +1966,6 @@ Row:
   "merchantName": "string|null — null only if the merchant record can't be resolved",
   "systemOrderNumber": "guid",
   "merchantOrderNumber": "the merchant's own tx reference",
-  "userId": null,
-  "payerAddress": null,
   "receivingAddress": "T...",
   "network": "Tron",
   "coin": "USDT",
@@ -1959,16 +1978,17 @@ Row:
   "kind": "Customer",
   "createdAt": "...",
   "status": "pending",
-  "callback": "Pending",
+  "callback": "PendingNotification",
   "callbackFailedCount": 0,
   "callbackNextAttemptAt": "..."
 }
 ```
-`status` ∈ `pending | confirmed | expired | failed` (lowercase).
+`status` ∈ `pending | confirmed | expired | failed` (lowercase). `callback` is `PendingNotification`,
+`Notified` or `Abandoned` (§16), or `null` if the merchant asked for no callback.
 `receivedAmount`/`fee`/`txHash`/`confirms` are all `null` until a deposit has actually matched the invoice.
 
 `kind` ∈ `Customer | MerchantTopUp`. `type` is always `"deposit"` and cannot tell them apart, so use `kind`
-when investigating a merchant's balance: a **top-up** is the merchant funding its own float (portal §8.4) —
+when investigating a merchant's balance: a **top-up** is the merchant funding its own float (merchant portal doc §8.5) —
 priced on a separate zero-default schedule and **exempt from that merchant's T+N settlement hold**, so it
 explains a withdrawable balance that a settlement period would otherwise appear to contradict.
 
@@ -1980,8 +2000,9 @@ attribution is wanted, it will be added deliberately as a populated field.)
 Same query filters as deposits (minus `coin` needing `network` — same rule applies here too), plus `kind`
 (`"user"` | `"merchant"` — filters to end-user payouts or merchant cash-outs; omit for both).
 
-`status` here takes the withdrawal vocabulary: `pending` | `pending_merchant_approval` | `pending_approval` |
-`insufficient_balance` | `awaiting_release` | `confirmed` | `failed`. It filters on the same collapsed value
+`status` here takes the withdrawal vocabulary: `pending` | `pending_merchant_approval` | `pending_screening` |
+`pending_approval` | `insufficient_balance` | `awaiting_release` | `confirmed` | `failed`, plus the three
+merchant-settlement statuses `pending_admin_audit` | `pending_finance_transfer` | `finance_settled` (§19b). It filters on the same collapsed value
 the rows report, applied in SQL across the whole set with `totalCount` reflecting it — this is what makes a
 settlement queue trustworthy, since previously an operator could only see the outstanding work that happened
 to land on the page they loaded. Note `pending` deliberately collapses the entire pre-confirm pipeline
@@ -2011,7 +2032,6 @@ Row:
   "merchantName": "string|null — null only if the merchant record can't be resolved",
   "systemOrderNumber": "guid",
   "merchantOrderNumber": "the merchant's own tx reference",
-  "userId": null,
   "receivingAddress": "T...",
   "network": "Tron",
   "coin": "USDT",
@@ -2024,23 +2044,35 @@ Row:
   "kind": "User | Merchant — end-user payout vs. the merchant's own earnings cash-out",
   "createdAt": "...",
   "status": "pending",
-  "callback": "Pending",
+  "rejected": false,
+  "failureReason": null,
+  "screeningDecision": "Allow | Review | Block | Unavailable | null",
+  "screeningScore": 3,
+  "screeningId": "guid|null",
+  "auditedBy": null, "auditedAt": null, "settledBy": null, "settledAt": null, "settlementSourceAddress": null,
+  "callback": "PendingNotification",
   "callbackFailedCount": 0,
   "callbackNextAttemptAt": "..."
 }
 ```
-`status` ∈ `pending | pending_merchant_approval | pending_approval | insufficient_balance | awaiting_release | confirmed | failed`
-(lowercase). The states that need a human action, not just waiting:
+`status` uses the withdrawal vocabulary above (lowercase). `rejected` / `failureReason` tell a person's
+rejection apart from a system failure (both are `failed`) — see §19b. `screeningDecision` / `screeningScore` /
+`screeningId` are the AML verdict on a user payout's destination (null when it wasn't screened) — show them on
+the approval queue so staff see *why* a payout was held, and link `screeningId` to §22b. The settlement fields
+are explained in §19b. The states that need a human action, not just waiting:
 - **`pending_approval`** → build an Approve/Reject action (§14 below). Plain `pending` needs no action —
-  it's already approved and self-processing.
+  it's already approved and self-processing. A `pending_approval` row with a `screeningDecision` of `Review` or
+  `Unavailable` was held by the AML check — show the verdict next to the buttons.
+- **`pending_screening`** → the destination is being AML-checked; it moves on by itself, normally within
+  seconds (checks run about one per second, so a large batch takes longer). No action needed.
 - **`insufficient_balance`** → the hot wallet can't physically cover it yet. Funds stay reserved (not
   lost). **Auto-resumes** once the wallet holds enough — no endpoint needed to un-stick it. An admin funds
   the wallet from a company wallet and records it as a top-up (§20). Use `sourceWalletId` to jump to the Wallets screen and check that wallet's real
   on-chain balance if investigating.
 - **`awaiting_release`** → funded but above the auto-send threshold, needs an operator Release action
   (§15 below).
-- **`pending_merchant_approval`** → a portal-initiated payout awaiting the MERCHANT's own approver, in their
-  own portal. Platform staff can see it but must not action it — there is no Ops endpoint for this state. It
+- **`pending_merchant_approval`** → a payout awaiting the MERCHANT's own approver, in their own portal (only
+  for merchants with `requiresPayoutApproval` on, §19 — whether the payout came from the portal or the API). Platform staff can see it but must not action it — there is no Ops endpoint for this state. It
   leaves only when the merchant approves (then it either sends, or becomes `pending_approval` if it is above
   the threshold) or the merchant rejects it.
 
@@ -2200,11 +2232,16 @@ also be set, 400 otherwise, and today only resolves deposit-side references, not
 Row:
 ```json
 {
-  "journalId": "guid", "referenceType": "string", "referenceId": "guid",
+  "journalId": "guid",
+  "merchantId": "guid|null", "merchantName": "string|null",
+  "referenceType": "string", "referenceId": "guid",
   "systemOrderNumber": "guid|null",
   "assetId": "guid", "coin": "USDT|null", "decimals": 6,
   "description": "string", "direction": "Debit|Credit",
   "amount": "base-unit integer string — NOT display decimal, unlike everywhere else in this API",
+  "balanceBefore": "base-unit integer string|null",
+  "balanceAfter": "base-unit integer string|null",
+  "operator": "string|null",
   "createdAt": "..."
 }
 ```
@@ -2235,6 +2272,21 @@ rows as raw base units — do **not** fall back to a guessed 6.
 Show `systemOrderNumber` as the 系统流水号 column and use it for links; show a dash when it is null. It is looked
 up when the page is read, so **historical rows are covered too — no backfill needed**.
 
+**Merchant, balance before/after, operator (added 2026-10-30).**
+
+- `merchantId` / `merchantName` (商户) — the merchant the row belongs to. Needed because with no `merchantId`
+  filter the list mixes every merchant. Null only on a purely platform-internal journal (not expected here).
+- `balanceBefore` / `balanceAfter` (变动前余额 / 变动后余额) — **that row's merchant's** balance in **that row's
+  coin**, just before and just after the entry. Base-unit integer strings, like `amount` — format them with the
+  row's `decimals`. They are per row, so they stay correct when merchants and coins are mixed on one page: each
+  merchant+coin keeps its own running balance, never a combined total. Correct on every page, and covers
+  historical rows. **Null** when the entry didn't move the merchant's balance at all (e.g. a settlement journal
+  that only moves money between platform accounts) — show a dash.
+- `operator` (操作人) — the staff username behind a **manual credit/debit** (`referenceType: "Adjustment"`).
+  Null for every system-driven row (deposits, withdrawals, fees…) — show a dash, or "System".
+  **Only adjustments made after this release show an operator**: older ones were audit-logged against the
+  merchant rather than the adjustment, so they can't be matched to a row (they stay findable in the audit log, §8).
+
 ---
 
 ## 18. Status vocabulary cheat-sheet (casing is inconsistent across resources — this is real, not a typo)
@@ -2262,7 +2314,7 @@ obtained, and the payout flow holds such a payout for staff by default.
 
 ## 19. Merchant terms — settlement period, wallet, caps, limits, threshold
 
-Five setters on top of §10's fees. All are **display decimals** on the way in, converted at the edge, and
+The setters below sit on top of §10's fees. Amounts are **display decimals** on the way in, converted at the edge, and
 **over-precision is refused rather than truncated** (§5).
 
 | Endpoint | Permission | Body |
@@ -2294,8 +2346,8 @@ Plus a top-level `warnings` array alongside `data` (see below) on the two writes
 (`PUT`/`POST .../settlement-wallets`) — activate/retire never carry warnings, since re-screening on
 activation only ever raises a hard refusal (`merchant.settlement_wallet_blocked`), never a warning.
 
-A merchant may keep **several** addresses on file per chain; `status` is `"Active"` (this is where the
-chain's cash-outs are paid) or `"Retired"` (on file, not in use) — read the per-merchant
+A merchant may keep **several** addresses on file per chain; `status` is one of the five in §19c (`Active` =
+where the chain's cash-outs go by default; `Retired` = approved standby) — read the per-merchant
 `GET /ops/merchants/{id}` response's `settlementWallets[]` array for the full set with all their
 statuses, rather than inferring it from individual write responses.
 
@@ -2320,7 +2372,8 @@ Read it back on `GET /ops/merchants/{id}` as `requiresPayoutApproval`.
 
 **`null` vs `0` is a real distinction on every optional amount, not a formality:**
 
-- `null` = **unset** ⇒ the platform config value applies (`Withdrawal:Policies`).
+- `null` = **unset** ⇒ the platform config value applies (`Withdrawal:Policies` for withdrawal limits and the
+  approval threshold; `Deposit:Policies` for the deposit minimum — there is no platform deposit maximum).
 - `0` = an explicit zero — "no minimum", "cap cash-out at zero", "everything needs approval".
 
 Sending `0` where you meant "clear it" changes behaviour. A limits form must be able to submit `null`.
@@ -2331,7 +2384,8 @@ value cannot be shown:
 
 | Value | Read from |
 |---|---|
-| `merchantWithdrawalFlatCap`, `merchantWithdrawalPercentBps` | `GET .../fees` |
+| `merchantWithdrawalCapFlat`, `merchantWithdrawalCapPercent` | `GET .../fees` |
+| `minimumDeposit`, `maximumDeposit` | `GET .../fees` |
 | `minimumWithdrawal`, `maximumWithdrawal` | `GET .../fees` |
 | `approvalThreshold` | `GET .../fees` |
 | `settlementDelayDays`, `settlementWallets`, `requiresPayoutApproval` | `GET /ops/merchants/{id}` |
@@ -2355,8 +2409,10 @@ money until staff approve it here** — so a compromised merchant login still ca
 - An address gets on file **two ways**:
   1. **Staff add it** here (`PUT .../settlement-wallet` or `POST .../settlement-wallets`) → **approved on the spot**.
   2. **The merchant submits it** in the merchant BO → **`PendingApproval`** until staff approve or reject it.
-- **Many addresses per network may be approved; exactly one is `Active`** — the one cash-outs are paid to.
-  **Staff and the merchant** can both switch which *approved* address is active; the previous one goes to standby.
+- **Many addresses per network may be approved; exactly one is `Active`** — the default cash-out destination
+  (主). The merchant may also pick an approved **standby** (备用) for a single cash-out (merchant portal doc §8.2);
+  the destination is always one of the approved addresses. **Staff and the merchant** can both switch which
+  *approved* address is active; the previous one goes to standby.
 - **The first approved address becomes active automatically** (when the merchant has none active on that
   network). Later approvals go on **standby** — the money keeps going where it went until someone switches.
 - AML screening runs when staff add an address and **when staff approve** a merchant's one. A **sanctioned**
@@ -2492,6 +2548,12 @@ a user payout**, which the platform pays itself:
 | `auditedBy` / `auditedAt` | Who cleared it, and when (also set on an audit rejection) |
 | `settledBy` / `settledAt` | Who recorded the external payment, and when |
 | `settlementSourceAddress` | The company wallet that paid it |
+
+Two more on **every** withdrawal row, user payouts included (added 2026-10-30): **`rejected`** (true when a person
+declined it — staff, the settlement audit, or the merchant's own approver — rather than the system failing it;
+both report `status: "failed"`) and **`failureReason`** (the reason typed at rejection, or the system's failure
+detail; null otherwise). The merchant portal shows the merchant the reason for rejections only, never the
+system detail — so write rejection reasons as something the merchant can read.
 
 For an off-system settlement this is the **only** audit trail there is — the chain cannot tell you who acted,
 because the source wallet is not ours.
@@ -2752,7 +2814,8 @@ POST /api/v1/ops/compliance/screenings/re-screen       ops.compliance.manage
 case-insensitive match, not a substring search, so paste a whole address.
 
 `decision` is one of `Allow`, `Review`, `Block`, `Unavailable`. `purpose` is one of
-`PayoutDestination`, `SettlementWallet`, `DepositSource`.
+`PayoutDestination`, `SettlementWallet`, `DepositAddress`, `ColdCollectionWallet`, `DepositSource`
+(`DepositSource` is reserved — nothing screens it today).
 
 **This list is the history, not the current state.** `items` and `totalCount` are rows, including superseded
 verdicts, and `decision` matches any row. An address blocked last month and cleared since still appears
@@ -2841,9 +2904,9 @@ Use this for a verdict column on a wallet list: **one call per page**, not one r
 
 ### Where screening surfaces elsewhere, and how to link it
 
-Screening verdicts appear on two other screens. Both carry a `screeningId`, so **link it to the detail
-route above** rather than repeating the indicators inline — one place renders the evidence, and the two can
-never disagree.
+Screening verdicts appear on four other screens. Each carries a `screeningId`, so **link it to the detail
+route above** rather than repeating the indicators inline — one place renders the evidence, so the screens
+can never disagree.
 
 | Screen | Fields | What a click should open |
 |---|---|---|
@@ -2991,9 +3054,9 @@ Results appear in the screening list under `purpose=DepositAddress`, which is di
 ```
 
 `walletId` is what the three §19 actions (`activate`/`retire`/re-add) address — read it from here rather
-than from a write response if you need to act on a wallet you did not just create. `status` is
-`"Active"` (this is where the chain's cash-outs are paid — **exactly one per chain**) or `"Retired"`
-(on file, not in use). `label` is the operator's own name for the address, for telling two whitelisted
+than from a write response if you need to act on a wallet you did not just create. `status` is one of the
+five in §19c — `"Active"` (the default cash-out destination, **exactly one per chain**), `"Retired"` (approved
+standby, which the merchant may pick for a single cash-out), or `PendingApproval` / `Rejected` / `Cancelled`. `label` is the operator's own name for the address, for telling two whitelisted
 addresses apart without comparing base58 strings; null unless staff set one.
 
 The four screening fields (`screeningDecision`, `screeningScore`, `screeningId`, `screenedAt`) are all
@@ -3002,8 +3065,9 @@ Render "not screened", never a tick.
 
 **Show `screenedAt`, not just the decision.** A verdict is a snapshot. An Allow from eight months ago on the
 address that receives all of a merchant's earnings is worth surfacing differently from one taken this week.
-A background pass re-screens ACTIVE wallets periodically (retired ones are not re-screened — nothing is
-paid to them), so the date is meaningful.
+When switched on (`Merchant:Screening:RescreenSettlementWallets`, off by default), a background pass
+re-screens every **approved** wallet — active and standby, since a standby can be chosen for a cash-out — so the
+date is meaningful.
 
 `screeningId` deep-links to `GET /ops/compliance/screenings/{id}` for the indicators and the provider
 payload. The list endpoint for merchants does **not** carry `settlementWallets` at all — only the
@@ -3021,16 +3085,13 @@ Screen one address at a time from a record the operator is already looking at.
 
 ---
 
-
----
-
 ## 23. Local development data
 
 An empty database makes every screen look broken in the same way, so there is a seeder that produces a
 realistic portfolio: several merchants with different pricing, settlement periods and lifecycle states, deposit
 invoices in varied states (including one unpaid and one underpaid), credited deposits with real fee splits, and
-withdrawals sitting in **every** status this API exposes — `confirmed`, `pending_approval`,
-`pending_merchant_approval`, `insufficient_balance`.
+withdrawals in the main statuses — `confirmed`, `pending_approval`, `pending_merchant_approval`,
+`insufficient_balance`.
 
 ```powershell
 ./tools/dev/Setup-LocalEnv.ps1
@@ -3051,8 +3112,8 @@ Two things worth knowing when reading the data it produces:
 
 ## 23b. Verified against a running host (2026-09-11)
 
-Every route in this document was exercised over HTTP against a booted Ops host before this section was
-written, rather than checked off against the source. What was tested and what it proved:
+A historical record: on 2026-09-11 every route that existed then (75) was exercised over HTTP against a booted
+Ops host. Routes added since were tested as they were built (noted below). What was tested and what it proved:
 
 **All 75 route-and-method pairs are reachable and return the envelope.** Path parameters were filled with a
 valid-shaped but nonexistent id and bodies were sent empty, so writes answered with validation or not-found
@@ -3129,9 +3190,9 @@ is this project's convention for Ops endpoints — they are thin wrappers over a
 - **Screening is OFF by default** (section 22b) - three independent flags, all defaulting off. Where none
   is enabled every verdict reads `Unavailable` and no payout is ever held for screening. The screens work,
   they are simply empty. Do not render that as broken.
-- **No bulk re-screen and no scheduled re-screening** (section 22b) - a verdict is cached for 30 days and
-  nothing re-checks a stored settlement wallet. Staff force one address at a time, from a record they are
-  already looking at.
+- **No bulk re-screen** (section 22b) — a verdict is cached for 30 days. Scheduled re-screening of settlement
+  wallets exists but is **off by default** (`Merchant:Screening:RescreenSettlementWallets`); otherwise staff
+  force one address at a time, from a record they are already looking at.
 - **`userId` / `payerAddress` were removed**, not left null: both were hardcoded placeholders on every
   deposit/withdrawal row and carried no information. If real user attribution is wanted, it will be added
   deliberately as a populated field.

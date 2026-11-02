@@ -198,7 +198,7 @@ public sealed class SetApprovalThresholdRequest
 /// A staff-initiated manual credit or debit to a merchant's ledger balance — NOT backed by a real on-chain
 /// deposit/withdrawal (e.g. a support-ticket correction). <see cref="Amount"/> is in <b>display</b> units,
 /// converted to base units at this edge (§14); <see cref="Reason"/> is mandatory and lands in the journal
-/// description + audit log. <see cref="AdjustmentId"/> is optional — omit it to let the Ledger mint a fresh
+/// description + audit log. <see cref="AdjustmentId"/> is optional — omit it and the endpoint mints a fresh
 /// idempotency key, or supply a stable value (e.g. a support-ticket id) so a retried request replays safely
 /// instead of double-posting.
 /// </summary>

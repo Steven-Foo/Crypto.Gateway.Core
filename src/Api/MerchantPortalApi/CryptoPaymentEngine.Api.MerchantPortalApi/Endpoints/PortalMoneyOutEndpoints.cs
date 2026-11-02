@@ -30,6 +30,9 @@ public static class PortalMoneyOutEndpoints
             .RequirePortalTwoFactor(MerchantGuardedActions.PayoutCreate);
         app.MapPost("/api/v1/portal/cash-outs", CreateCashOutAsync).RequirePortalPermission(PortalPermissions.CashOut.Create)
             .RequirePortalTwoFactor(MerchantGuardedActions.CashOutCreate);
+        // A read: creates and reserves nothing, so no 2FA code. Same permission as submitting: whoever may cash
+        // out may see what it would cost.
+        app.MapGet("/api/v1/portal/cash-outs/quote", QuoteCashOutAsync).RequirePortalPermission(PortalPermissions.CashOut.Create);
 
         // The merchant-side approval stage. A separate permission from Create, so a user who may only submit a
         // payout cannot also sign it off.
@@ -136,23 +139,81 @@ public static class PortalMoneyOutEndpoints
         if (error is not null)
             return error;
 
-        // No destination is accepted — MerchantWithdrawalService resolves the whitelisted settlement wallet (§10).
-        var result = await cashOuts.RequestAsync(
+        // No free-form destination is accepted, only a choice among the merchant's staff-approved settlement
+        // wallets, resolved and checked by MerchantWithdrawalService (§10).
+        var result = await cashOuts.RequestWithDetailsAsync(
             new MerchantWithdrawalCommand(
-                PortalTenant.MerchantId(http), asset!.AssetId, asset.Chain, amount, request.MerchantOrderNumber.Trim()),
+                PortalTenant.MerchantId(http), asset!.AssetId, asset.Chain, amount, request.MerchantOrderNumber.Trim(),
+                SettlementWalletId: request.SettlementWalletId),
             http.RequestAborted);
 
-        return result.IsFailure
-            ? FailWithdrawal(result.Error!)
-            : Ok(new
-            {
-                systemOrderNumber = result.Value.WithdrawalId,
-                merchantOrderNumber = request.MerchantOrderNumber.Trim(),
-                network = asset.Chain.ToString(),
-                coin = asset.Symbol,
-                amount = request.Amount,
-                status = result.Value.Status,
-            });
+        if (result.IsFailure)
+            return FailWithdrawal(result.Error!);
+
+        var charged = result.Value;
+        return Ok(new
+        {
+            systemOrderNumber = charged.WithdrawalId,
+            merchantOrderNumber = request.MerchantOrderNumber.Trim(),
+            network = asset.Chain.ToString(),
+            coin = asset.Symbol,
+            amount = request.Amount,
+            status = charged.Status,
+            settlementAddress = charged.DestinationAddress,
+            // What was actually charged, read back from the record, never recomputed here.
+            fee = AmountConversion.ToDisplay(charged.Fee, asset.Decimals),
+            feeBaseUnits = charged.Fee.ToString(),
+            amountReceived = AmountConversion.ToDisplay(charged.Amount, asset.Decimals),
+            amountReceivedBaseUnits = charged.Amount.ToString(),
+            totalDebit = AmountConversion.ToDisplay(charged.TotalDebit, asset.Decimals),
+            totalDebitBaseUnits = charged.TotalDebit.ToString(),
+        });
+    }
+
+    /// <summary>
+    /// The cash-out preview (estimated fee / amount received): what a cash-out would cost before the merchant
+    /// confirms, produced by the SAME checks and fee calculation the real cash-out runs, so the two cannot disagree.
+    /// Creates and reserves nothing. Always 200 with the figures; <c>wouldBeAccepted</c> + <c>refusalCode</c> say
+    /// whether submitting it right now would be refused and why (best effort: the balance can move before submit).
+    /// </summary>
+    private static async Task<IResult> QuoteCashOutAsync(
+        IAssetCatalog assets, IMerchantWithdrawalService cashOuts, HttpContext http,
+        string network, string coin, decimal amount, Guid? settlementWalletId = null)
+    {
+        var (asset, baseAmount, error) = await ResolveAsync(assets, network, coin, amount, http);
+        if (error is not null)
+            return error;
+
+        var quote = (await cashOuts.QuoteAsync(
+            new MerchantWithdrawalQuoteRequest(PortalTenant.MerchantId(http), asset!.AssetId, asset.Chain, baseAmount, settlementWalletId),
+            http.RequestAborted)).Value;
+
+        var d = asset.Decimals;
+        return Ok(new
+        {
+            network = asset.Chain.ToString(),
+            coin = asset.Symbol,
+            amount = AmountConversion.ToDisplay(quote.Amount, d),
+            amountBaseUnits = quote.Amount.ToString(),
+            fee = AmountConversion.ToDisplay(quote.Fee, d),
+            feeBaseUnits = quote.Fee.ToString(),
+            // The merchant's wallet receives the full amount; the fee comes off the balance on top of it.
+            amountReceived = AmountConversion.ToDisplay(quote.Amount, d),
+            amountReceivedBaseUnits = quote.Amount.ToString(),
+            totalDebit = AmountConversion.ToDisplay(quote.TotalDebit, d),
+            totalDebitBaseUnits = quote.TotalDebit.ToString(),
+            availableBalance = AmountConversion.ToDisplay(quote.AvailableBalance, d),
+            availableBalanceBaseUnits = quote.AvailableBalance.ToString(),
+            settledBalance = AmountConversion.ToDisplay(quote.SettledBalance, d),
+            settledBalanceBaseUnits = quote.SettledBalance.ToString(),
+            cashOutLimit = quote.CashOutLimit is { } limit ? AmountConversion.ToDisplay(limit, d) : (decimal?)null,
+            cashOutLimitBaseUnits = quote.CashOutLimit?.ToString(),
+            settlementAddress = quote.DestinationAddress,
+            settlementWalletRole = quote.DestinationIsPrimary switch { true => "primary", false => "backup", null => null },
+            wouldBeAccepted = quote.Refusal is null,
+            refusalCode = quote.Refusal?.Code,
+            refusalMessage = quote.Refusal?.Message,
+        });
     }
 
     /// <summary>Resolves the asset and converts the display amount to base units at the edge, refusing

@@ -11,6 +11,10 @@ namespace CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Applicat
 /// </summary>
 public sealed class SettledBalanceGate(ILedgerQuery ledgerQuery, TimeProvider timeProvider)
 {
+    /// <summary>The merchant's full available balance (ignoring T+N) — what the ledger reserve checks against.</summary>
+    public Task<BigInteger> GetAvailableAsync(Guid merchantId, Guid assetId, CancellationToken cancellationToken = default) =>
+        ledgerQuery.GetMerchantBalanceAsync(merchantId, assetId, cancellationToken);
+
     public Task<BigInteger> GetSettledAvailableAsync(
         Guid merchantId, Guid assetId, int settlementDelayDays, CancellationToken cancellationToken = default)
     {

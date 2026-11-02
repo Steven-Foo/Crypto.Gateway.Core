@@ -241,6 +241,47 @@ public sealed class LedgerQueryTests : LedgerTestHost
     }
 
     [Fact]
+    public async Task Each_row_carries_its_own_merchants_balance_before_and_after_even_when_merchants_interleave()
+    {
+        // A fresh asset keeps other tests' journals out of these running balances.
+        var asset = Guid.CreateVersion7();
+        var merchantA = Guid.CreateVersion7();
+        var merchantB = Guid.CreateVersion7();
+        var two = BigInteger.Parse("2000000");
+        var one = BigInteger.Parse("1000000");
+
+        await using (var ctx = Context())
+        {
+            var poster = Poster(ctx);
+            await poster.CreditDepositAsync(new CreditDepositCommand(Guid.CreateVersion7(), merchantA, asset, Deposited), Ct); // A 0 → 10
+            await poster.CreditDepositAsync(new CreditDepositCommand(Guid.CreateVersion7(), merchantB, asset, Amount), Ct);    // B 0 → 3
+            (await poster.DebitMerchantBalanceAsync(new DebitMerchantBalanceCommand(merchantA, asset, two, "fix"), Ct))
+                .IsSuccess.ShouldBeTrue();                                                                                  // A 10 → 8
+            (await poster.CreditMerchantBalanceAsync(new CreditMerchantBalanceCommand(merchantB, asset, one, "fix"), Ct))
+                .IsSuccess.ShouldBeTrue();                                                                                  // B 3 → 4
+        }
+
+        await using var verify = Context();
+        var (items, _) = await new LedgerQuery(verify).GetJournalsAsync(null, null, null, null, 1, 200, Ct);
+        var rows = items.Where(i => i.AssetId == asset).ToList();
+        rows.Count.ShouldBe(4);
+
+        var a = rows.Where(r => r.MerchantId == merchantA).OrderBy(r => r.BalanceAfter).ToList();
+        a.Select(r => (r.BalanceBefore, r.BalanceAfter)).ShouldBe(new (BigInteger?, BigInteger?)[]
+        {
+            (Deposited, Deposited - two),     // the debit
+            (BigInteger.Zero, Deposited),     // the deposit
+        });
+
+        var b = rows.Where(r => r.MerchantId == merchantB).OrderBy(r => r.BalanceAfter).ToList();
+        b.Select(r => (r.BalanceBefore, r.BalanceAfter)).ShouldBe(new (BigInteger?, BigInteger?)[]
+        {
+            (BigInteger.Zero, Amount),        // the deposit
+            (Amount, Amount + one),           // the credit
+        });
+    }
+
+    [Fact]
     public async Task A_date_range_excludes_journals_outside_it()
     {
         var merchant = Guid.CreateVersion7();

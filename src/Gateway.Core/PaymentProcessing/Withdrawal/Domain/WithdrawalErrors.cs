@@ -34,6 +34,14 @@ public static class WithdrawalErrors
     public static readonly Error SettlementWalletNotRegistered =
         Error.Conflict("withdrawal.settlement_wallet_not_registered", "No settlement wallet is registered for this merchant and chain.");
 
+    public static readonly Error SettlementWalletNotUsable =
+        Error.Validation("withdrawal.settlement_wallet_not_usable",
+            "The chosen settlement wallet is not one of your approved wallets on this network.");
+
+    public static readonly Error SettlementWalletBlocked =
+        Error.Validation("withdrawal.settlement_wallet_blocked",
+            "The chosen settlement wallet failed the AML check and cannot receive a cash-out.");
+
     public static readonly Error ExceedsMerchantWithdrawalLimit =
         Error.Validation("withdrawal.exceeds_merchant_withdrawal_limit", "The amount exceeds your merchant withdrawal (cash-out) limit.");
 

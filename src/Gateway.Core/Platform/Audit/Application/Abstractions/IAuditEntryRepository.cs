@@ -8,6 +8,10 @@ public interface IAuditEntryRepository
 
     Task<int> SaveChangesAsync(CancellationToken cancellationToken = default);
 
+    /// <summary>For each entity id: the username on the EARLIEST entry of that entity type (who first did it).</summary>
+    Task<IReadOnlyDictionary<string, string>> FindFirstActorsAsync(
+        string entityType, IReadOnlyCollection<string> entityIds, CancellationToken cancellationToken = default);
+
     /// <summary><paramref name="merchantId"/> null means "no tenant narrowing" (platform staff, who see
     /// everything); a value restricts to that tenant's own entries. Resolved from an <c>AuditScope</c> by the
     /// service, never taken straight from a request.</summary>

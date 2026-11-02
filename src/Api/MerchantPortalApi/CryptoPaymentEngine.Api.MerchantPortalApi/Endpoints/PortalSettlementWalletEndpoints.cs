@@ -130,6 +130,13 @@ public static class PortalSettlementWalletEndpoints
         w.Label,
         w.Status,
         isActive = w.Status == "Active",
+        // For the cash-out screen: "primary" = the active wallet (used when none is chosen), "backup" = an approved
+        // standby the merchant may pick instead; null for a wallet that cannot be paid (pending/rejected/cancelled).
+        role = w.Status switch { "Active" => "primary", "Retired" => "backup", _ => null },
+        // Whether it can be picked as a cash-out destination right now: approved and not blocked by the AML check.
+        selectableForCashOut = w.Status is "Active" or "Retired"
+            && !string.Equals(w.ScreeningDecision, "Block", StringComparison.OrdinalIgnoreCase),
+        w.ScreeningDecision,
         w.Source,
         w.SubmittedBy,
         w.ReviewedBy,

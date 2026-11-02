@@ -15,7 +15,16 @@ public sealed record MerchantJournalView(
     string Description,
     string Direction,
     BigInteger Amount,
-    DateTimeOffset CreatedAt);
+    DateTimeOffset CreatedAt,
+
+    /// <summary>The merchant the journal belongs to.</summary>
+    Guid? MerchantId = null,
+
+    /// <summary>That merchant's balance in this asset just BEFORE and just AFTER this journal — per row, so it is
+    /// meaningful even in a list mixing merchants (each row is its own merchant's running balance, never a total).
+    /// Null when the journal didn't move the merchant's balance.</summary>
+    BigInteger? BalanceBefore = null,
+    BigInteger? BalanceAfter = null);
 
 /// <summary>
 /// One event that actually moved a merchant's <c>MerchantLiability</c> balance — the "account statement"

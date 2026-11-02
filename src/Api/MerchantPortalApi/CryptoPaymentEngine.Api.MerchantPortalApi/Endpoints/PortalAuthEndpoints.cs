@@ -28,7 +28,7 @@ public static class PortalAuthEndpoints
     {
         var result = await auth.LoginAsync(new MerchantLoginCommand(request.Username, request.Password, request.TwoFactorCode), http.RequestAborted);
         if (result.IsFailure)
-            // The module's own code (e.g. merchantidentity.invalid_credentials) reaches the client, so a SPA can
+            // The module's own code (e.g. merchant_user.invalid_credentials) reaches the client, so a SPA can
             // distinguish bad credentials from a disabled account without reading the message.
             return PortalResults.Unauthorized(result.Error!.Code, result.Error!.Message);
 

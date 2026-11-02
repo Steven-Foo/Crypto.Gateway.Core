@@ -37,7 +37,8 @@ public sealed class MerchantWithdrawalServiceTests
         int settlementDelayDays = 0,
         BigInteger? settled = null,
         BigInteger? merchantThreshold = null,
-        IAddressEncoderFactory? addresses = null)
+        IAddressEncoderFactory? addresses = null,
+        IReadOnlyList<ApprovedSettlementWallet>? approved = null)
     {
         var repo = new FakeRepo();
         var ledgerQuery = new FakeLedgerQuery(balance ?? BigInteger.Parse("10000000"), settled);
@@ -45,7 +46,7 @@ public sealed class MerchantWithdrawalServiceTests
             repo,
             new StubPolicy(),
             new FakeMerchants(canTransact, settlementDelayDays),
-            new FakeSettlements(settlement),
+            new FakeSettlements(settlement, approved ?? []),
             new FakeCaps(cap ?? MerchantWithdrawalCap.None),
             new FakeFees(Fee),
             new FakeApprovalThreshold(merchantThreshold),
@@ -58,6 +59,100 @@ public sealed class MerchantWithdrawalServiceTests
 
     private static MerchantWithdrawalCommand Command(BigInteger amount, string txnId = "cash-1") =>
         new(Merchant, Asset, Chain.Tron, amount, txnId);
+
+    // ── choosing the wallet + the preview ──
+
+    private static readonly ApprovedSettlementWallet Standby = new(Guid.CreateVersion7(), "TStandbyWallet", IsActive: false, "Allow");
+    private static readonly ApprovedSettlementWallet BlockedStandby = new(Guid.CreateVersion7(), "TBlockedWallet", IsActive: false, "Block");
+
+    [Fact]
+    public async Task A_chosen_approved_standby_wallet_becomes_the_destination()
+    {
+        var (service, repo) = Compose(approved: [Standby]);
+
+        var result = await service.RequestWithDetailsAsync(Command(BigInteger.Parse("3000000")) with { SettlementWalletId = Standby.WalletId }, Ct);
+
+        result.IsSuccess.ShouldBeTrue();
+        result.Value.DestinationAddress.ShouldBe("TStandbyWallet");
+        repo.Withdrawals.Single().DestinationAddress.ShouldBe("TStandbyWallet");
+    }
+
+    [Fact]
+    public async Task No_choice_still_pays_the_active_primary_wallet()
+    {
+        var (service, _) = Compose(approved: [Standby]);
+
+        var result = await service.RequestWithDetailsAsync(Command(BigInteger.Parse("3000000")), Ct);
+
+        result.Value.DestinationAddress.ShouldBe(Settlement);
+    }
+
+    [Fact]
+    public async Task A_wallet_that_is_not_approved_or_not_the_merchants_is_refused_and_nothing_is_reserved()
+    {
+        var (service, repo) = Compose(approved: [Standby]);
+
+        var result = await service.RequestAsync(Command(BigInteger.Parse("3000000")) with { SettlementWalletId = Guid.CreateVersion7() }, Ct);
+
+        result.Error!.Code.ShouldBe("withdrawal.settlement_wallet_not_usable");
+        repo.Withdrawals.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task A_standby_wallet_the_AML_check_blocked_is_refused()
+    {
+        var (service, repo) = Compose(approved: [BlockedStandby]);
+
+        var result = await service.RequestAsync(Command(BigInteger.Parse("3000000")) with { SettlementWalletId = BlockedStandby.WalletId }, Ct);
+
+        result.Error!.Code.ShouldBe("withdrawal.settlement_wallet_blocked");
+        repo.Withdrawals.ShouldBeEmpty();
+    }
+
+    [Fact]
+    public async Task The_preview_shows_the_same_fee_the_real_cash_out_charges_and_creates_nothing()
+    {
+        var (service, repo) = Compose();
+        var amount = BigInteger.Parse("3000000");
+
+        var quote = (await service.QuoteAsync(new MerchantWithdrawalQuoteRequest(Merchant, Asset, Chain.Tron, amount), Ct)).Value;
+        repo.Withdrawals.ShouldBeEmpty();
+
+        var charged = (await service.RequestWithDetailsAsync(Command(amount), Ct)).Value;
+
+        quote.Refusal.ShouldBeNull();
+        quote.Fee.ShouldBe(charged.Fee);
+        quote.TotalDebit.ShouldBe(amount + Fee);
+        charged.TotalDebit.ShouldBe(amount + Fee);
+        quote.DestinationAddress.ShouldBe(Settlement);
+        quote.DestinationIsPrimary.ShouldBe(true);
+    }
+
+    [Fact]
+    public async Task The_preview_reports_the_refusal_the_real_cash_out_would_give_with_the_figures_still_filled_in()
+    {
+        // Balance covers the amount but not amount + fee — the fee is charged ON TOP, so this must be refused.
+        var amount = BigInteger.Parse("3000000");
+        var (service, _) = Compose(balance: amount);
+
+        var quote = (await service.QuoteAsync(new MerchantWithdrawalQuoteRequest(Merchant, Asset, Chain.Tron, amount), Ct)).Value;
+
+        quote.Refusal!.Code.ShouldBe("withdrawal.insufficient_balance");
+        quote.Fee.ShouldBe(Fee);
+        quote.AvailableBalance.ShouldBe(amount);
+    }
+
+    [Fact]
+    public async Task The_preview_reports_the_cash_out_limit_and_refuses_above_it()
+    {
+        var (service, _) = Compose(cap: new MerchantWithdrawalCap(BigInteger.Parse("1000000"), 0));
+
+        var quote = (await service.QuoteAsync(
+            new MerchantWithdrawalQuoteRequest(Merchant, Asset, Chain.Tron, BigInteger.Parse("3000000")), Ct)).Value;
+
+        quote.CashOutLimit.ShouldBe(BigInteger.Parse("1000000"));
+        quote.Refusal!.Code.ShouldBe("withdrawal.exceeds_merchant_withdrawal_limit");
+    }
 
     [Fact]
     public async Task A_cash_out_goes_to_the_settlement_wallet_with_the_withdrawal_fee_and_reserves()
@@ -256,8 +351,12 @@ public sealed class MerchantWithdrawalServiceTests
             Task.FromResult<IReadOnlyList<Guid>>([]);
     }
 
-    private sealed class FakeSettlements(string? address) : IMerchantSettlementDirectory
+    private sealed class FakeSettlements(string? address, IReadOnlyList<ApprovedSettlementWallet> approved) : IMerchantSettlementDirectory
     {
+        public Task<ApprovedSettlementWallet?> FindApprovedSettlementWalletAsync(
+            Guid merchantId, Chain chain, Guid walletId, CancellationToken cancellationToken = default) =>
+            Task.FromResult(approved.FirstOrDefault(w => w.WalletId == walletId));
+
         public Task<string?> FindSettlementAddressAsync(Guid merchantId, Chain chain, CancellationToken cancellationToken = default) =>
             Task.FromResult(address);
 

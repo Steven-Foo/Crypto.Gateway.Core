@@ -102,7 +102,15 @@ public sealed record WithdrawalAdminRow(
     /// in a separate lookup they may skip. <see cref="ScreeningId"/> addresses the full evidence record.</summary>
     string? ScreeningDecision = null,
     int? ScreeningScore = null,
-    Guid? ScreeningId = null);
+    Guid? ScreeningId = null,
+    /// <summary>True when a person declined this withdrawal (platform staff, the settlement audit, or the
+    /// merchant's own approver), as opposed to the system failing to send it. Both report the effective status
+    /// <c>failed</c>; this tells them apart without changing the status vocabulary filters rely on.</summary>
+    bool IsRejected = false,
+    /// <summary>Why it ended: the reason a person typed when rejecting, or the system's failure detail. A
+    /// system failure's text is technical — a merchant-facing caller should show it only when
+    /// <see cref="IsRejected"/>.</summary>
+    string? FailureReason = null);
 
 /// <summary>Aggregate totals across the ENTIRE filtered set — not the current page — behind the Ops
 /// withdrawal-transactions screen's summary row. Both sums are exact base-unit integer strings (§14).

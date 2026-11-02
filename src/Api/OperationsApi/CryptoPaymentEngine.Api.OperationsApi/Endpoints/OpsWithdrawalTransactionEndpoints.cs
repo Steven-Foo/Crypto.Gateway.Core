@@ -229,6 +229,16 @@ public static class OpsWithdrawalTransactionEndpoints
                 kind = withdrawal.Kind,
                 createdAt = withdrawal.CreatedAt,
                 status = withdrawal.Status,
+                // "failed" covers both a person declining it and the system failing to send it; `rejected` tells
+                // them apart. Staff see the reason either way (a system failure's detail is for them to act on).
+                rejected = withdrawal.IsRejected,
+                failureReason = withdrawal.FailureReason,
+                // The AML verdict on a user payout's destination (null when it wasn't screened). On the row itself
+                // so staff approving a flagged payout see WHY on the same screen; screeningId deep-links to
+                // GET /ops/compliance/screenings/{id} for the evidence.
+                screeningDecision = withdrawal.ScreeningDecision,
+                screeningScore = withdrawal.ScreeningScore,
+                screeningId = withdrawal.ScreeningId,
                 // Merchant settlements are paid off-system by an admin, so WHO acted and which company wallet
                 // paid is the only audit trail there is — the chain cannot tell us, because the source is not
                 // ours. All null for a user payout, which the platform pays itself.

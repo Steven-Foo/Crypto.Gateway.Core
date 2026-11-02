@@ -92,9 +92,13 @@ public sealed class CreatePortalCashOutRequest
     [Required, MaxLength(16)] public string Network { get; init; } = null!;
     [Required, MaxLength(16)] public string Coin { get; init; } = null!;
 
-    /// <summary>Display units. No destination: it is resolved from the platform-whitelisted settlement wallet,
-    /// never supplied by the caller (§10).</summary>
+    /// <summary>Display units. The merchant's wallet receives exactly this; the fee comes off the balance on top.</summary>
     public decimal Amount { get; init; }
+
+    /// <summary>Optional: which of the merchant's APPROVED settlement wallets to pay (the primary or a backup), from
+    /// <c>GET /portal/settlement-wallets</c>. Omitted means the active (primary) wallet. Never a free-form address:
+    /// the choice is limited to wallets platform staff approved (§10).</summary>
+    public Guid? SettlementWalletId { get; init; }
 }
 
 public sealed class RejectPortalPayoutRequest

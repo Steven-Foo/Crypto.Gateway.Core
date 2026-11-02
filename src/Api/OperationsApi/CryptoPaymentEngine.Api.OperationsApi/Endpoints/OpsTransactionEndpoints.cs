@@ -22,6 +22,8 @@ public static class OpsTransactionEndpoints
         ILedgerQuery ledger,
         IPaymentIntentDirectory paymentIntents,
         IAssetCatalog assets,
+        CryptoPaymentEngine.Gateway.Core.Merchant.Contracts.IMerchantDirectory merchants,
+        CryptoPaymentEngine.Gateway.Core.Platform.Audit.Application.IAuditQuery audit,
         HttpContext http,
         Guid? merchantId = null,
         string? transactionId = null,
@@ -59,6 +61,11 @@ public static class OpsTransactionEndpoints
 
         var orderNumberOf = await LedgerOrderNumbers.ResolveAsync(
             items.Select(i => (i.ReferenceType, i.ReferenceId)), paymentIntents, http.RequestAborted);
+        var operatorOf = await LedgerOperators.ResolveAsync(
+            items.Select(i => (i.ReferenceType, i.ReferenceId)), audit, http.RequestAborted);
+        var merchantNames = await merchants.GetNamesByIdsAsync(
+            items.Where(i => i.MerchantId is not null).Select(i => i.MerchantId!.Value).Distinct().ToList(),
+            http.RequestAborted);
 
         return Results.Ok(new
         {
@@ -71,6 +78,9 @@ public static class OpsTransactionEndpoints
                 items = items.Select(i => new
                 {
                     journalId = i.JournalId,
+                    // Which merchant the row belongs to — needed when no merchantId filter is applied.
+                    merchantId = i.MerchantId,
+                    merchantName = i.MerchantId is { } mid ? merchantNames.GetValueOrDefault(mid) : null,
                     referenceType = i.ReferenceType,
                     referenceId = i.ReferenceId,
                     // The order number (系统流水号) the deposit/withdrawal screens show — see LedgerOrderNumbers.
@@ -84,6 +94,12 @@ public static class OpsTransactionEndpoints
                     description = i.Description,
                     direction = i.Direction,
                     amount = i.Amount.ToString(),
+                    // That row's merchant's balance in that coin just before / after this entry — base-unit
+                    // integer strings like `amount`. Per row, so meaningful in a mixed-merchant list too.
+                    balanceBefore = i.BalanceBefore?.ToString(),
+                    balanceAfter = i.BalanceAfter?.ToString(),
+                    // Staff member behind a manual adjustment (null for every system-driven row).
+                    @operator = operatorOf(i.ReferenceType, i.ReferenceId),
                     createdAt = i.CreatedAt,
                 }),
             },

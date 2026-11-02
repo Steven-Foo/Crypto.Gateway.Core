@@ -11,6 +11,23 @@ public sealed class AuditEntryRepository(AuditDbContext context) : IAuditEntryRe
 
     public Task<int> SaveChangesAsync(CancellationToken cancellationToken = default) => context.SaveChangesAsync(cancellationToken);
 
+    public async Task<IReadOnlyDictionary<string, string>> FindFirstActorsAsync(
+        string entityType, IReadOnlyCollection<string> entityIds, CancellationToken cancellationToken = default)
+    {
+        if (entityIds.Count == 0)
+            return new Dictionary<string, string>();
+
+        // Served by the (EntityType, EntityId) index.
+        var rows = await context.AuditEntries.AsNoTracking()
+            .Where(e => e.EntityType == entityType && e.EntityId != null && entityIds.Contains(e.EntityId))
+            .Select(e => new { EntityId = e.EntityId!, e.StaffUsername, e.CreatedAt })
+            .ToListAsync(cancellationToken);
+
+        return rows
+            .GroupBy(r => r.EntityId, StringComparer.Ordinal)
+            .ToDictionary(g => g.Key, g => g.OrderBy(r => r.CreatedAt).First().StaffUsername, StringComparer.Ordinal);
+    }
+
     public async Task<(IReadOnlyList<AuditEntry> Items, int TotalCount)> SearchAsync(
         AuditSearchFilter filter, Guid? merchantId, int page, int pageSize, CancellationToken cancellationToken = default)
     {

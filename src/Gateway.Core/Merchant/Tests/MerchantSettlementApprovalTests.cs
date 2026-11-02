@@ -165,6 +165,42 @@ public sealed class MerchantSettlementApprovalTests : IAsyncLifetime
         all.Values.Count(w => w.Status == "Active").ShouldBe(1);
     }
 
+    /// <summary>The cash-out wallet choice (2026-11-02): a merchant may pick its primary OR an approved standby —
+    /// but never a pending one, and never another merchant's wallet even knowing its exact id.</summary>
+    [Fact]
+    public async Task A_cash_out_can_choose_an_approved_standby_but_never_a_pending_or_foreign_wallet()
+    {
+        var m = await NewMerchantAsync();
+        var other = await NewMerchantAsync();
+        Guid primary, standby, pending, foreign;
+        await using (var c = NewContext())
+        {
+            primary = (await Registrar(c).AddSettlementWalletAsync(m, Chain.Tron, AddressA, null, activate: true, Ct, addedBy: "staff")).Value.WalletId;
+            standby = (await Registrar(c).AddSettlementWalletAsync(m, Chain.Tron, AddressB, null, activate: false, Ct, addedBy: "staff")).Value.WalletId;
+            pending = (await Registrar(c).SubmitSettlementWalletAsync(m, Chain.Tron, AddressC, null, "merchant001", Ct)).Value.WalletId;
+            foreign = (await Registrar(c).AddSettlementWalletAsync(other, Chain.Tron, AddressC, null, activate: true, Ct, addedBy: "staff")).Value.WalletId;
+        }
+
+        await using var read = NewContext();
+        var directory = new MerchantSettlementDirectory(read);
+
+        var p = await directory.FindApprovedSettlementWalletAsync(m, Chain.Tron, primary, Ct);
+        p!.Address.ShouldBe(AddressA);
+        p.IsActive.ShouldBeTrue();
+
+        var s = await directory.FindApprovedSettlementWalletAsync(m, Chain.Tron, standby, Ct);
+        s!.Address.ShouldBe(AddressB);
+        s.IsActive.ShouldBeFalse();
+
+        (await directory.FindApprovedSettlementWalletAsync(m, Chain.Tron, pending, Ct)).ShouldBeNull();
+        (await directory.FindApprovedSettlementWalletAsync(m, Chain.Tron, foreign, Ct)).ShouldBeNull();
+        (await directory.FindApprovedSettlementWalletAsync(m, Chain.Ethereum, standby, Ct)).ShouldBeNull();
+
+        // A standby can now be paid, so the periodic AML re-check must cover it too; the pending one stays out.
+        var screened = (await directory.ListAllAsync(Ct)).Where(w => w.MerchantId == m).Select(w => w.Address).ToList();
+        screened.ShouldBe([AddressA, AddressB], ignoreOrder: true);
+    }
+
     [Fact]
     public async Task A_rejection_needs_a_reason_and_the_merchant_can_submit_again()
     {

@@ -229,6 +229,28 @@ public sealed class WithdrawalDirectoryTests : IAsyncLifetime
         await _context.SaveChangesAsync(Ct);
     }
 
+    [Fact]
+    public async Task A_rejected_row_is_flagged_and_carries_its_reason_while_a_system_failure_is_not_flagged()
+    {
+        await SeedOnePerStatusAsync();
+
+        var (items, _) = await _directory.SearchAsync(
+            new WithdrawalAdminFilter(Merchant, null, null, null, null, null, null, null), 1, 200, Ct);
+        var byRef = items.ToDictionary(i => i.MerchantTransactionId);
+
+        byRef["ST-REJECTED"].Status.ShouldBe("failed");
+        byRef["ST-REJECTED"].IsRejected.ShouldBeTrue();
+        byRef["ST-REJECTED"].FailureReason.ShouldBe("not allowed");
+
+        // Same effective status, but the system failed it — no person declined it.
+        byRef["ST-FAILED"].Status.ShouldBe("failed");
+        byRef["ST-FAILED"].IsRejected.ShouldBeFalse();
+        byRef["ST-FAILED"].FailureReason.ShouldBe("build error");
+
+        byRef["ST-CONFIRMED"].IsRejected.ShouldBeFalse();
+        byRef["ST-CONFIRMED"].FailureReason.ShouldBeNull();
+    }
+
     /// <summary>
     /// The load-bearing test: for EVERY status in the published vocabulary, filtering by it returns exactly
     /// the rows the unfiltered search labels with that same status. This is what stops the SQL filter and the

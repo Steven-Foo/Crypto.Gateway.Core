@@ -55,6 +55,15 @@ public interface IAuditQuery
 {
     Task<(IReadOnlyList<AuditEntryView> Items, int TotalCount)> SearchAsync(
         AuditScope scope, AuditSearchFilter filter, int page, int pageSize, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Who performed each of a batch of actions, keyed by the entity id they were logged against — e.g. the staff
+    /// member behind each manual balance adjustment on a page of ledger rows. One query for the whole page (the
+    /// table is indexed on entity type + id). The EARLIEST entry wins, so a retried request can't re-attribute an
+    /// action. Entities with no entry are absent. Staff-facing only: callers are platform hosts.
+    /// </summary>
+    Task<IReadOnlyDictionary<string, string>> FindActorsAsync(
+        string entityType, IReadOnlyCollection<string> entityIds, CancellationToken cancellationToken = default);
 }
 
 /// <summary>One class serves both interfaces — same convention as <c>StaffAuthService</c>: they share the
@@ -80,6 +89,10 @@ public sealed class AuditService(IAuditEntryRepository repository, TimeProvider 
         var (items, total) = await repository.SearchAsync(filter, merchantId, page, pageSize, cancellationToken);
         return (items.Select(ToView).ToList(), total);
     }
+
+    public Task<IReadOnlyDictionary<string, string>> FindActorsAsync(
+        string entityType, IReadOnlyCollection<string> entityIds, CancellationToken cancellationToken = default) =>
+        repository.FindFirstActorsAsync(entityType, entityIds, cancellationToken);
 
     private static AuditEntryView ToView(AuditEntry e) =>
         new(e.Id, e.StaffUserId, e.StaffUsername, e.Action, e.EntityType, e.EntityId, e.Reason, e.IpAddress,

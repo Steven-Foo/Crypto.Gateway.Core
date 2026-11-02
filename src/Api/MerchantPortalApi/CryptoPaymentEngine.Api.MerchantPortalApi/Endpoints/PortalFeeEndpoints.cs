@@ -45,6 +45,10 @@ public static class PortalFeeEndpoints
                 topUpFeePercent = Percent(p.TopUpFeeBps),
                 merchantWithdrawalFlatCap = Display(p.MerchantWithdrawalFlatCap, decimals),
                 merchantWithdrawalCapPercent = Percent(p.MerchantWithdrawalPercentBps),
+                // Per-deposit limits set by staff (GET/PUT /ops/merchants/{id}/deposit-limits). null = not set for
+                // this merchant, so the platform default applies; 0 is a real configured value — never coalesce.
+                minimumDeposit = Display(p.MinimumDeposit, decimals),
+                maximumDeposit = Display(p.MaximumDeposit, decimals),
                 minimumWithdrawal = Display(p.MinimumWithdrawal, decimals),
                 maximumWithdrawal = Display(p.MaximumWithdrawal, decimals),
                 approvalThreshold = Display(p.ApprovalThreshold, decimals),

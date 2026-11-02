@@ -223,6 +223,10 @@ public sealed class SettlementWalletScreeningServiceTests
 
         public Task<IReadOnlyList<SettlementWalletRef>> ListAllAsync(CancellationToken cancellationToken = default) =>
             Task.FromResult(Wallets);
+
+        public Task<ApprovedSettlementWallet?> FindApprovedSettlementWalletAsync(
+            Guid merchantId, Chain chain, Guid walletId, CancellationToken cancellationToken = default) =>
+            Task.FromResult<ApprovedSettlementWallet?>(null);
     }
 
     private sealed class StubScreening : IAddressScreeningService

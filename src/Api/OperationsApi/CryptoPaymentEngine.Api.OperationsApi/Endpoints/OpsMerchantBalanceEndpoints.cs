@@ -38,8 +38,12 @@ public static class OpsMerchantBalanceEndpoints
         if (error is not null)
             return error;
 
+        // Minted here (when the caller didn't supply one) rather than inside the Ledger, so the same id becomes
+        // BOTH the ledger journal's referenceId AND the audit entry's entity id — that link is what lets the
+        // ledger screens show who made each adjustment (LedgerOperators).
+        var adjustmentId = request.AdjustmentId ?? Guid.CreateVersion7();
         var result = await ledger.CreditMerchantBalanceAsync(
-            new CreditMerchantBalanceCommand(id, asset!.AssetId, amount, request.Reason, request.AdjustmentId),
+            new CreditMerchantBalanceCommand(id, asset!.AssetId, amount, request.Reason, adjustmentId),
             http.RequestAborted);
 
         if (result.IsFailure)
@@ -47,13 +51,17 @@ public static class OpsMerchantBalanceEndpoints
 
         var actor = AuditActor.From(http);
         await audit.LogAsync(new LogAuditEntryCommand(
-            actor.StaffUserId, actor.Username, "merchant.balance_credited", "Merchant", id.ToString(),
-            $"{request.Amount} {asset.Symbol} ({asset.Chain}): {request.Reason}", actor.IpAddress), http.RequestAborted);
+            actor.StaffUserId, actor.Username, "merchant.balance_credited", LedgerOperators.AdjustmentEntityType,
+            adjustmentId.ToString(),
+            // The merchant id is kept in the text so a staff audit search still shows which merchant it was. It is
+            // deliberately NOT stamped as the entry's MerchantId: that would surface a staff action in the merchant's
+            // own portal activity log, which shows the merchant's actions only.
+            $"merchant {id}: {request.Amount} {asset.Symbol} ({asset.Chain}): {request.Reason}", actor.IpAddress), http.RequestAborted);
 
         return Results.Ok(new
         {
             isSuccess = true,
-            data = new { merchantId = id, assetId = asset.AssetId, coin = asset.Symbol, network = asset.Chain.ToString(), outcome = result.Value.ToString() },
+            data = new { merchantId = id, adjustmentId, assetId = asset.AssetId, coin = asset.Symbol, network = asset.Chain.ToString(), outcome = result.Value.ToString() },
             error = (string?)null,
             errorCode = (string?)null,
         });
@@ -67,8 +75,12 @@ public static class OpsMerchantBalanceEndpoints
         if (error is not null)
             return error;
 
+        // Minted here (when the caller didn't supply one) rather than inside the Ledger, so the same id becomes
+        // BOTH the ledger journal's referenceId AND the audit entry's entity id — that link is what lets the
+        // ledger screens show who made each adjustment (LedgerOperators).
+        var adjustmentId = request.AdjustmentId ?? Guid.CreateVersion7();
         var result = await ledger.DebitMerchantBalanceAsync(
-            new DebitMerchantBalanceCommand(id, asset!.AssetId, amount, request.Reason, request.AdjustmentId),
+            new DebitMerchantBalanceCommand(id, asset!.AssetId, amount, request.Reason, adjustmentId),
             http.RequestAborted);
 
         if (result.IsFailure)
@@ -76,13 +88,17 @@ public static class OpsMerchantBalanceEndpoints
 
         var actor = AuditActor.From(http);
         await audit.LogAsync(new LogAuditEntryCommand(
-            actor.StaffUserId, actor.Username, "merchant.balance_debited", "Merchant", id.ToString(),
-            $"{request.Amount} {asset.Symbol} ({asset.Chain}): {request.Reason}", actor.IpAddress), http.RequestAborted);
+            actor.StaffUserId, actor.Username, "merchant.balance_debited", LedgerOperators.AdjustmentEntityType,
+            adjustmentId.ToString(),
+            // The merchant id is kept in the text so a staff audit search still shows which merchant it was. It is
+            // deliberately NOT stamped as the entry's MerchantId: that would surface a staff action in the merchant's
+            // own portal activity log, which shows the merchant's actions only.
+            $"merchant {id}: {request.Amount} {asset.Symbol} ({asset.Chain}): {request.Reason}", actor.IpAddress), http.RequestAborted);
 
         return Results.Ok(new
         {
             isSuccess = true,
-            data = new { merchantId = id, assetId = asset.AssetId, coin = asset.Symbol, network = asset.Chain.ToString(), outcome = result.Value.ToString() },
+            data = new { merchantId = id, adjustmentId, assetId = asset.AssetId, coin = asset.Symbol, network = asset.Chain.ToString(), outcome = result.Value.ToString() },
             error = (string?)null,
             errorCode = (string?)null,
         });
@@ -97,6 +113,7 @@ public static class OpsMerchantBalanceEndpoints
     private static async Task<IResult> HistoryAsync(
         Guid id, ILedgerQuery ledger, IAssetCatalog assets,
         CryptoPaymentEngine.Gateway.Core.PaymentProcessing.PaymentIntent.Contracts.IPaymentIntentDirectory paymentIntents,
+        IAuditQuery auditQuery,
         HttpContext http,
         string? chain = null, string? coin = null,
         DateTimeOffset? fromDate = null, DateTimeOffset? toDate = null,
@@ -128,6 +145,8 @@ public static class OpsMerchantBalanceEndpoints
 
         var orderNumberOf = await LedgerOrderNumbers.ResolveAsync(
             items.Select(i => (i.ReferenceType, i.ReferenceId)), paymentIntents, http.RequestAborted);
+        var operatorOf = await LedgerOperators.ResolveAsync(
+            items.Select(i => (i.ReferenceType, i.ReferenceId)), auditQuery, http.RequestAborted);
 
         return OpsResults.Ok(new
         {
@@ -139,6 +158,8 @@ public static class OpsMerchantBalanceEndpoints
                 {
                     var asset = assetsById.GetValueOrDefault(i.AssetId);
                     var decimals = asset?.Decimals ?? 6;
+                    // Before = after minus this entry's own effect on the balance (credit raises it, debit lowers it).
+                    var balanceBefore = i.Direction == "Credit" ? i.BalanceAfter - i.Amount : i.BalanceAfter + i.Amount;
                     return new
                     {
                         journalId = i.JournalId,
@@ -149,8 +170,11 @@ public static class OpsMerchantBalanceEndpoints
                         direction = i.Direction,
                         amount = AmountConversion.ToDisplay(i.Amount, decimals),
                         amountBaseUnits = i.Amount.ToString(),
+                        balanceBefore = AmountConversion.ToDisplay(balanceBefore, decimals),
+                        balanceBeforeBaseUnits = balanceBefore.ToString(),
                         balanceAfter = AmountConversion.ToDisplay(i.BalanceAfter, decimals),
                         balanceAfterBaseUnits = i.BalanceAfter.ToString(),
+                        @operator = operatorOf(i.ReferenceType, i.ReferenceId),
                         assetId = i.AssetId,
                         coin = asset?.Symbol,
                         network = asset?.Chain.ToString(),

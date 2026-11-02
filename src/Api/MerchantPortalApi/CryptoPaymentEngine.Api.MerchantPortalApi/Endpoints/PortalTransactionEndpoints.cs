@@ -75,6 +75,14 @@ public static class PortalTransactionEndpoints
             var decimals = await DecimalsAsync(assets, decimalsByAsset, i.AssetId, http);
             var deposit = i.MatchedDepositId is { } id ? matched.GetValueOrDefault(id) : null;
 
+            // The fee is the one snapshotted on the deposit at detection and carried on DepositConfirmed — the exact
+            // figure the Ledger split off into FeeRevenue, and the same one the admin BO shows. Credited is what the
+            // Ledger put on the merchant's balance (Cr MerchantLiability = received − fee), so credited + fee ==
+            // received holds by construction. Worked out here in base units, never left to the client (§14).
+            string? creditedBaseUnits = deposit is null
+                ? null
+                : (BigInteger.Parse(deposit.AmountBaseUnits) - BigInteger.Parse(deposit.FeeBaseUnits)).ToString();
+
             rows.Add(new
             {
                 systemOrderNumber = i.PublicReference,
@@ -86,6 +94,10 @@ public static class PortalTransactionEndpoints
                 expectedAmountBaseUnits = i.ExpectedAmountBaseUnits,
                 receivedAmount = deposit is null ? (decimal?)null : ToDisplay(deposit.AmountBaseUnits, decimals),
                 receivedAmountBaseUnits = deposit?.AmountBaseUnits,
+                fee = deposit is null ? (decimal?)null : ToDisplay(deposit.FeeBaseUnits, decimals),
+                feeBaseUnits = deposit?.FeeBaseUnits,
+                creditedAmount = creditedBaseUnits is null ? (decimal?)null : ToDisplay(creditedBaseUnits, decimals),
+                creditedAmountBaseUnits = creditedBaseUnits,
                 confirmations = deposit?.Confirmations,
                 txHash = deposit?.TransactionHash,
                 status = i.Status,
@@ -163,6 +175,11 @@ public static class PortalTransactionEndpoints
                 txHash = w.TransactionHash,
                 status = w.Status,
                 statusReason = w.StatusReason,
+                // A declined withdrawal reports status "failed" like a system failure; `rejected` tells them apart
+                // so the UI can show 已驳回. Only a REJECTION's reason is shown — a person wrote it for this
+                // decision. A system failure's text is technical detail not meant for merchants, so it stays null.
+                rejected = w.IsRejected,
+                failureReason = w.IsRejected ? w.FailureReason : null,
                 type,
                 createdAt = w.CreatedAt,
             });

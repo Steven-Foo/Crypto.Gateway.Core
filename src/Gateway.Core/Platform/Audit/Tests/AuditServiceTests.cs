@@ -54,6 +54,25 @@ public sealed class AuditServiceTests : IAsyncLifetime
     }
 
     [Fact]
+    public async Task Find_actors_returns_who_did_each_entity_of_a_type_for_a_whole_batch()
+    {
+        await using var write = Context();
+        var service = Service(write);
+        await service.LogAsync(new LogAuditEntryCommand(Guid.CreateVersion7(), "alice", "merchant.balance_credited", "Adj", "a1", null, null), Ct);
+        await service.LogAsync(new LogAuditEntryCommand(Guid.CreateVersion7(), "bob", "merchant.balance_debited", "Adj", "a2", null, null), Ct);
+        // Same id under a different entity type must not leak in.
+        await service.LogAsync(new LogAuditEntryCommand(Guid.CreateVersion7(), "mallory", "role.created", "Role", "a3", null, null), Ct);
+
+        await using var read = Context();
+        var actors = await Service(read).FindActorsAsync("Adj", ["a1", "a2", "a3", "missing"], Ct);
+
+        actors.Count.ShouldBe(2);
+        actors["a1"].ShouldBe("alice");
+        actors["a2"].ShouldBe("bob");
+        (await Service(read).FindActorsAsync("Adj", [], Ct)).ShouldBeEmpty();
+    }
+
+    [Fact]
     public async Task Search_filters_by_staff_user()
     {
         var alice = Guid.CreateVersion7();

@@ -122,14 +122,18 @@ public sealed class LedgerQuery(LedgerDbContext context) : ILedgerQuery
 
         var totalCount = await journalsQuery.CountAsync(cancellationToken);
 
-        var journals = await journalsQuery
+        var pageRows = await journalsQuery
             .OrderByDescending(j => j.CreatedAt)
             .Skip((page - 1) * pageSize)
             .Take(pageSize)
+            .Select(j => new { Journal = j, Seq = EF.Property<long>(j, "Seq") })
             .ToListAsync(cancellationToken);
 
-        if (journals.Count == 0)
+        if (pageRows.Count == 0)
             return ([], totalCount);
+
+        var journals = pageRows.Select(r => r.Journal).ToList();
+        var seqByJournal = pageRows.ToDictionary(r => r.Journal.Id, r => r.Seq);
 
         var journalIds = journals.Select(j => j.Id).ToList();
 
@@ -149,6 +153,40 @@ public sealed class LedgerQuery(LedgerDbContext context) : ILedgerQuery
 
         var lineByJournal = liabilityLines.ToDictionary(e => e.JournalId);
 
+        // Balance before/after each row, per (merchant, asset) — the same running balance the merchant's
+        // balance-history screen shows. Computed as: after(row) = current balance − every liability change
+        // NEWER than the row. Rows of one merchant need not be contiguous on this page (other merchants and the
+        // filters interleave), so this works from the row's own Seq rather than stepping through the page.
+        var afterByJournal = new Dictionary<Guid, BigInteger>();
+        foreach (var ownerAsset in journals
+                     .Where(j => j.MerchantId != null && lineByJournal.ContainsKey(j.Id))
+                     .GroupBy(j => (MerchantId: j.MerchantId!.Value, j.AssetId)))
+        {
+            var current = await GetMerchantBalanceAsync(ownerAsset.Key.MerchantId, ownerAsset.Key.AssetId, cancellationToken);
+            var oldestSeq = ownerAsset.Min(j => seqByJournal[j.Id]);
+
+            // Every change to this merchant's liability from the oldest row on the page onward, newest first.
+            var changes = await (
+                from account in context.Accounts.AsNoTracking()
+                where account.AccountType == AccountType.MerchantLiability
+                   && account.OwnerType == OwnerType.Merchant
+                   && account.OwnerId == ownerAsset.Key.MerchantId
+                   && account.AssetId == ownerAsset.Key.AssetId
+                join entry in context.JournalEntries.AsNoTracking() on account.Id equals entry.AccountId
+                join journal in context.Journals.AsNoTracking() on entry.JournalId equals journal.Id
+                where EF.Property<long>(journal, "Seq") >= oldestSeq
+                select new { Seq = EF.Property<long>(journal, "Seq"), entry.Credit, entry.Debit })
+                .ToListAsync(cancellationToken);
+
+            var ordered = changes.OrderByDescending(c => c.Seq).ToList();
+            foreach (var j in ownerAsset)
+            {
+                var seq = seqByJournal[j.Id];
+                var newer = ordered.Where(c => c.Seq > seq).Aggregate(BigInteger.Zero, (sum, c) => sum + c.Credit - c.Debit);
+                afterByJournal[j.Id] = current - newer;
+            }
+        }
+
         var items = journals
             .Select(j =>
             {
@@ -156,9 +194,12 @@ public sealed class LedgerQuery(LedgerDbContext context) : ILedgerQuery
                 var direction = line is { IsDebit: true } ? EntryDirection.Debit : EntryDirection.Credit;
                 var amount = line is null ? BigInteger.Zero : (line.IsDebit ? line.Debit : line.Credit);
 
+                BigInteger? after = afterByJournal.TryGetValue(j.Id, out var a) ? a : null;
+                BigInteger? before = after is { } af && line is not null ? af - (line.Credit - line.Debit) : null;
+
                 return new MerchantJournalView(
                     j.Id, j.ReferenceType.ToString(), j.ReferenceId, j.AssetId, j.Description,
-                    direction.ToString(), amount, j.CreatedAt);
+                    direction.ToString(), amount, j.CreatedAt, j.MerchantId, before, after);
             })
             .ToList();
 

@@ -28,13 +28,8 @@ need to.
 
 ## 2. Response envelope
 
-```json
-{ "isSuccess": true,  "data": { }, "error": null }
-{ "isSuccess": false, "data": null, "error": "human-readable message" }
-```
-
-Every response — success and failure — carries a machine-readable **`errorCode`** (null on success), matching
-the Back Office host:
+Every response — success and failure — has the same shape, with a machine-readable **`errorCode`** (null on
+success), matching the Back Office host:
 
 ```json
 { "isSuccess": true,  "data": { }, "error": null, "errorCode": null }
@@ -47,9 +42,10 @@ code matching on it breaks silently on a copy edit.
 Codes come from two places:
 
 - **`portal.*`** — this host rejected the request before it reached a module: `portal.unauthenticated`,
-  `portal.invalid_credentials`, `portal.csrf_invalid`, `portal.permission_denied`, `portal.invalid_chain`,
+  `portal.csrf_invalid`, `portal.permission_denied`, `portal.invalid_chain`,
   `portal.invalid_asset`, `portal.invalid_amount`, `portal.invalid_status`, `portal.invalid_permission_code`,
-  `portal.invalid_ip_address`, `portal.network_required`, `portal.address_required`, `portal.not_found`.
+  `portal.invalid_ip_address`, `portal.invalid_address`, `portal.network_required`, `portal.address_required`,
+  `portal.not_found`, plus the two-factor codes in §3b/§3d (`portal.two_factor_required`, …).
 - **Two catch-all codes (2026-10-12) that guarantee every response is an envelope**, even when no endpoint ran:
   - **`portal.malformed_request`** (400) — the request couldn't be read at all: a body that isn't valid JSON, or a
     field of the wrong type (e.g. `"roleId": ""` — send a real id or `null`, never an empty string). Fix the request.
@@ -58,7 +54,8 @@ Codes come from two places:
 - **`<module>.*`** — a business rule refused it, passed through unchanged from where it was decided:
   `withdrawal.insufficient_balance`, `withdrawal.exceeds_settled_balance`,
   `withdrawal.duplicate_reference`, `withdrawal.merchant_cannot_transact`,
-  `withdrawal.settlement_wallet_not_registered`, `merchant.not_found`, …
+  `withdrawal.settlement_wallet_not_registered`, `withdrawal.settlement_wallet_not_usable`,
+  `withdrawal.settlement_wallet_blocked`, `merchant.not_found`, …
 
 This is what lets a money screen tell "you don't have the balance" from "that asset isn't enabled" — both are
 400s that a merchant would act on completely differently.
@@ -139,7 +136,7 @@ codes are distinct and drive different UI:
 
 | `errorCode` | Status | What the UI does |
 | --- | --- | --- |
-| `merchantidentity.invalid_credentials` | 401 | "Wrong username or password." Clear the password. |
+| `merchant_user.invalid_credentials` | 401 | "Wrong username or password." Clear the password. |
 | `portal_two_factor.code_required` | 401 | Enrolled, no code sent. Show the code field and resubmit. |
 | `portal_two_factor.invalid_code` | 401 | The password was fine — keep it, clear only the code. |
 | `portal_two_factor.locked_out` | 401 | Too many wrong codes. Wait ~15 minutes. |
@@ -378,7 +375,7 @@ A user with `portal.roles.view` but not `portal.roles.manage` sees the page **re
     "actions": [
       { "code": "portal.payouts.create", "group": "Payouts", "label": "Submit a payout", "recommended": true },
       { "code": "portal.topup.create", "group": "Top-up", "label": "Create a top-up invoice", "recommended": false }
-      // ... 9 in total at the time of writing
+      // ... 10 in total at the time of writing (plus the always-on one below)
     ],
     "alwaysGuarded": [
       { "code": "portal.security.two-factor-policy", "group": "Security",
@@ -455,7 +452,7 @@ someone using the portal, **disable the account** (`PATCH /accounts/{id}/status`
 | `portal.transactions.view` | payin / payout / cash-out history |
 | `portal.payouts.create` | **submit** an end-user payout to a request-supplied address |
 | `portal.payouts.approve` | **sign off** a payout someone else submitted |
-| `portal.cashout.create` | initiate an earnings cash-out to the whitelisted settlement wallet |
+| `portal.cashout.create` | preview (`GET /cash-outs/quote`) and submit an earnings cash-out to one of the merchant's approved settlement wallets (§8.2) |
 | `portal.settlement.view` | see the merchant's cash-out addresses and their approval status (§8.6) |
 | `portal.settlement.manage` | submit a cash-out address for platform approval, cancel a pending one, switch which approved one is active (§8.6) |
 | `portal.topup.create` | raise a merchant top-up invoice (§8.5) — adds **instantly withdrawable** balance, so grant deliberately |
@@ -501,7 +498,8 @@ silently losing a digit of someone's money is worse than an error message.
 ```
 
 `requiresPayoutApproval` tells you whether this merchant's payouts stop for its own approver — **read it to
-decide whether to show the approval queue at all** (§8.3). Staff-controlled; a merchant cannot change it.
+decide whether to show the approval queue at all** (§8.3, "When does a payout actually wait for merchant
+approval?"). Staff-controlled; a merchant cannot change it.
 
 `canTransact: false` means the merchant is **frozen** by platform staff. Deposits still credit (freezing stops
 issuing and withdrawing, never recording), but address requests and all money-out are refused. Show this
@@ -547,8 +545,23 @@ sums the groups in the response.
 ### `GET /api/v1/portal/fees`
 Per-asset pricing and limits, all as display decimals (`null` = unset ⇒ the platform default applies):
 `depositFeeFixed`, `depositFeePercent`, `withdrawalFeeFixed`, `withdrawalFeePercent`, `topUpFeeFixed`,
-`topUpFeePercent`, `merchantWithdrawalFlatCap`, `merchantWithdrawalCapPercent`, `minimumWithdrawal`,
-`maximumWithdrawal`, `approvalThreshold`.
+`topUpFeePercent`, `merchantWithdrawalFlatCap`, `merchantWithdrawalCapPercent`, `minimumDeposit`,
+`maximumDeposit`, `minimumWithdrawal`, `maximumWithdrawal`, `approvalThreshold`.
+
+**The limits, explained (`minimumDeposit` / `maximumDeposit` added 2026-11-02).** These are the per-merchant
+limits platform staff set in the Back Office — the same numbers the admin BO shows for this merchant:
+
+| Field | Screen column | Meaning |
+|---|---|---|
+| `minimumDeposit` / `maximumDeposit` | 单笔代收限额 | Smallest / largest single deposit invoice the merchant may create |
+| `minimumWithdrawal` / `maximumWithdrawal` | 单笔代付限额 | Smallest / largest single user payout |
+| `approvalThreshold` | 审批阈值 | Payouts above this wait for platform staff approval |
+
+- **`null` means "not set for this merchant — the platform default applies".** It does NOT mean "no limit".
+  Show it as 跟随平台默认 (not 暂未支持, not 0, not 无限制). This endpoint doesn't return the platform default's
+  number itself.
+- **`0` is a real value** someone chose (e.g. a minimum of 0 = no minimum). Show `0`, don't treat it as unset.
+- A request outside these limits is refused by the backend anyway; showing them just tells the merchant why.
 
 **Percent, not basis points** — every `*Percent` field is a plain percent (`2` = 2%), matching the standard
 used everywhere else on this API's wire format; the domain/DB store basis points, but nothing crossing this
@@ -558,9 +571,9 @@ still reads `depositFeeBps`/`withdrawalFeeBps`/`topUpFeeBps`/`merchantWithdrawal
 
 **Read-only here.** Fees are set by platform staff in the Back Office — a merchant cannot price itself.
 
-#### How a fee is applied — fees are DEDUCTED, never added on top
+#### How a fee is applied — deposits: DEDUCTED; payouts and cash-outs: charged ON TOP
 
-An invoice always asks for **exactly the amount requested**. The fee comes out of what arrives:
+**Deposits (代收).** An invoice always asks for **exactly the amount requested**. The fee comes out of what arrives:
 
 > A 100 USDT deposit at a 2% fee ⇒ the payer sends **100**, the merchant is credited **98**, the platform
 > earns **2**.
@@ -568,8 +581,13 @@ An invoice always asks for **exactly the amount requested**. The fee comes out o
 Do not add the fee to the displayed amount, and do not expect the invoice to differ from the amount submitted.
 This matters if you built against an earlier version: deposits were previously **grossed up** (a 100 request
 at 2% asked the payer for 102.04 so the merchant netted 100). That behaviour is gone. A merchant's own
-records should therefore reconcile against `expectedAmount` as the amount actually sent, with the fee shown
-separately as the difference between what arrived and what was credited.
+records should therefore reconcile against `expectedAmount` as the amount actually sent. Each deposit row in
+`GET /transactions/payin` (§7) carries the actual `fee` (手续费) and `creditedAmount` (实际入账) — show those
+rather than working them out.
+
+**Payouts (代付) and cash-outs (商户提现) work the other way round.** The recipient gets the **full amount**, and
+the fee is taken from the merchant's balance **on top** — a 500 cash-out with a 2.5 fee pays out 500 and takes
+502.5 from the balance (worked through in §8, "Building the 商户提现 screen").
 
 `topUpFee*` prices merchant top-ups (§8.5) and is a **separate schedule that defaults to zero** — it never
 inherits the platform default deposit fee, so an unpriced merchant tops up free even when customer deposits
@@ -588,9 +606,24 @@ This matters for a queue: client-side filtering breaks on paging, because page 1
 of the status you are looking for, and the screen then renders empty while work waits several pages back.
 
 - payin: `pending` | `confirmed` | `expired` | `failed`
-- payout / cash-out: `pending` | `pending_merchant_approval` | `pending_approval` | `insufficient_balance` |
-  `awaiting_release` | `confirmed` | `failed` | `pending_admin_audit` | `pending_finance_transfer` |
-  `finance_settled`
+- payout / cash-out: `pending` | `pending_merchant_approval` | `pending_screening` | `pending_approval` |
+  `insufficient_balance` | `awaiting_release` | `confirmed` | `failed` | `pending_admin_audit` |
+  `pending_finance_transfer` | `finance_settled`
+
+What each one means, and which list it can appear in:
+
+| Status | Shown as | Payout (代付) | Cash-out (商户提现) |
+|---|---|---|---|
+| `pending_merchant_approval` | 待商户审批 — waiting for the merchant's own approver (§8.3) | ✅ | — |
+| `pending_screening` | 风控检查中 — the destination address is being AML-checked | ✅ | — |
+| `pending_approval` | 待平台审批 — above the approval threshold, waiting for platform staff | ✅ | ✅ |
+| `pending` | 处理中 — being sent | ✅ | — |
+| `insufficient_balance` / `awaiting_release` | 处理中 — held on the platform side; `statusReason` says why | ✅ | — |
+| `pending_admin_audit` | 待审核 — waiting for a platform admin to audit it | — | ✅ |
+| `pending_finance_transfer` | 待打款 — audited, waiting for finance to pay it | — | ✅ |
+| `confirmed` | 已完成 — sent and confirmed on-chain | ✅ | — |
+| `finance_settled` | 已完成 — paid by finance and verified on-chain | — | ✅ |
+| `failed` | 失败 / 已驳回 — check `rejected` (below) | ✅ | ✅ |
 
 An unrecognised value is a **400** (`portal.invalid_status`) listing the accepted set — never a silently
 unfiltered page, which would read as "these are the matching ones".
@@ -602,7 +635,15 @@ Response: `{ page, pageSize, totalCount, items }`.
 Extra filters: `merchantOrderNumber`, `receivingAddress`.
 
 Row: `systemOrderNumber`, `merchantOrderNumber`, `network`, `coin`, `address`, `expectedAmount(+BaseUnits)`,
-`receivedAmount(+BaseUnits)`, `confirmations`, `txHash`, `status`, `kind`, `createdAt`.
+`receivedAmount(+BaseUnits)`, `fee(+BaseUnits)`, `creditedAmount(+BaseUnits)`, `confirmations`, `txHash`, `status`,
+`kind`, `createdAt`.
+
+**Fee and credited amount (added 2026-10-30).** `fee` (手续费) is what was deducted from the deposit;
+`creditedAmount` (实际入账) is what actually went onto the merchant's balance. They always satisfy
+**`creditedAmount + fee == receivedAmount`** — both come from the server, so don't compute
+`expectedAmount − fee` yourself (an underpaid or overpaid invoice receives a different amount than it asked for).
+`fee` is the same number the admin back office shows for that order. Like `received*`, both are **null until a
+payment arrives**. The `…BaseUnits` strings are the exact integers; the plain fields are display decimals.
 
 `kind` is `"Customer"` (a payment from the merchant's customer) or `"MerchantTopUp"` (the merchant funding
 its own balance, §8.5). Both are real on-chain deposits in the same list, but they are priced on different
@@ -616,10 +657,20 @@ invoice is a normal row, not a broken one.
 ### `GET /api/v1/portal/transactions/cash-out` — the merchant's own earnings withdrawals
 
 Same row shape for both: `systemOrderNumber`, `merchantOrderNumber`, `network`, `coin`, `receivingAddress`,
-`amount(+BaseUnits)`, `fee(+BaseUnits)`, `confirms`, `txHash`, `status`, `statusReason`, `type`, `createdAt`.
+`amount(+BaseUnits)`, `fee(+BaseUnits)`, `confirms`, `txHash`, `status`, `statusReason`, `rejected`,
+`failureReason`, `type`, `createdAt`.
 
 `statusReason` is the operator-facing explanation for a held payout (e.g. insufficient hot-wallet float).
 Surface it — a status with no reason is the single most common support ticket.
+
+**Rejected vs failed (added 2026-10-30).** `status: "failed"` covers two different outcomes, and the status
+filter keeps treating them as one:
+- **`rejected: true`** — a person declined it (platform staff, the settlement audit, or the merchant's own
+  approver). Show it as **已驳回**, with `failureReason` — the reason that person typed.
+- **`rejected: false`** with `status: "failed"` — the system failed to send it. `failureReason` is **null**
+  (the internal detail isn't for merchants); show 处理失败 and suggest contacting support.
+
+Either way the reserved amount went back to the merchant's balance.
 
 ---
 
@@ -633,7 +684,7 @@ the ledger reserve as the atomic overdraw guard, and the approval threshold.
 the earlier result — it is rejected. Generate a fresh reference per attempt; never retry a timeout with the
 same one and assume idempotent replay.
 
-### `POST /api/v1/portal/payouts` — `portal.payouts.create`
+### 8.1 Payouts (代付) — `POST /api/v1/portal/payouts` — `portal.payouts.create`
 
 ```json
 { "merchantOrderNumber": "ORD-1001", "network": "Tron", "coin": "USDT",
@@ -642,20 +693,129 @@ same one and assume idempotent replay.
 
 Returns `systemOrderNumber`, `merchantOrderNumber`, `network`, `coin`, `amount`, `receivingAddress`, `status`.
 
-**A portal payout always lands in `PendingMerchantApproval` first.** It is not on its way anywhere until
-someone with `portal.payouts.approve` signs it off. The UI must not imply it has been sent.
+**Read the returned `status` before telling the user anything.** If the merchant has `requiresPayoutApproval`
+on (§6, `GET /profile`), a payout lands in `PendingMerchantApproval` and is not on its way anywhere until
+someone with `portal.payouts.approve` signs it off. Otherwise it goes straight to the platform's checks
+(`Approved`, `PendingScreening` or `PendingApproval`). Either way, don't say "sent" — say "submitted". Rules in
+§8.3.
 
-### `POST /api/v1/portal/cash-outs` — `portal.cashout.create`
+### 8.2 Cash-outs (商户提现)
+
+#### Building the cash-out screen — read this first (added 2026-11-02)
+
+**How the money moves.** A cash-out pays the merchant's own earnings to one of its **settlement (收款) wallets**.
+The merchant can only pay to wallets platform staff have **approved** — it can never type an address on this
+screen. After submitting, every cash-out waits for a platform admin to audit it, then finance pays it from a
+company wallet and records the on-chain transaction. Until then the money is **held** (reserved) on the
+merchant's balance, so it can't be spent twice; if the admin rejects it, the held amount goes straight back.
+
+**How the fee works.** The fee is charged **on top of** the amount, not taken out of it:
+
+| The merchant enters | Wallet receives (到账) | Fee (手续费) | Taken from balance (扣款合计) |
+|---|---|---|---|
+| 500 | **500** | 2.5 | **502.5** |
+
+So "预计到账" is always the amount entered. Never compute the fee yourself from `GET /fees` — use the preview
+below, which is the backend's own calculation.
+
+**Primary and backup wallets (主 / 备用).** A merchant can have several approved wallets per network. Exactly one
+is **primary** (the active one) — it's used when the merchant doesn't choose. The others are **backups** (approved
+standby). On the cash-out screen the merchant may pick any of them for this one cash-out; picking a backup does
+**not** change which wallet is primary (that is done on the 收款地址 page, §8.6). Wallets still waiting for
+approval, rejected, cancelled, or blocked by the AML check can't be chosen. Backups are re-checked against the AML
+service on the same schedule as the primary, because they can now receive money.
+
+**Suggested screen flow:**
+1. Load the picker from `GET /settlement-wallets` — show rows with `selectableForCashOut: true`, label them by
+   `role` (`primary` → 主, `backup` → 备用), primary pre-selected. If there are none, show "submit a cash-out
+   address and wait for approval" and disable the form.
+2. As the merchant types the amount (debounce it) or changes the wallet, call `GET /cash-outs/quote` and show
+   手续费 (`fee`), 预计到账 (`amountReceived`), 扣款合计 (`totalDebit`), and the balance it comes from
+   (`settledBalance`; it equals `availableBalance` unless the merchant has a T+N settlement period).
+3. If `wouldBeAccepted` is false, show the reason from `refusalCode` and disable 确认. The preview is a best
+   guess — the balance can change before submit — so still handle a refusal from step 4.
+4. On 确认, call `POST /cash-outs` with the same `amount` and `settlementWalletId` (and the `X-2FA-Code` header if
+   required, §3d). Show the returned `fee` / `totalDebit` — those are what was actually charged.
+5. The new cash-out appears in `GET /transactions/cash-out` as `pending_admin_audit` (待审核), or first as
+   `pending_approval` if it is above the merchant's approval threshold. After audit it moves to
+   `pending_finance_transfer`, then `finance_settled` once paid. If staff reject it at any step, the row shows
+   `status: "failed"`, `rejected: true` and their `failureReason` (§7).
+
+**Amounts:** every amount comes as a display decimal plus an exact `…BaseUnits` integer string. Show the decimal;
+use the `…BaseUnits` value if you need to compare or add amounts.
+
+#### `POST /api/v1/portal/cash-outs` — `portal.cashout.create`
 
 ```json
-{ "merchantOrderNumber": "CASH-2001", "network": "Tron", "coin": "USDT", "amount": 500.00 }
+{ "merchantOrderNumber": "CASH-2001", "network": "Tron", "coin": "USDT", "amount": 500.00,
+  "settlementWalletId": "guid (optional)" }
 ```
 
-**No destination field, and there will never be one.** It always goes to the settlement wallet whitelisted by
+**No free-form destination, and there will never be one.** It always goes to a settlement wallet approved by
 platform staff — precisely so a stolen portal session or leaked API key cannot redirect the merchant's
-earnings. If the wallet is not registered, this fails; the fix is a staff action, not a portal one.
+earnings. If the merchant has no approved wallet, this fails; the fix is getting one approved (§8.6).
 
-### `POST /api/v1/portal/payouts/{id}/approve` — `portal.payouts.approve`
+**Choosing the wallet (added 2026-11-02).** `settlementWalletId` is optional:
+- **omitted** → the **primary** wallet (the one with `role: "primary"`, i.e. the active one);
+- **set** → any wallet from `GET /settlement-wallets` with `selectableForCashOut: true` — the primary or a
+  **backup** (`role: "backup"`, an approved standby).
+
+Refused with `withdrawal.settlement_wallet_not_usable` (not one of this merchant's approved wallets on that
+network — pending, rejected, cancelled, another merchant's, or wrong network) or `withdrawal.settlement_wallet_blocked`
+(the AML check blocked it). Nothing is reserved when it is refused.
+
+The fee is charged **on top** of the amount (see the table above): the wallet receives the full `amount`, the
+balance drops by `totalDebit`.
+
+Response:
+```json
+{ "systemOrderNumber": "guid", "merchantOrderNumber": "CASH-2001", "network": "Tron", "coin": "USDT",
+  "amount": 500.00, "status": "PendingAdminAudit", "settlementAddress": "T...",
+  "fee": 2.5, "feeBaseUnits": "2500000",
+  "amountReceived": 500.00, "amountReceivedBaseUnits": "500000000",
+  "totalDebit": 502.5, "totalDebitBaseUnits": "502500000" }
+```
+`fee` / `totalDebit` are what was actually charged, read back from the record. Note `status` here is the
+internal PascalCase value (`PendingAdminAudit`, `PendingApproval`); the history list (§7) reports the same thing
+in the lowercase vocabulary (`pending_admin_audit`, `pending_approval`) — map them, don't compare them directly.
+
+#### `GET /api/v1/portal/cash-outs/quote` — `portal.cashout.create` (预计手续费 / 预计到账)
+
+Preview before the merchant confirms. Query: `network`, `coin`, `amount` (display units), optional
+`settlementWalletId`. **Creates and reserves nothing, so no 2FA code.** It runs the **same checks and the same fee
+calculation** as `POST /cash-outs`, so the preview cannot disagree with what is charged — use these numbers, don't
+compute them from `GET /fees`.
+
+```json
+{ "network": "Tron", "coin": "USDT",
+  "amount": 500.00, "amountBaseUnits": "500000000",
+  "fee": 2.5, "feeBaseUnits": "2500000",
+  "amountReceived": 500.00, "amountReceivedBaseUnits": "500000000",
+  "totalDebit": 502.5, "totalDebitBaseUnits": "502500000",
+  "availableBalance": 1200.00, "availableBalanceBaseUnits": "1200000000",
+  "settledBalance": 1200.00, "settledBalanceBaseUnits": "1200000000",
+  "cashOutLimit": null, "cashOutLimitBaseUnits": null,
+  "settlementAddress": "T...", "settlementWalletRole": "primary",
+  "wouldBeAccepted": true, "refusalCode": null, "refusalMessage": null }
+```
+
+- **Always 200** when the inputs are valid, even if the cash-out would be refused — so the screen can still show
+  the numbers. `wouldBeAccepted: false` + `refusalCode` say why, using the same codes `POST /cash-outs` returns:
+  `withdrawal.insufficient_balance` (balance below `totalDebit`), `withdrawal.exceeds_settled_balance` (T+N — only
+  `settledBalance` can go out), `withdrawal.exceeds_merchant_withdrawal_limit` (over `cashOutLimit`),
+  `withdrawal.settlement_wallet_not_registered`, `withdrawal.settlement_wallet_not_usable`,
+  `withdrawal.settlement_wallet_blocked`, `withdrawal.merchant_cannot_transact`.
+- `cashOutLimit` is null when the merchant has no cash-out cap.
+- It's a **best-effort preview**: the balance can change before submit, so `POST /cash-outs` can still refuse.
+- 400 `portal.invalid_amount` for a non-positive amount or more decimals than the coin allows; 400
+  `portal.malformed_request` when `amount` is missing.
+
+### 8.3 Approving payouts (merchant side)
+
+Cash-outs never wait for merchant approval — only payouts do. A cash-out goes straight to the platform side
+(§8.2).
+
+#### `POST /api/v1/portal/payouts/{id}/approve` — `portal.payouts.approve`
 
 ```json
 { "systemOrderNumber": "...", "status": "Approved", "awaitingPlatformApproval": false }
@@ -669,7 +829,7 @@ earnings. If the wallet is not registered, this fails; the fix is a staff action
 A merchant can never approve past the platform gate — the routing is re-resolved server-side at approval time,
 not chosen by the caller. When the flag is true, say "sent for platform approval", not "payout approved".
 
-### `POST /api/v1/portal/payouts/{id}/reject` — `portal.payouts.approve`
+#### `POST /api/v1/portal/payouts/{id}/reject` — `portal.payouts.approve`
 
 ```json
 { "reason": "Duplicate order" }
@@ -680,7 +840,7 @@ strands funds in clearing.
 
 `404` = unknown id **or another tenant's payout**. `409` = no longer awaiting merchant approval.
 
-### When does a payout actually wait for merchant approval?
+#### When does a payout actually wait for merchant approval?
 
 **It is the merchant's stored policy, not the fact that you called the portal.** `GET /portal/profile`
 returns `requiresPayoutApproval`:
@@ -699,7 +859,7 @@ Only platform staff can change it (`PUT /ops/merchants/{id}/payout-approval`); a
 its own approval requirement. Turning it off releases nothing already waiting — those payouts still need
 approving or rejecting.
 
-### Separation of duties — how it actually works
+#### Separation of duties — how it actually works
 
 Submit and approve are **different permission codes**, so a user granted only `create` cannot sign off their
 own request. But a merchant admin holding **both** may approve a payout they raised — there is deliberately no
@@ -710,8 +870,9 @@ control, that is achieved by not granting both codes to one role.
 
 ### 8.4 Being told a payout needs approval — webhook
 
-When a portal user submits a payout, a callback fires to the merchant's registered URL so an approver learns
-about it without watching the portal. Same envelope and HMAC signing as the deposit and withdrawal callbacks.
+When a payout enters `pending_merchant_approval`, a callback can fire so an approver learns about it without
+watching the portal. **It goes to the `callbackUrl` sent with that payout** — the same URL the payout's later
+confirmed/failed callbacks use. Same envelope and HMAC signing as the deposit and withdrawal callbacks.
 
 ```json
 { "transactionId": "<your reference>",
@@ -725,11 +886,13 @@ about it without watching the portal. Same envelope and HMAC signing as the depo
   integration that switches on status will ignore it rather than mistake a payout needing a human for one
   already on its way — that is deliberate.
 - `amount` and `fee` are **base-unit strings**, matching the other withdrawal callbacks.
-- **Portal-submitted payouts only.** An HMAC-API payout never enters merchant approval (your server already
-  authorised it by signing), so no callback fires for one. Existing API behaviour is unchanged.
+- **When it actually fires:** the merchant has `requiresPayoutApproval` on (§8.3) **and** the payout carried a
+  `callbackUrl`. In practice that means **payouts submitted through the HMAC API with a `callbackUrl`**.
+  Payouts submitted in this portal carry no callback URL, so **no webhook fires for them today** — the portal
+  user must check the approval queue (`GET /transactions/payout?status=pending_merchant_approval`).
 - **It carries no approval link or token.** Approval happens in an authenticated portal session; a webhook
   can never be the thing that authorises money movement.
-- No callback URL registered ⇒ nothing is sent, and the payout still waits normally. Delivery is
+- No callback URL on the payout ⇒ nothing is sent, and the payout still waits normally. Delivery is
   best-effort notification: a failed callback never changes the payout's state.
 
 ---
@@ -795,8 +958,9 @@ before any money can be paid to it — the merchant can never approve its own ad
 2. Platform staff approve it → **`Retired` (已审核/备用 — approved, standby)**, or straight to **`Active` (使用中)**
    if the merchant had no active address on that network yet. Or they reject it → **`Rejected` (已拒绝)** with a
    `rejectionReason` to show the user; the same address can be submitted again.
-3. Switch which **approved** address is active at any time — exactly one is active per network, and cash-outs
-   (`POST /cash-outs`, §8) are always paid to it. The previous active one goes back to standby.
+3. Switch which **approved** address is active at any time — exactly one is active per network. The active one is
+   the **primary**: cash-outs (`POST /cash-outs`, §8.2) are paid to it unless the merchant picks a **backup** (an
+   approved standby) for that one cash-out. The previous active one goes back to standby.
 4. Cancel your own request while it's still pending → **`Cancelled` (已取消)**.
 
 **Cash-outs need an active address.** With none, `POST /cash-outs` fails with
@@ -817,6 +981,7 @@ Full-access (`*`) roles have both permissions automatically; other roles need th
 { "items": [ {
     "walletId": "guid", "network": "Tron", "address": "T...", "label": "finance ledger",
     "status": "Active", "isActive": true,
+    "role": "primary", "selectableForCashOut": true, "screeningDecision": "Allow",
     "source": "Merchant", "submittedBy": "merchant001",
     "reviewedBy": "admin", "reviewedAt": "...", "rejectionReason": null,
     "createdAt": "...", "updatedAt": "..." } ] }
@@ -824,6 +989,10 @@ Full-access (`*`) roles have both permissions automatically; other roles need th
 
 Every status is listed (newest change first). Show `status` as a tag; show `rejectionReason` on rejected rows.
 Actions per row: **Activate** only when `status` is `Retired`; **Cancel** only when `PendingApproval`.
+
+`role` (added 2026-11-02): `"primary"` (主 — the active wallet, the cash-out default), `"backup"` (备用 — approved
+standby, can be chosen for a cash-out), or `null` (pending/rejected/cancelled — cannot be paid). For the cash-out
+wallet picker, list the rows with `selectableForCashOut: true` (approved and not blocked by the AML check).
 
 ### `POST /api/v1/portal/settlement-wallets`
 
@@ -846,6 +1015,8 @@ pending/rejected/cancelled), **400 `merchant.settlement_wallet_blocked`** (scree
 ### `POST /api/v1/portal/settlement-wallets/{walletId}/cancel`
 
 Withdraws a pending request. **409 `merchant.settlement_wallet_not_pending`** if it's no longer pending.
+
+---
 
 ## 9. Merchant self-administration
 
@@ -954,6 +1125,9 @@ Recorded actions:
 | `portal.api_credential.rotated` | `MerchantApiCredential` |
 | `portal.allowed_ips.updated` | `Merchant` |
 | `portal.payout.approved` / `.rejected` | `Withdrawal` |
+| `portal.settlement_wallet.submitted` / `.cancelled` / `.activated` | `MerchantSettlementWallet` |
+| `portal.two_factor.enrollment_started` / `.enrolled` / `.recovery_codes_regenerated` / `.reset` | `MerchantUser` |
+| `portal.two_factor_policy.changed` / `.restored_defaults` | `MerchantTwoFactorPolicy` |
 
 **Only successful actions are recorded** — a rejected attempt is not an action, and logging failures would
 make the trail unusable as evidence of what actually changed. It is not an authentication log: failed logins
@@ -975,7 +1149,7 @@ Read-only — nothing exposes a way to edit or delete an entry.
 | **`errorCode` on failures** | **Done** — every response carries one, `portal.*` for host validation and `<module>.*` for business rules (§2). |
 | **Dashboard / aggregates** | No portal endpoint. The Ops dashboard is platform-wide and is not exposed here. |
 | **Paging** | **Done.** Transaction history and `/addresses` are paged. Accounts and roles return in full — bounded by headcount, so paging them would add UI work for no benefit. |
-| **Merchant notification when a payout awaits approval** | **Done** — a `pending_merchant_approval` webhook fires for portal-submitted payouts (§8.4). Merchants with no registered callback URL still need to poll. |
+| **Merchant notification when a payout awaits approval** | **Partly done** — a `pending_merchant_approval` webhook fires for HMAC-API payouts that carry a `callbackUrl` (§8.4). Payouts submitted in this portal send none today, so show the approval queue's count in the UI. |
 | **Portal audit log** | **Done** — `GET /portal/activity` (§9.5). |
 | **Revoking a disabled account's live sessions** | Refused at next login only. The same applies to a two-factor reset: the user's existing session keeps working until it expires. |
 | **Cash-out (settlement) address** | **Done (2026-10-14)** — the merchant submits it, platform staff approve it (§8.6). The merchant can never approve its own address. |

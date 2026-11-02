@@ -171,7 +171,9 @@ public sealed class WithdrawalDirectory(WithdrawalDbContext context) : IWithdraw
         withdrawal.SettlementSourceAddress,
         withdrawal.ScreeningDecision,
         withdrawal.ScreeningScore,
-        withdrawal.ScreeningId);
+        withdrawal.ScreeningId,
+        withdrawal.Status == WithdrawalStatus.Rejected,
+        withdrawal.FailureReason);
 
     /// <summary>"pending" | "pending_merchant_approval" | "pending_approval" | "insufficient_balance" | "awaiting_release" | "confirmed" |
     /// "failed" — withdrawals have no "expired" state. The states that need a human, not the worker, to move
