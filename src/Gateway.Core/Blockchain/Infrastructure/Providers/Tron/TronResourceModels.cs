@@ -1,4 +1,4 @@
-using System.Text.Json.Serialization;
+﻿using System.Text.Json.Serialization;
 
 namespace CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers.Tron;
 
@@ -17,6 +17,12 @@ public sealed record TronAccountResourceDto
 
     [JsonPropertyName("NetLimit")] public long NetLimit { get; init; }
     [JsonPropertyName("NetUsed")] public long NetUsed { get; init; }
+
+    /// <summary>The network's daily energy supply. Returned on every <c>getaccountresource</c> answer.</summary>
+    [JsonPropertyName("TotalEnergyLimit")] public long TotalEnergyLimit { get; init; }
+
+    /// <summary>The network's TRX staked for energy, in whole TRX.</summary>
+    [JsonPropertyName("TotalEnergyWeight")] public long TotalEnergyWeight { get; init; }
 }
 
 /// <summary>
@@ -63,4 +69,45 @@ public sealed record DelegateResourceRequest
     [JsonPropertyName("resource")] public string Resource { get; init; } = "ENERGY";
     [JsonPropertyName("lock")] public bool Lock { get; init; }
     [JsonPropertyName("visible")] public bool Visible { get; init; }
+}
+
+/// <summary>Request body for <c>/wallet/undelegateresource</c>: take back <see cref="Balance"/> sun of lent ENERGY.</summary>
+public sealed record UndelegateResourceRequest
+{
+    [JsonPropertyName("owner_address")] public required string OwnerAddress { get; init; }
+    [JsonPropertyName("receiver_address")] public required string ReceiverAddress { get; init; }
+    [JsonPropertyName("balance")] public required long Balance { get; init; }
+    [JsonPropertyName("resource")] public string Resource { get; init; } = "ENERGY";
+    [JsonPropertyName("visible")] public bool Visible { get; init; }
+}
+
+/// <summary>Request body for <c>/wallet/unfreezebalancev2</c>: start unlocking <see cref="UnfreezeBalance"/> sun.</summary>
+public sealed record UnfreezeBalanceV2Request
+{
+    [JsonPropertyName("owner_address")] public required string OwnerAddress { get; init; }
+    [JsonPropertyName("unfreeze_balance")] public required long UnfreezeBalance { get; init; }
+    [JsonPropertyName("resource")] public string Resource { get; init; } = "ENERGY";
+    [JsonPropertyName("visible")] public bool Visible { get; init; }
+}
+
+/// <summary>Request body for <c>/wallet/withdrawexpireunfreeze</c>.</summary>
+public sealed record WithdrawExpireUnfreezeRequest
+{
+    [JsonPropertyName("owner_address")] public required string OwnerAddress { get; init; }
+    [JsonPropertyName("visible")] public bool Visible { get; init; }
+}
+
+/// <summary>
+/// Response of <c>/wallet/getdelegatedresourcev2</c>. TRON omits zero fields and returns <c>{}</c> when nothing
+/// is lent, so the list defaults to empty and each amount to 0.
+/// </summary>
+public sealed record TronDelegatedResourceDto
+{
+    [JsonPropertyName("delegatedResource")] public List<TronDelegatedResourceEntryDto> DelegatedResource { get; init; } = [];
+}
+
+/// <summary>One lending position; <c>frozen_balance_for_energy</c> is the staked TRX (sun) lent as energy.</summary>
+public sealed record TronDelegatedResourceEntryDto
+{
+    [JsonPropertyName("frozen_balance_for_energy")] public long FrozenBalanceForEnergy { get; init; }
 }

@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.PaymentProcessing.Withdrawal.Events;
 using CryptoPaymentEngine.Gateway.Core.Platform.Notification.Application.Abstractions;
@@ -21,6 +21,7 @@ namespace CryptoPaymentEngine.Gateway.Core.Platform.Notification.Application.Han
 public sealed class WithdrawalPendingMerchantApprovalCallbackHandler(
     IMerchantCallbackSigner signer,
     ICallbackDeliveryScheduler scheduler,
+    IMerchantDirectory merchants,
     ILogger<WithdrawalPendingMerchantApprovalCallbackHandler> logger)
     : IIntegrationEventHandler<WithdrawalPendingMerchantApproval>
 {
@@ -28,8 +29,14 @@ public sealed class WithdrawalPendingMerchantApprovalCallbackHandler(
 
     public async Task HandleAsync(WithdrawalPendingMerchantApproval @event, CancellationToken cancellationToken = default)
     {
-        if (string.IsNullOrWhiteSpace(@event.CallbackUrl))
-            return; // the merchant did not ask for a callback
+        // The payout's own callback URL (an HMAC-API payout may carry one), else the merchant's saved callback
+        // URL. A payout submitted in the merchant portal never carries one, and that is exactly the case this
+        // notification exists for: the approver is a person who is not watching the portal.
+        var callbackUrl = @event.CallbackUrl;
+        if (string.IsNullOrWhiteSpace(callbackUrl))
+            callbackUrl = (await merchants.FindByIdAsync(@event.MerchantId, cancellationToken))?.CallbackUrl;
+        if (string.IsNullOrWhiteSpace(callbackUrl))
+            return; // nowhere to send it — the payout still waits normally in the approval queue
 
         var body = BuildPayload(@event);
 
@@ -44,7 +51,7 @@ public sealed class WithdrawalPendingMerchantApprovalCallbackHandler(
 
         await scheduler.ScheduleAsync(
             CallbackReferenceType.Withdrawal, @event.WithdrawalId,
-            @event.CallbackUrl!, body, CallbackType, signature.Value.Timestamp, signature.Value.SignatureHex,
+            callbackUrl, body, CallbackType, signature.Value.Timestamp, signature.Value.SignatureHex,
             cancellationToken);
     }
 

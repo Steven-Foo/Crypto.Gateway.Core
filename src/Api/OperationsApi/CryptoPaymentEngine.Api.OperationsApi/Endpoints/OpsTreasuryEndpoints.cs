@@ -1,4 +1,4 @@
-using CryptoPaymentEngine.Api.OperationsApi.Models;
+﻿using CryptoPaymentEngine.Api.OperationsApi.Models;
 using CryptoPaymentEngine.Api.OperationsApi.Security;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Application;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Contracts;
@@ -22,6 +22,13 @@ public static class OpsTreasuryEndpoints
     public static void MapOpsTreasuryApi(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/v1/ops/treasury/hot-pool", HotPoolAsync).RequirePermission(OpsPermissions.Treasury.Manage);
+
+        // Creates the hot withdrawal pool (or grows it). Production's only way to create it — the dev seeder never
+        // runs there. Keyless from this host's side: it derives watch-only addresses (and, the first time for a
+        // chain, mints + seals the pool seed under KMS); it can never sign from them (§10).
+        app.MapPost("/api/v1/ops/treasury/hot-pool/provision", ProvisionHotPoolAsync)
+            .RequirePermission(OpsPermissions.Treasury.Manage)
+            .RequireTwoFactor(GuardedActions.TreasuryProvision);
 
         app.MapGet("/api/v1/ops/treasury/cold-wallets", ListColdAsync).RequirePermission(OpsPermissions.Treasury.Manage);
         app.MapPost("/api/v1/ops/treasury/cold-wallets", RegisterColdAsync).RequirePermission(OpsPermissions.Treasury.Manage)
@@ -105,6 +112,41 @@ public static class OpsTreasuryEndpoints
         }
 
         return Ok(rows);
+    }
+
+    /// <summary>
+    /// Grows the hot pool to the requested size and returns the addresses it created — the ones finance must fund.
+    /// No ledger entry: creating an address moves no money (§14).
+    /// </summary>
+    private static async Task<IResult> ProvisionHotPoolAsync(
+        ProvisionHotPoolRequest request, TreasuryHotWalletProvisioningService provisioning, IAuditLogger audit,
+        HttpContext http)
+    {
+        if (!TryChain(request.Chain, out var parsed))
+            return BadChain(request.Chain);
+
+        var result = await provisioning.ProvisionAsync(parsed, request.Size, http.RequestAborted);
+        if (result.IsFailure)
+            return OpsResults.Fail(result.Error!);
+
+        var outcome = result.Value;
+        if (outcome.CreatedAddresses.Count > 0)
+        {
+            var actor = AuditActor.From(http);
+            var reason = string.IsNullOrWhiteSpace(request.Reason) ? null : request.Reason.Trim();
+            var detail = $"{parsed} pool {outcome.PreviousSize}->{outcome.Size}";
+            await audit.LogAsync(new LogAuditEntryCommand(
+                actor.StaffUserId, actor.Username, "treasury.hot_pool_provisioned", "HotWalletPool", parsed.ToString(),
+                Truncate(reason is null ? detail : $"{reason} ({detail})", 512), actor.IpAddress), http.RequestAborted);
+        }
+
+        return Ok(new
+        {
+            chain = outcome.Chain.ToString(),
+            previousSize = outcome.PreviousSize,
+            size = outcome.Size,
+            createdAddresses = outcome.CreatedAddresses,
+        });
     }
 
     /// <summary>

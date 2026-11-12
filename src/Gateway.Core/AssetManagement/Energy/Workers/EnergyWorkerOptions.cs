@@ -1,4 +1,4 @@
-using CryptoPaymentEngine.SharedKernel;
+﻿using CryptoPaymentEngine.SharedKernel;
 
 namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Workers;
 
@@ -18,4 +18,7 @@ public sealed class EnergyWorkerOptions
 
     /// <summary>5b: how often to confirm broadcast stake/delegate operations.</summary>
     public TimeSpan OperationConfirmationInterval { get; init; } = TimeSpan.FromSeconds(15);
+
+    /// <summary>How often to look for lent energy to take back from deposit addresses.</summary>
+    public TimeSpan ReclaimInterval { get; init; } = TimeSpan.FromMinutes(5);
 }

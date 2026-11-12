@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Domain;
 using CryptoPaymentEngine.SharedKernel;
@@ -16,12 +16,21 @@ public sealed record DefaultFeePolicyView(
     string MinimumDepositFee,
     string WithdrawalFee,
     int WithdrawalFeeBps,
-    string MinimumWithdrawalFee);
+    string MinimumWithdrawalFee,
+    string? MinimumDeposit = null,
+    string? MaximumDeposit = null,
+    string? MinimumWithdrawal = null,
+    string? MaximumWithdrawal = null,
+    string? ApprovalThreshold = null);
+
+/// <summary>Platform-default limits for one asset, base units. Null on a bound = no platform default.</summary>
+public sealed record DefaultLimits(
+    BigInteger? MinimumDeposit, BigInteger? MaximumDeposit, BigInteger? MinimumWithdrawal,
+    BigInteger? MaximumWithdrawal, BigInteger? ApprovalThreshold);
 
 /// <summary>
-/// Staff-editable default fee template, per asset — pure storage for the create-merchant screen's pre-fill.
-/// Setting a value here does not touch any merchant's own pricing, and does not change how an already-unpriced
-/// merchant's fee is resolved at charge time (that stays <c>MerchantDefaultFee</c>, untouched).
+/// The platform defaults, per asset: what a merchant is charged and limited by wherever it has no value of its own
+/// (see <see cref="DefaultFeePolicy"/>). Saving a default never edits any merchant's own values.
 /// </summary>
 public interface IDefaultFeePolicyService
 {
@@ -36,6 +45,10 @@ public interface IDefaultFeePolicyService
         int withdrawalFeeBps,
         BigInteger minimumWithdrawalFee,
         CancellationToken cancellationToken = default);
+
+    /// <summary>Replaces the asset's platform-default limits (every bound at once; null clears one).</summary>
+    Task<Result<DefaultFeePolicyView>> SetLimitsAsync(
+        Guid assetId, DefaultLimits limits, CancellationToken cancellationToken = default);
 }
 
 public sealed class DefaultFeePolicyService(
@@ -89,6 +102,26 @@ public sealed class DefaultFeePolicyService(
         return Result.Success(ToView(existing));
     }
 
+    public async Task<Result<DefaultFeePolicyView>> SetLimitsAsync(
+        Guid assetId, DefaultLimits limits, CancellationToken cancellationToken = default)
+    {
+        var now = timeProvider.GetUtcNow();
+        var policy = await repository.FindByAssetIdAsync(assetId, cancellationToken);
+        var isNew = policy is null;
+        policy ??= DefaultFeePolicy.CreateForLimits(assetId, now).Value;
+
+        var set = policy.SetLimits(
+            limits.MinimumDeposit, limits.MaximumDeposit, limits.MinimumWithdrawal, limits.MaximumWithdrawal,
+            limits.ApprovalThreshold, now);
+        if (set.IsFailure)
+            return Result.Failure<DefaultFeePolicyView>(set.Error!);
+
+        if (isNew)
+            repository.Add(policy);
+        await repository.SaveChangesAsync(cancellationToken);
+        return Result.Success(ToView(policy));
+    }
+
     private static DefaultFeePolicyView ToView(DefaultFeePolicy p) => new(
         p.AssetId,
         p.DepositFeeFixed.ToString(),
@@ -96,5 +129,10 @@ public sealed class DefaultFeePolicyService(
         p.MinimumDepositFee.ToString(),
         p.WithdrawalFee.ToString(),
         p.WithdrawalFeeBps,
-        p.MinimumWithdrawalFee.ToString());
+        p.MinimumWithdrawalFee.ToString(),
+        p.MinimumDeposit?.ToString(),
+        p.MaximumDeposit?.ToString(),
+        p.MinimumWithdrawal?.ToString(),
+        p.MaximumWithdrawal?.ToString(),
+        p.ApprovalThreshold?.ToString());
 }

@@ -1,13 +1,15 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.Json;
 using Amazon.KeyManagementService;
 using Amazon.KeyManagementService.Model;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Domain;
+using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Derivation;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Secrets;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Secrets.Aws;
 using CryptoPaymentEngine.SharedKernel;
+using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
@@ -29,6 +31,7 @@ public sealed class KmsEnvelopeCustodyTests
 {
     private const string DepositArn = "arn:aws:kms:ap-southeast-1:111:key/deposit";
     private const string WithdrawalArn = "arn:aws:kms:ap-southeast-1:111:key/withdrawal";
+    private const string EnergyArn = "arn:aws:kms:ap-southeast-1:111:key/energy";
 
     private static CancellationToken Ct => TestContext.Current.CancellationToken;
 
@@ -39,20 +42,20 @@ public sealed class KmsEnvelopeCustodyTests
     {
         Enabled = true,
         Region = "ap-southeast-1",
-        KeyArns = new AwsKmsKeyCustodyOptions.KmsKeyArns { Deposit = DepositArn, Withdrawal = WithdrawalArn },
+        KeyArns = new AwsKmsKeyCustodyOptions.KmsKeyArns { Deposit = DepositArn, Withdrawal = WithdrawalArn, Energy = EnergyArn },
     };
 
-    private KmsHdWalletProvisioner Provisioner() =>
-        new(_store, _kms, Microsoft.Extensions.Options.Options.Create(Options()), TimeProvider.System);
+    private KmsHdWalletProvisioner Provisioner(AwsKmsKeyCustodyOptions? options = null) =>
+        new(_store, _kms, Microsoft.Extensions.Options.Options.Create(options ?? Options()), TimeProvider.System);
 
-    private KmsEnvelopeSecretProvider Provider()
+    private KmsEnvelopeSecretProvider Provider(KmsKeyAccess access = KmsKeyAccess.Signing)
     {
         // The provider is a singleton that reads its store through a scope; give it a real scope factory.
         var services = new ServiceCollection();
         services.AddScoped<ISecretMaterialStore>(_ => _store);
         var scopeFactory = services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
         return new KmsEnvelopeSecretProvider(
-            scopeFactory, _kms, Microsoft.Extensions.Options.Options.Create(Options()),
+            scopeFactory, _kms, Microsoft.Extensions.Options.Options.Create(Options()), new KmsKeyAccessMode(access),
             NullLogger<KmsEnvelopeSecretProvider>.Instance);
     }
 
@@ -153,6 +156,96 @@ public sealed class KmsEnvelopeCustodyTests
         // The guard fires before KMS is ever contacted.
         await _kms.DidNotReceive().DecryptAsync(Arg.Any<DecryptRequest>(), Arg.Any<CancellationToken>());
     }
+
+    [Fact]
+    public async Task The_energy_wallet_seals_under_its_own_key_and_its_signing_key_matches_its_address()
+    {
+        var wallet = (await Provisioner().ProvisionPlatformEnergyWalletAsync(Chain.Tron, Ct)).Value;
+
+        wallet.Purpose.ShouldBe(HdWalletPurpose.Energy);
+        wallet.MerchantId.ShouldBeNull();
+        var reference = wallet.SecretReference;
+        _store.Items[reference].KmsKeyId.ShouldBe(EnergyArn); // never the deposit or withdrawal key
+
+        using var xpubLease = await Provider().GetAsync(reference, Ct);
+        var watchOnlyPublicKey = new Bip32Secp256k1KeyDeriver().DerivePublicKey(xpubLease.AsPublicUtf8String(), 0);
+
+        using var keyLease = await Provider().GetAsync($"{reference}#0", Ct);
+        new Key(keyLease.Value.ToArray()).PubKey.Decompress().ToBytes().ShouldBe(watchOnlyPublicKey);
+    }
+
+    [Fact]
+    public async Task Without_an_energy_key_the_energy_wallet_is_refused_and_nothing_is_minted()
+    {
+        var noEnergy = Options();
+        noEnergy.KeyArns.Energy = null;
+
+        var result = await Provisioner(noEnergy).ProvisionPlatformEnergyWalletAsync(Chain.Tron, Ct);
+
+        result.Error!.Code.ShouldBe(KeyManagementErrors.EnergyKeyNotConfigured.Code);
+        _store.Items.ShouldBeEmpty();
+        await _kms.DidNotReceive().EncryptAsync(Arg.Any<EncryptRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task An_address_only_host_reads_the_xpub_and_mints_wallets_but_never_unseals_a_seed()
+    {
+        // Minting a wallet (kms:Encrypt) is what a back office needs to create a merchant's deposit address.
+        var wallet = (await Provisioner().ProvisionMerchantDepositWalletAsync(Guid.CreateVersion7(), Chain.Tron, Ct)).Value;
+        var reference = wallet.SecretReference;
+        var addressOnly = Provider(KmsKeyAccess.AddressOnly);
+
+        using (var xpub = await addressOnly.GetAsync(reference, Ct))
+            xpub.AsPublicUtf8String().ShouldBe(_store.Items[reference].Xpub);
+
+        var ex = await Should.ThrowAsync<InvalidOperationException>(async () =>
+        {
+            using var _ = await addressOnly.GetAsync($"{reference}#0", Ct);
+        });
+        ex.Message.ShouldContain("address-only");
+
+        // Refused in code, before KMS is ever asked to decrypt.
+        await _kms.DidNotReceive().DecryptAsync(Arg.Any<DecryptRequest>(), Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public void The_access_mode_registered_is_exactly_the_one_the_host_asked_for()
+    {
+        foreach (var access in new[] { KmsKeyAccess.AddressOnly, KmsKeyAccess.Signing })
+        {
+            var services = new ServiceCollection();
+            services.AddAwsKmsKeyCustody(KmsConfig(), access);
+            services.ShouldContain(d => d.ServiceType == typeof(KmsKeyAccessMode)
+                && ((KmsKeyAccessMode)d.ImplementationInstance!).Access == access);
+        }
+    }
+
+    [Fact]
+    public void Production_custody_with_the_switch_on_and_an_identifier_missing_refuses_to_compose()
+    {
+        var config = new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(
+            new Dictionary<string, string?> { ["KeyManagement:Kms:Enabled"] = "true", ["KeyManagement:Kms:Region"] = "ap-southeast-1" }).Build();
+
+        Should.Throw<InvalidOperationException>(() =>
+            new ServiceCollection().AddAwsKmsKeyCustody(config, KmsKeyAccess.AddressOnly));
+    }
+
+    [Fact]
+    public void Production_custody_with_the_switch_off_registers_nothing()
+    {
+        var services = new ServiceCollection();
+        services.AddAwsKmsKeyCustody(new Microsoft.Extensions.Configuration.ConfigurationBuilder().Build(), KmsKeyAccess.Signing);
+        services.ShouldBeEmpty();
+    }
+
+    private static Microsoft.Extensions.Configuration.IConfiguration KmsConfig() =>
+        new Microsoft.Extensions.Configuration.ConfigurationBuilder().AddInMemoryCollection(new Dictionary<string, string?>
+        {
+            ["KeyManagement:Kms:Enabled"] = "true",
+            ["KeyManagement:Kms:Region"] = "ap-southeast-1",
+            ["KeyManagement:Kms:KeyArns:Deposit"] = DepositArn,
+            ["KeyManagement:Kms:KeyArns:Withdrawal"] = WithdrawalArn,
+        }).Build();
 
     [Fact]
     public void A_kms_wallet_can_never_resolve_to_an_in_memory_provider_and_vice_versa()

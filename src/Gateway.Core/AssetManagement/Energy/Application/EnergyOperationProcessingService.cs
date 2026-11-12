@@ -1,4 +1,4 @@
-using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Application.Abstractions;
+﻿using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Domain;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Contracts;
@@ -48,7 +48,11 @@ public sealed class EnergyOperationProcessingService(
             if (operation.Status == EnergyOperationStatus.Signing && operation.HasSignedTransaction)
                 return await BroadcastAsync(operation, operation.SignedTransaction!, cancellationToken);
 
-            var signingKey = await signingKeys.FindActiveAsync(operation.Chain, DerivationPurpose.Energy, cancellationToken);
+            // Resolve the key for the EXACT address the operation spends from. The production staking wallet is a
+            // child of the KMS-sealed energy HD wallet, resolved per address; an imported key (development's
+            // staking wallet from configuration) has no child index and is found by chain + purpose instead.
+            var signingKey = await signingKeys.FindByAddressAsync(operation.Chain, operation.OwnerAddress, cancellationToken)
+                ?? await signingKeys.FindActiveAsync(operation.Chain, DerivationPurpose.Energy, cancellationToken);
             if (signingKey is null)
                 return await FailAsync(operation, "no staking signing key registered", cancellationToken);
 
@@ -61,6 +65,12 @@ public sealed class EnergyOperationProcessingService(
                 // A TopUp is a native-TRX transfer from the gas hub to the target (bandwidth funding).
                 EnergyOperationKind.TopUp => await nativeTransferBuilder.BuildNativeTransferAsync(
                     operation.Chain, operation.OwnerAddress, operation.TargetAddress!, operation.AmountSun, cancellationToken),
+                EnergyOperationKind.Undelegate => await builder.BuildUndelegateEnergyAsync(
+                    new UndelegateEnergyRequest(operation.Chain, operation.OwnerAddress, operation.TargetAddress!, operation.AmountSun), cancellationToken),
+                EnergyOperationKind.Unstake => await builder.BuildUnstakeEnergyAsync(
+                    new UnstakeEnergyRequest(operation.Chain, operation.OwnerAddress, operation.AmountSun), cancellationToken),
+                EnergyOperationKind.WithdrawUnstaked => await builder.BuildWithdrawUnstakedAsync(
+                    new WithdrawUnstakedRequest(operation.Chain, operation.OwnerAddress), cancellationToken),
                 _ => throw new InvalidOperationException($"Unknown energy operation kind {operation.Kind}."),
             };
 

@@ -262,7 +262,7 @@ public sealed class TestnetKeyCustodyCompositionTests
     {
         var services = new ServiceCollection();
 
-        services.AddTestnetKeyCustody(Config()).ShouldBeFalse();
+        services.AddTestnetKeyCustody(Config(), KmsKeyAccess.Signing).ShouldBeFalse();
 
         Has<ISecretProvider, DevHdWalletSigningSecretProvider>(services).ShouldBeTrue();
         Has<ISecretProvider, KmsEnvelopeSecretProvider>(services).ShouldBeFalse();
@@ -274,7 +274,7 @@ public sealed class TestnetKeyCustodyCompositionTests
     {
         var services = new ServiceCollection();
 
-        services.AddTestnetKeyCustody(KmsOn()).ShouldBeTrue();
+        services.AddTestnetKeyCustody(KmsOn(), KmsKeyAccess.Signing).ShouldBeTrue();
 
         Has<ISecretProvider, KmsEnvelopeSecretProvider>(services).ShouldBeTrue();
         Has<IHdWalletProvisioner, KmsHdWalletProvisioner>(services).ShouldBeTrue();
@@ -300,7 +300,7 @@ public sealed class TestnetKeyCustodyCompositionTests
         values.Remove(missing);
         var config = new ConfigurationBuilder().AddInMemoryCollection(values).Build();
 
-        Should.Throw<InvalidOperationException>(() => new ServiceCollection().AddTestnetKeyCustody(config))
+        Should.Throw<InvalidOperationException>(() => new ServiceCollection().AddTestnetKeyCustody(config, KmsKeyAccess.Signing))
             .Message.ShouldContain("KeyManagement:Kms");
     }
 
@@ -308,11 +308,11 @@ public sealed class TestnetKeyCustodyCompositionTests
     public void The_switch_is_registered_only_when_asked_and_starts_before_the_in_memory_reseeder()
     {
         var withoutSwitch = new ServiceCollection();
-        withoutSwitch.AddTestnetKeyCustody(Config());
+        withoutSwitch.AddTestnetKeyCustody(Config(), KmsKeyAccess.Signing);
         withoutSwitch.ShouldNotContain(d => d.ImplementationType == typeof(CustodyModeReconciliationService));
 
         var withSwitch = new ServiceCollection();
-        withSwitch.AddTestnetKeyCustody(Config(), reconcileWallets: true);
+        withSwitch.AddTestnetKeyCustody(Config(), KmsKeyAccess.Signing, reconcileWallets: true);
         var hosted = withSwitch.Where(d => d.ServiceType == typeof(IHostedService)).Select(d => d.ImplementationType).ToList();
 
         hosted.IndexOf(typeof(CustodyModeReconciliationService)).ShouldBe(0);

@@ -1,4 +1,4 @@
-using CryptoPaymentEngine.Gateway.Core.KeyManagement.Domain;
+﻿using CryptoPaymentEngine.Gateway.Core.KeyManagement.Domain;
 
 namespace CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Secrets.Aws;
 
@@ -26,6 +26,7 @@ public sealed class AwsKmsKeyCustodyOptions
     {
         HdWalletPurpose.Deposit => NullIfBlank(KeyArns.Deposit),
         HdWalletPurpose.Withdrawal => NullIfBlank(KeyArns.Withdrawal),
+        HdWalletPurpose.Energy => NullIfBlank(KeyArns.Energy),
         _ => null,
     };
 
@@ -34,7 +35,8 @@ public sealed class AwsKmsKeyCustodyOptions
     public bool IsConfiguredKey(string? keyArn) =>
         !string.IsNullOrWhiteSpace(keyArn) &&
         (string.Equals(keyArn, NullIfBlank(KeyArns.Deposit), StringComparison.Ordinal) ||
-         string.Equals(keyArn, NullIfBlank(KeyArns.Withdrawal), StringComparison.Ordinal));
+         string.Equals(keyArn, NullIfBlank(KeyArns.Withdrawal), StringComparison.Ordinal) ||
+         string.Equals(keyArn, NullIfBlank(KeyArns.Energy), StringComparison.Ordinal));
 
     private static string? NullIfBlank(string? value) => string.IsNullOrWhiteSpace(value) ? null : value.Trim();
 
@@ -42,5 +44,10 @@ public sealed class AwsKmsKeyCustodyOptions
     {
         public string? Deposit { get; set; }
         public string? Withdrawal { get; set; }
+
+        /// <summary>The CMK that seals the energy (staking / TRX gas hub) wallet's seed. Optional: without it the
+        /// energy wallet simply cannot be created, and everything else runs. Its own key so a mistake on the
+        /// energy wallet's IAM policy can never reach the deposit or withdrawal seeds.</summary>
+        public string? Energy { get; set; }
     }
 }

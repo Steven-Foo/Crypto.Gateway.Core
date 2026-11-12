@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 
 namespace CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers.Tron;
 
@@ -28,4 +28,17 @@ public interface ITronResourceRpc
     /// transaction JSON, or a <c>{ "Error": … }</c> object on rejection.
     /// </summary>
     Task<JsonElement> DelegateResourceAsync(DelegateResourceRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary><c>/wallet/undelegateresource</c> — builds an UNSIGNED take-back of lent energy.</summary>
+    Task<JsonElement> UndelegateResourceAsync(UndelegateResourceRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary><c>/wallet/unfreezebalancev2</c> — builds an UNSIGNED unstake (starts the waiting period).</summary>
+    Task<JsonElement> UnfreezeBalanceV2Async(UnfreezeBalanceV2Request request, CancellationToken cancellationToken = default);
+
+    /// <summary><c>/wallet/withdrawexpireunfreeze</c> — builds an UNSIGNED withdrawal of finished unstakes.</summary>
+    Task<JsonElement> WithdrawExpireUnfreezeAsync(WithdrawExpireUnfreezeRequest request, CancellationToken cancellationToken = default);
+
+    /// <summary><c>/wallet/getdelegatedresourcev2</c> — what one owner lends to one receiver.</summary>
+    Task<TronDelegatedResourceDto> GetDelegatedResourceV2Async(
+        string fromHexAddress, string toHexAddress, CancellationToken cancellationToken = default);
 }

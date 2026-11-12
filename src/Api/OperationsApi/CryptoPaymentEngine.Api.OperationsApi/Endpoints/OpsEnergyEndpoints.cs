@@ -1,6 +1,8 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Numerics;
+using CryptoPaymentEngine.Api.OperationsApi.Models;
 using CryptoPaymentEngine.Api.OperationsApi.Security;
+using CryptoPaymentEngine.Gateway.Core.Platform.Audit.Application;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Application;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Contracts;
@@ -22,12 +24,170 @@ public static class OpsEnergyEndpoints
     private const int TrxDecimals = 6;
 
     private static readonly string[] Statuses = ["Pending", "Signing", "Broadcast", "Confirmed", "Failed"];
-    private static readonly string[] Kinds = ["Stake", "Delegate", "TopUp"];
+    private static readonly string[] Kinds = ["Stake", "Delegate", "TopUp", "Undelegate", "Unstake", "WithdrawUnstaked"];
 
     public static void MapOpsEnergyApi(this IEndpointRouteBuilder app)
     {
         app.MapGet("/api/v1/ops/energy/operations", ListOperationsAsync).RequirePermission(OpsPermissions.Energy.View);
         app.MapGet("/api/v1/ops/energy/resources", ListResourcesAsync).RequirePermission(OpsPermissions.Energy.View);
+
+        // The staking (energy) wallet and its rules. Creating the wallet derives an address (and, the first time,
+        // seals the energy seed under KMS); setting the rules writes the policy row. Neither stakes, delegates or
+        // signs: the money host's workers do that from these settings (§4.7, §10).
+        app.MapGet("/api/v1/ops/energy/staking", GetStakingAsync).RequirePermission(OpsPermissions.Energy.View);
+        app.MapPost("/api/v1/ops/energy/staking-wallet/provision", ProvisionStakingWalletAsync)
+            .RequirePermission(OpsPermissions.Energy.Manage)
+            .RequireTwoFactor(GuardedActions.TreasuryProvision);
+        app.MapPut("/api/v1/ops/energy/policy", SetPolicyAsync)
+            .RequirePermission(OpsPermissions.Energy.Manage)
+            .RequireTwoFactor(GuardedActions.EnergySettings);
+
+        // Getting staked TRX back: unstake starts the network's waiting period, withdraw collects what finished it.
+        // Both only queue an operation; the money host's worker signs and sends it.
+        app.MapPost("/api/v1/ops/energy/unstake", UnstakeAsync)
+            .RequirePermission(OpsPermissions.Energy.Manage)
+            .RequireTwoFactor(GuardedActions.EnergySettings);
+        app.MapPost("/api/v1/ops/energy/withdraw-unstaked", WithdrawUnstakedAsync)
+            .RequirePermission(OpsPermissions.Energy.Manage)
+            .RequireTwoFactor(GuardedActions.EnergySettings);
+    }
+
+    private static async Task<IResult> UnstakeAsync(
+        UnstakeRequest request, EnergyAdministrationService energy, IAuditLogger audit, HttpContext http)
+    {
+        if (!TryParseRequiredChain(request.Chain, out var parsed, out var bad))
+            return bad!;
+
+        if (!AmountConversion.TryToBaseUnits(request.Amount, TrxDecimals, out var sun))
+            return Bad(OpsErrorCodes.InvalidAmount, "amount must be a positive TRX amount with at most 6 decimal places.");
+
+        var result = await energy.RequestUnstakeAsync(parsed, sun, http.RequestAborted);
+        if (result.IsFailure)
+            return OpsResults.Fail(result.Error!);
+
+        await AuditAsync(audit, http, "energy.unstake_requested", "EnergyOperation", result.Value.ToString(),
+            $"{parsed} amount={request.Amount} TRX", request.Reason);
+
+        return OpsResults.Ok(new
+        {
+            operationId = result.Value,
+            chain = parsed.ToString(),
+            amountTrx = AmountConversion.ToDisplay(sun, TrxDecimals),
+            amountSun = sun.ToString(CultureInfo.InvariantCulture),
+        });
+    }
+
+    private static async Task<IResult> WithdrawUnstakedAsync(
+        WithdrawUnstakedRequest request, EnergyAdministrationService energy, IAuditLogger audit, HttpContext http)
+    {
+        if (!TryParseRequiredChain(request.Chain, out var parsed, out var bad))
+            return bad!;
+
+        var result = await energy.RequestWithdrawUnstakedAsync(parsed, http.RequestAborted);
+        if (result.IsFailure)
+            return OpsResults.Fail(result.Error!);
+
+        await AuditAsync(audit, http, "energy.withdraw_unstaked_requested", "EnergyOperation", result.Value.ToString(),
+            parsed.ToString(), request.Reason);
+
+        return OpsResults.Ok(new { operationId = result.Value, chain = parsed.ToString() });
+    }
+
+    /// <summary>The chain's staking wallet (null until created) and its rules (null until saved).</summary>
+    private static async Task<IResult> GetStakingAsync(EnergyAdministrationService energy, HttpContext http, string? chain = null)
+    {
+        if (!TryParseRequiredChain(chain, out var parsed, out var bad))
+            return bad!;
+
+        var wallet = await energy.FindStakingWalletAsync(parsed, http.RequestAborted);
+        var policy = await energy.GetPolicyAsync(parsed, http.RequestAborted);
+        return OpsResults.Ok(new
+        {
+            chain = parsed.ToString(),
+            stakingWallet = wallet is null ? null : new { walletId = wallet.WalletId, address = wallet.Address },
+            policy = policy is null ? null : Describe(policy),
+        });
+    }
+
+    private static async Task<IResult> ProvisionStakingWalletAsync(
+        ProvisionStakingWalletRequest request, EnergyAdministrationService energy, IAuditLogger audit, HttpContext http)
+    {
+        if (!TryParseRequiredChain(request.Chain, out var parsed, out var bad))
+            return bad!;
+
+        var result = await energy.ProvisionStakingWalletAsync(parsed, http.RequestAborted);
+        if (result.IsFailure)
+            return OpsResults.Fail(result.Error!);
+
+        if (result.Value.Created)
+            await AuditAsync(audit, http, "energy.staking_wallet_created", "StakingWallet", result.Value.WalletId.ToString(),
+                $"{parsed} address={result.Value.Address}", request.Reason);
+
+        return OpsResults.Ok(new
+        {
+            chain = parsed.ToString(),
+            walletId = result.Value.WalletId,
+            address = result.Value.Address,
+            created = result.Value.Created,
+        });
+    }
+
+    private static async Task<IResult> SetPolicyAsync(
+        SetStakingPolicyRequest request, EnergyAdministrationService energy, IAuditLogger audit, HttpContext http)
+    {
+        if (!TryParseRequiredChain(request.Chain, out var parsed, out var bad))
+            return bad!;
+
+        var result = await energy.SetPolicyAsync(new SetStakingPolicyCommand(
+            parsed, request.MinimumEnergy, request.TargetEnergy, request.StakeThreshold, request.EnableAutoStake),
+            http.RequestAborted);
+        if (result.IsFailure)
+            return OpsResults.Fail(result.Error!);
+
+        await AuditAsync(audit, http, "energy.policy_changed", "EnergyPolicy", parsed.ToString(),
+            $"{parsed} min={request.MinimumEnergy} target={request.TargetEnergy} stakeAt={request.StakeThreshold} autoStake={request.EnableAutoStake}",
+            request.Reason);
+
+        return OpsResults.Ok(Describe(result.Value));
+    }
+
+    private static object Describe(StakingPolicyView policy) => new
+    {
+        minimumEnergy = policy.MinimumEnergy.ToString(CultureInfo.InvariantCulture),
+        targetEnergy = policy.TargetEnergy.ToString(CultureInfo.InvariantCulture),
+        stakeThreshold = policy.StakeThreshold.ToString(CultureInfo.InvariantCulture),
+        enableAutoStake = policy.EnableAutoStake,
+        updatedAt = policy.UpdatedAt,
+    };
+
+    private static async Task AuditAsync(
+        IAuditLogger audit, HttpContext http, string action, string entityType, string entityId, string detail, string? reason)
+    {
+        var actor = AuditActor.From(http);
+        var text = string.IsNullOrWhiteSpace(reason) ? detail : $"{reason.Trim()} ({detail})";
+        await audit.LogAsync(new LogAuditEntryCommand(
+            actor.StaffUserId, actor.Username, action, entityType, entityId,
+            text.Length <= 512 ? text : text[..512], actor.IpAddress), http.RequestAborted);
+    }
+
+    private static bool TryParseRequiredChain(string? chain, out Chain parsed, out IResult? bad)
+    {
+        parsed = default;
+        bad = null;
+        if (string.IsNullOrWhiteSpace(chain))
+        {
+            bad = Bad(OpsErrorCodes.NetworkRequired, "A chain is required, e.g. Tron.");
+            return false;
+        }
+
+        // Enum.TryParse also accepts a bare number such as "7", which would name a chain that does not exist.
+        if (int.TryParse(chain, out _) || !Enum.TryParse(chain, ignoreCase: true, out parsed))
+        {
+            bad = Bad(OpsErrorCodes.InvalidChain, $"Unknown chain '{chain}'.");
+            return false;
+        }
+
+        return true;
     }
 
     private static async Task<IResult> ListOperationsAsync(

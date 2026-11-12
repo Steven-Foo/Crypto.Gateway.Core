@@ -1,4 +1,4 @@
-using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Application;
+﻿using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Application;
 using Microsoft.Extensions.DependencyInjection;
 
 namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Workers;
@@ -26,6 +26,9 @@ public static class EnergyWorkersExtensions
         services.AddHostedService<StakeReplenishWorker>();
         services.AddHostedService<EnergyOperationProcessingWorker>();
         services.AddHostedService<EnergyOperationConfirmationWorker>();
+
+        // Take back energy lent to deposit addresses once they are done, so the stake is reused, not used up.
+        services.AddHostedService<EnergyReclaimWorker>();
         return services;
     }
 }

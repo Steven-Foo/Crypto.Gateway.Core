@@ -1,3 +1,4 @@
+using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Secrets.Aws;
 using CryptoPaymentEngine.Api.OperationsApi.Endpoints;
 using CryptoPaymentEngine.Api.OperationsApi.Options;
 using CryptoPaymentEngine.Api.OperationsApi.Security;
@@ -163,8 +164,8 @@ if (builder.Environment.IsDevelopment())
     // The same secret store MerchantGateway uses: in-memory (public xpubs only) by default, AWS KMS when
     // KeyManagement:Kms:Enabled=true. It must match that host, because creating a merchant here provisions a
     // deposit address, and a wallet created under one store cannot be served by the other (§10). Only
-    // MerchantGateway runs the wallet switch.
-    builder.Services.AddTestnetKeyCustody(config);
+    // MerchantGateway runs the wallet switch. Address-only: this host never signs (§10).
+    builder.Services.AddTestnetKeyCustody(config, KmsKeyAccess.AddressOnly);
 
     // Fixed Admin credentials so a fresh clone can call /api/v1/ops/auth/login with no bootstrap step.
     builder.Services.AddDevelopmentStaffSeed(config);
@@ -180,6 +181,14 @@ if (builder.Environment.IsDevelopment())
     builder.Services.AddInMemoryTransactionEngine();
     builder.Services.AddInMemorySigner();
 }
+else
+{
+    // Production/Staging custody, ADDRESS-ONLY (§10): creating a merchant provisions its deposit wallet, which
+    // reads xpubs and mints + seals a new seed (kms:Encrypt), but this host can never decrypt one — a signing
+    // request is refused in code before any KMS call. No signer is registered here either. Inert (no custody at
+    // all) unless KeyManagement:Kms:Enabled, and refuses to start if that switch is on with an identifier missing.
+    builder.Services.AddAwsKmsKeyCustody(config, KmsKeyAccess.AddressOnly);
+}
 
 // Make a request that fails binding (a malformed JSON body, a missing required query parameter) THROW in every
 // environment, not just Development. Outside Development the framework otherwise answers with a bare, bodyless
@@ -187,6 +196,10 @@ if (builder.Environment.IsDevelopment())
 builder.Services.Configure<Microsoft.AspNetCore.Routing.RouteHandlerOptions>(o => o.ThrowOnBadRequest = true);
 
 var app = builder.Build();
+
+// One-time first-admin creation on an empty database: runs, prints, and exits without serving HTTP.
+if (await CryptoPaymentEngine.Api.OperationsApi.Services.BootstrapAdminCommand.TryRunAsync(app, args) is { } exitCode)
+    return exitCode;
 
 if (app.Environment.IsDevelopment())
 {
@@ -238,3 +251,4 @@ app.MapOpsEnergyApi();
 app.MapOpsComplianceApi();
 
 app.Run();
+return 0;

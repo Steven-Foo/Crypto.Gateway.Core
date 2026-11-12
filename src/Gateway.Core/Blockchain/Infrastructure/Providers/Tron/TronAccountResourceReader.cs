@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Addresses;
 using CryptoPaymentEngine.SharedKernel;
@@ -16,8 +16,20 @@ namespace CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers.T
 /// does not affect the sweep gate. NOTE: <c>getaccount.balance</c> is <em>spendable</em> TRX — frozen/
 /// delegated TRX is excluded, which Reconciliation must account for once TRX becomes a reconciled asset.</para>
 /// </summary>
-public sealed class TronAccountResourceReader(ITronResourceRpc rpc, TimeProvider timeProvider) : IAccountResourceReader
+public sealed class TronAccountResourceReader(ITronResourceRpc rpc, TimeProvider timeProvider)
+    : IAccountResourceReader, IDelegatedResourceReader
 {
+    public async Task<BigInteger> GetDelegatedEnergySunAsync(
+        Chain chain, string ownerAddress, string receiverAddress, CancellationToken cancellationToken = default)
+    {
+        if (chain != Chain.Tron)
+            throw new ArgumentException($"TronAccountResourceReader cannot read {chain} delegations.", nameof(chain));
+
+        var lent = await rpc.GetDelegatedResourceV2Async(
+            TronAddress.ToRawHex(ownerAddress), TronAddress.ToRawHex(receiverAddress), cancellationToken);
+        return lent.DelegatedResource.Aggregate(BigInteger.Zero, (sum, d) => sum + d.FrozenBalanceForEnergy);
+    }
+
     private const string EnergyResource = "ENERGY";
 
     public async Task<AccountResourceSnapshot> GetAsync(
@@ -53,6 +65,10 @@ public sealed class TronAccountResourceReader(ITronResourceRpc rpc, TimeProvider
             DelegatedEnergyOut: BigInteger.Zero, // observability only; richer account_resource parse deferred
             DelegatedEnergyIn: BigInteger.Zero,
             AvailableTrxBalance: account.Balance, // spendable TRX in sun (excludes frozen/delegated)
-            ObservedAt: timeProvider.GetUtcNow());
+            ObservedAt: timeProvider.GetUtcNow())
+        {
+            NetworkTotalEnergyLimit = resource.TotalEnergyLimit,
+            NetworkTotalEnergyWeight = resource.TotalEnergyWeight,
+        };
     }
 }

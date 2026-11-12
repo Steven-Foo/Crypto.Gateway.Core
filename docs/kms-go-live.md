@@ -1,4 +1,4 @@
-# KMS custody go-live (production-tier validation)
+﻿# KMS custody go-live (production-tier validation)
 
 The AWS KMS envelope custody is what flips **withdrawal + sweep money-out** and **deposit address provisioning**
 from "inert in production" to live. This runbook validates it end-to-end against **real** AWS KMS using an **EC2
@@ -93,10 +93,48 @@ Once Step 3 is green, enable KMS in the production host config (the environment'
   "Kms": {
     "Enabled": true,
     "Region": "<region>",
-    "KeyArns": { "Deposit": "<deposit-cmk-arn>", "Withdrawal": "<withdrawal-cmk-arn>" }
+    "KeyArns": { "Deposit": "<deposit-cmk-arn>", "Withdrawal": "<withdrawal-cmk-arn>", "Energy": "<energy-cmk-arn>" }
   }
 }
 ```
+
+**Put the same `KeyManagement:Kms` block on all three APIs.** What each one may do with it is decided in code,
+not config:
+
+| Host | Key access | Why it needs any |
+|---|---|---|
+| MerchantGateway (backend API) | **Signing**: seal new seeds and unseal them to sign | sends payouts, sweeps, energy operations |
+| OperationsApi (admin BO) | **Address only**: seal new seeds, read public keys, **never unseal** | creating a merchant gives it a deposit wallet; creating the hot pool and staking wallet |
+| MerchantPortalApi (merchant BO) | **Address only** | a merchant top-up may need a new deposit address |
+
+An address-only host refuses any signing request in code, before KMS is called, and registers no signer. Each
+host refuses to start if `Enabled` is true but the region or the Deposit/Withdrawal ARN is missing, so a
+half-filled config fails at deploy rather than at the first deposit.
+
+**`Energy` is the third CMK** and seals the staking (energy) wallet's seed. It is optional: without it
+everything else runs, and only the staking wallet cannot be created (`keymgmt.energy_key_not_configured`).
+Create it like the other two and add it to the role's policy (`kms:Encrypt` + `kms:Decrypt`).
+
+**One server, one role.** On a single EC2 box, all three APIs share the instance role, so AWS alone cannot stop
+the back-office hosts calling `kms:Decrypt`. The address-only guard in code is what enforces it there. To make
+AWS enforce it too, run MerchantGateway on its own instance with its own role (the only role with
+`kms:Decrypt`), and give the back-office role `kms:Encrypt` only.
+
+### Launch steps after KMS is on (in this order)
+
+1. **First admin account** (empty database only). On the server, from the OperationsApi folder, with the
+   production environment variables set:
+   ```
+   dotnet CryptoPaymentEngine.Api.OperationsApi.dll --bootstrap-admin <username>
+   ```
+   It prints a one-time password, writes an audit entry, and exits without starting the web server. It
+   refuses if any staff account already exists. Sign in straight away: the back office makes you set up an
+   authenticator app first.
+2. **Hot pool:** back office → Treasury → create hot pool (`POST /ops/treasury/hot-pool/provision`). Fund each
+   address from the company wallet and record each transfer as a top-up.
+3. **Staking wallet:** back office → Energy → create staking wallet, fund it with TRX, then save the rules with
+   auto-stake on.
+4. Register the cold Safe and Danger collection wallets (`POST /ops/treasury/cold-wallets`).
 
 Under `ASPNETCORE_ENVIRONMENT=Production`, setting `KeyManagement:Kms:Enabled=true` is what registers the real
 KMS secret provider + provisioner **and** the real TRON tx-engine + secp256k1 signer. Without it, Production
@@ -108,7 +146,8 @@ promotion checklist in [`ec2-staging.md`](ec2-staging.md) §5. Then validate a r
 ## Security notes (§10)
 
 - **No static access keys** anywhere — the instance/task role is the credential, both here and in production.
-- **Least privilege:** the role grants only `kms:Encrypt` + `kms:Decrypt` on exactly the two CMKs.
+- **Least privilege:** the role grants only `kms:Encrypt` + `kms:Decrypt` on exactly the configured CMKs
+  (deposit, withdrawal, and energy once created).
 - **Two-factor by construction:** the sealed seed's ciphertext lives in this system's DB, the key-encryption key
   lives in KMS — either alone is useless. Config carries only identifiers; the seed never leaves KMS in plaintext
   except briefly in memory at sign time, after which it is zeroed.

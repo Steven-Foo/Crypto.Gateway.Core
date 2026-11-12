@@ -1,4 +1,4 @@
-using CryptoPaymentEngine.Gateway.Core.KeyManagement.Application.Abstractions;
+﻿using CryptoPaymentEngine.Gateway.Core.KeyManagement.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Domain;
 using CryptoPaymentEngine.SharedKernel;
 using Microsoft.Extensions.Options;
@@ -78,6 +78,12 @@ public sealed class DevHdWalletProvisioner(
 
         return Task.FromResult(wallet);
     }
+
+    /// <summary>Development registers its staking wallet from <c>Energy:DevStakingWallets</c> (an imported key),
+    /// so there is no in-memory energy seed to mint. Refused rather than faked (§10).</summary>
+    public Task<Result<HdWallet>> ProvisionPlatformEnergyWalletAsync(
+        Chain chain, CancellationToken cancellationToken = default) =>
+        Task.FromResult(Result.Failure<HdWallet>(KeyManagementErrors.EnergyKeyNotConfigured));
 
     /// <summary>
     /// The account xpub a merchant's deposit wallet uses (or would use, if minted right now): a configured

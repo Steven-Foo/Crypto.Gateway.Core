@@ -1,4 +1,4 @@
-using CryptoPaymentEngine.Gateway.Core.KeyManagement.Domain;
+﻿using CryptoPaymentEngine.Gateway.Core.KeyManagement.Domain;
 using CryptoPaymentEngine.SharedKernel;
 
 namespace CryptoPaymentEngine.Gateway.Core.KeyManagement.Application.Abstractions;
@@ -26,5 +26,14 @@ public interface IHdWalletProvisioner
     /// mints in-memory; production mints inside a KMS/HSM behind the same port (deferred).
     /// </summary>
     Task<Result<HdWallet>> ProvisionPlatformWithdrawalWalletAsync(
+        Chain chain, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Mints the platform's energy HD wallet (MerchantId null, purpose Energy) — the seed behind the staking /
+    /// TRX gas-hub wallet. Same shape as <see cref="ProvisionPlatformWithdrawalWalletAsync"/>, sealed under its
+    /// OWN key. An implementation that cannot mint one (development uses an imported staking key instead)
+    /// returns a failure, and the energy wallet stays absent rather than falling back to anything.
+    /// </summary>
+    Task<Result<HdWallet>> ProvisionPlatformEnergyWalletAsync(
         Chain chain, CancellationToken cancellationToken = default);
 }

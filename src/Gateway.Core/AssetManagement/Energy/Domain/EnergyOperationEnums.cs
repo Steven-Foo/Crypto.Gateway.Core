@@ -1,4 +1,4 @@
-namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Domain;
+﻿namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Domain;
 
 /// <summary>What an <see cref="EnergyOperation"/> does on-chain. Both share one sign→broadcast→confirm
 /// lifecycle, so they are one aggregate discriminated by kind (§12 DRY), not two near-duplicate tables.</summary>
@@ -15,6 +15,18 @@ public enum EnergyOperationKind
     /// pay <em>bandwidth</em> (which energy delegation does not cover). Unlike Stake/Delegate this is a real
     /// transfer, but between platform-controlled addresses — custody-internal, so still no ledger entry.</summary>
     TopUp = 3,
+
+    /// <summary>Take back energy lent to an address that no longer needs it (TRON UnDelegateResource). The staked
+    /// TRX returns to the staking wallet's lendable balance at once. Created by the take-back worker.</summary>
+    Undelegate = 4,
+
+    /// <summary>Start unlocking staked TRX (TRON UnfreezeBalanceV2). Staff-initiated. The TRX can be withdrawn
+    /// only after the network's waiting period (14 days on mainnet).</summary>
+    Unstake = 5,
+
+    /// <summary>Move every finished unstake back into the staking wallet's spendable balance (TRON
+    /// WithdrawExpireUnfreeze). Staff-initiated. The amount is decided by the chain, so it is recorded as 0.</summary>
+    WithdrawUnstaked = 6,
 }
 
 /// <summary>

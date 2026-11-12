@@ -1,4 +1,4 @@
-/*───────────────────────────────────────────────────────────────────────────────
+﻿/*───────────────────────────────────────────────────────────────────────────────
   Crypto Payment Engine — SQL Server bootstrap
   Run ONCE per environment, as a sysadmin, BEFORE applying EF migrations.
 
@@ -6,11 +6,18 @@
   Does NOT create tables — those come from EF Core migrations, which are the single
   source of truth for the schema (CLAUDE.md §3). See db/README.md.
 
-  Usage:
-    sqlcmd -S "(localdb)\MSSQLLocalDB" -E -i db/sql/00-bootstrap.sql
-    sqlcmd -S <server> -U sa -P <pwd>  -i db/sql/00-bootstrap.sql
+  Usage — the two passwords MUST be passed on the command line (there are no defaults):
+    sqlcmd -S <server> -U sa -P <pwd> -i db/sql/00-bootstrap.sql ^
+           -v AppPassword="<strong app password>" MigratorPassword="<strong migrator password>"
 
-  BEFORE RUNNING: replace the two passwords below. Never commit real passwords.
+  Without them sqlcmd stops with "'AppPassword' scripting variable not defined" before creating anything.
+  There used to be placeholder passwords here, and a :setvar in the script silently OVERRIDES a -v given on the
+  command line — so passing -v still created the logins with the public placeholder password. Never put a
+  password back in this file.
+
+  The names below are fixed on purpose: 50-ledger.sql denies UPDATE/DELETE on the ledger to the user named
+  cpe_app, so renaming the app login would silently drop that protection. The app login must also never be
+  db_owner or sysadmin — SQL Server ignores DENY for them.
 ───────────────────────────────────────────────────────────────────────────────*/
 
 SET NOCOUNT ON;
@@ -20,8 +27,12 @@ GO
 :setvar DbName            "CryptoPaymentEngine"
 :setvar AppLogin          "cpe_app"
 :setvar MigratorLogin     "cpe_migrator"
-:setvar AppPassword       "CHANGE_ME_app_P@ssw0rd!"
-:setvar MigratorPassword  "CHANGE_ME_migrator_P@ssw0rd!"
+GO
+
+-- Stop before touching anything when a password is missing (sqlcmd refuses an undefined variable here) or too
+-- short. Run with -b so the RAISERROR ends the script. Passwords must not contain a single quote.
+IF LEN(N'$(AppPassword)') < 12 OR LEN(N'$(MigratorPassword)') < 12
+    RAISERROR('AppPassword and MigratorPassword must each be at least 12 characters.', 16, 1);
 GO
 
 /*── 1. Database ────────────────────────────────────────────────────────────────

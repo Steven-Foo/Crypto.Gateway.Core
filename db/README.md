@@ -12,15 +12,19 @@ DDL for environments where you can't run the EF tooling.
 
 ### Step 1 — bootstrap (once per environment, as sysadmin)
 
-Edit the two passwords at the top of `sql/00-bootstrap.sql` first. **Never commit real passwords.**
+Pass the two passwords on the command line; the script has **no default passwords** and stops before doing
+anything if either is missing or shorter than 12 characters. Use `-b` so an error stops the script. Passwords must
+not contain a single quote. **Never write a password into the file** (an earlier version did, and a `:setvar` in the
+file silently overrides `-v`, so the public placeholder became the real password).
 
 ```bash
-# LocalDB (Windows dev)
-sqlcmd -S "(localdb)\MSSQLLocalDB" -E -i db/sql/00-bootstrap.sql
-
-# Any server
-sqlcmd -S <server> -U sa -P '<password>' -i db/sql/00-bootstrap.sql
+sqlcmd -S <server> -U sa -P '<sa password>' -b -i db/sql/00-bootstrap.sql   -v AppPassword="<strong app password>" MigratorPassword="<strong migrator password>"
 ```
+
+**Production rules:** the application connects as `cpe_app` (never `sa`, never a `db_owner`), because the ledger's
+"no UPDATE / DELETE" protection in `50-ledger.sql` is a `DENY` to the user named `cpe_app`, and SQL Server ignores
+`DENY` for owners and sysadmins. Run the module scripts (`10-…` to `150-…`) as `cpe_migrator` or a sysadmin, and
+run `50-ledger.sql` **after** this bootstrap so `cpe_app` exists when the `DENY` is applied.
 
 This creates:
 - database `CryptoPaymentEngine`, with `READ_COMMITTED_SNAPSHOT ON` (readers don't block the ledger's writers);

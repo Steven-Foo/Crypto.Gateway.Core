@@ -1,4 +1,4 @@
-using CryptoPaymentEngine.SharedKernel;
+﻿using CryptoPaymentEngine.SharedKernel;
 
 namespace CryptoPaymentEngine.Gateway.Core.KeyManagement.Contracts;
 
@@ -21,8 +21,8 @@ public interface IPlatformSigningKeyDirectory
         Chain chain, DerivationPurpose purpose, CancellationToken cancellationToken = default);
 
     /// <summary>
-    /// Resolves the signing-key reference for a specific platform <em>withdrawal</em> address — a child of the
-    /// platform withdrawal HD wallet (the hot pool). Unlike <see cref="FindActiveAsync"/> (one key per
+    /// Resolves the signing-key reference for a specific platform address — a child of the platform withdrawal
+    /// HD wallet (the hot pool) or of the platform energy HD wallet (the staking / gas-hub wallet). Unlike <see cref="FindActiveAsync"/> (one key per
     /// chain+purpose), the pool has many child addresses under one seed, so its key is resolved <em>per
     /// address</em> — the reference conveys the seed reference and the child index (the signer parses it, no
     /// caller does, §10). Returns null when no active withdrawal child matches the address.

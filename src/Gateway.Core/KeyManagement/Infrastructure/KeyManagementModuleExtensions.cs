@@ -102,21 +102,10 @@ public static class KeyManagementModuleExtensions
     public static bool AddTestnetKeyCustody(
         this IServiceCollection services,
         IConfiguration configuration,
+        KmsKeyAccess access,
         bool reconcileWallets = false)
     {
-        var kms = configuration.GetSection(AwsKmsKeyCustodyOptions.SectionName).Get<AwsKmsKeyCustodyOptions>()
-            ?? new AwsKmsKeyCustodyOptions();
-
-        // Fail at boot, not at the first deposit: a half-configured KMS tier would start and then refuse every
-        // address and signature with an error far from its cause.
-        if (kms.Enabled && (string.IsNullOrWhiteSpace(kms.Region)
-                || kms.KeyArnFor(HdWalletPurpose.Deposit) is null
-                || kms.KeyArnFor(HdWalletPurpose.Withdrawal) is null))
-        {
-            throw new InvalidOperationException(
-                "KeyManagement:Kms:Enabled is true, but KeyManagement:Kms:Region, KeyArns:Deposit and KeyArns:Withdrawal "
-                + "must all be set.");
-        }
+        var kms = ReadValidatedKmsOptions(configuration);
 
         if (reconcileWallets)
         {
@@ -127,7 +116,7 @@ public static class KeyManagementModuleExtensions
         }
 
         if (kms.Enabled)
-            services.AddAwsKmsKeyCustody(configuration);
+            services.AddAwsKmsKeyCustody(configuration, access);
         else
             services.AddDevelopmentKeyCustody(configuration);
 
@@ -203,18 +192,25 @@ public static class KeyManagementModuleExtensions
     /// <para>No-op unless <c>KeyManagement:Kms:Enabled</c> is true — so a misconfigured environment stays inert
     /// (address provisioning + signing simply don't happen) rather than falling back to anything unsafe. Config
     /// carries only identifiers (region + key ARNs); the app authenticates by its instance/task IAM role.</para>
+    ///
+    /// <para><paramref name="access"/> is the host's choice, in code: the money host passes
+    /// <see cref="KmsKeyAccess.Signing"/>; the back-office hosts pass <see cref="KmsKeyAccess.AddressOnly"/>, so
+    /// they can create deposit addresses but are refused before any <c>kms:Decrypt</c>. It is deliberately
+    /// required — a new host must decide, never inherit signing by default.</para>
     /// </summary>
     public static IServiceCollection AddAwsKmsKeyCustody(
         this IServiceCollection services,
-        IConfiguration configuration)
+        IConfiguration configuration,
+        KmsKeyAccess access)
     {
         var section = configuration.GetSection(AwsKmsKeyCustodyOptions.SectionName);
-        var options = section.Get<AwsKmsKeyCustodyOptions>() ?? new AwsKmsKeyCustodyOptions();
+        var options = ReadValidatedKmsOptions(configuration);
 
         if (!options.Enabled)
             return services; // custody stays inert until a real KMS config lands (§10)
 
         services.Configure<AwsKmsKeyCustodyOptions>(section);
+        services.AddSingleton(new KmsKeyAccessMode(access));
 
         // One KMS client for the process. Credentials come from the default AWS resolution chain (instance/task
         // IAM role in AWS, a profile/SSO locally) — never from config (§10). Region is an identifier.
@@ -234,5 +230,27 @@ public static class KeyManagementModuleExtensions
         services.AddScoped<IHdWalletProvisioner, KmsHdWalletProvisioner>();
 
         return services;
+    }
+
+    /// <summary>
+    /// Reads <c>KeyManagement:Kms</c> and fails at boot, not at the first deposit, when the switch is on but an
+    /// identifier is missing: a half-configured host would start and then refuse every address and signature
+    /// with an error far from its cause.
+    /// </summary>
+    private static AwsKmsKeyCustodyOptions ReadValidatedKmsOptions(IConfiguration configuration)
+    {
+        var kms = configuration.GetSection(AwsKmsKeyCustodyOptions.SectionName).Get<AwsKmsKeyCustodyOptions>()
+            ?? new AwsKmsKeyCustodyOptions();
+
+        if (kms.Enabled && (string.IsNullOrWhiteSpace(kms.Region)
+                || kms.KeyArnFor(HdWalletPurpose.Deposit) is null
+                || kms.KeyArnFor(HdWalletPurpose.Withdrawal) is null))
+        {
+            throw new InvalidOperationException(
+                "KeyManagement:Kms:Enabled is true, but KeyManagement:Kms:Region, KeyArns:Deposit and KeyArns:Withdrawal "
+                + "must all be set.");
+        }
+
+        return kms;
     }
 }

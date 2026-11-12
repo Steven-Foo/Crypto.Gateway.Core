@@ -29,6 +29,9 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
                     b.Property<Guid>("Id")
                         .HasColumnType("uniqueidentifier");
 
+                    b.Property<BigInteger?>("ApprovalThreshold")
+                        .HasColumnType("decimal(38,0)");
+
                     b.Property<Guid>("AssetId")
                         .HasColumnType("uniqueidentifier");
 
@@ -41,7 +44,19 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
                     b.Property<BigInteger>("DepositFeeFixed")
                         .HasColumnType("decimal(38,0)");
 
+                    b.Property<BigInteger?>("MaximumDeposit")
+                        .HasColumnType("decimal(38,0)");
+
+                    b.Property<BigInteger?>("MaximumWithdrawal")
+                        .HasColumnType("decimal(38,0)");
+
+                    b.Property<BigInteger?>("MinimumDeposit")
+                        .HasColumnType("decimal(38,0)");
+
                     b.Property<BigInteger>("MinimumDepositFee")
+                        .HasColumnType("decimal(38,0)");
+
+                    b.Property<BigInteger?>("MinimumWithdrawal")
                         .HasColumnType("decimal(38,0)");
 
                     b.Property<BigInteger>("MinimumWithdrawalFee")
@@ -64,6 +79,8 @@ namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence.M
                     b.ToTable("DefaultFeePolicy", "merchant", t =>
                         {
                             t.HasCheckConstraint("CK_DefaultFeePolicy_FeeBps", "[DepositFeeBps] >= 0 AND [DepositFeeBps] <= 10000 AND [WithdrawalFeeBps] >= 0 AND [WithdrawalFeeBps] <= 10000");
+
+                            t.HasCheckConstraint("CK_DefaultFeePolicy_Limits", "([MinimumDeposit] IS NULL OR [MinimumDeposit] >= 0) AND ([MaximumDeposit] IS NULL OR [MaximumDeposit] >= 0) AND ([MinimumWithdrawal] IS NULL OR [MinimumWithdrawal] >= 0) AND ([MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= 0) AND ([ApprovalThreshold] IS NULL OR [ApprovalThreshold] >= 0) AND ([MinimumDeposit] IS NULL OR [MaximumDeposit] IS NULL OR [MinimumDeposit] <= [MaximumDeposit]) AND ([MinimumWithdrawal] IS NULL OR [MaximumWithdrawal] IS NULL OR [MinimumWithdrawal] <= [MaximumWithdrawal])");
 
                             t.HasCheckConstraint("CK_DefaultFeePolicy_NonNegative", "[DepositFeeFixed] >= 0 AND [WithdrawalFee] >= 0 AND [MinimumDepositFee] >= 0 AND [MinimumWithdrawalFee] >= 0");
                         });

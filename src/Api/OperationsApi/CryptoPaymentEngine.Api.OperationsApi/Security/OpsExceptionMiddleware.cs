@@ -1,4 +1,4 @@
-using CryptoPaymentEngine.Api.OperationsApi.Endpoints;
+﻿using CryptoPaymentEngine.Api.OperationsApi.Endpoints;
 
 namespace CryptoPaymentEngine.Api.OperationsApi.Security;
 
@@ -45,6 +45,21 @@ public sealed class OpsExceptionMiddleware(RequestDelegate next, ILogger<OpsExce
                 OpsErrorCodes.MalformedRequest,
                 ex.Message);
         }
+        catch (Exception ex) when (IsObservabilityStoreDown(ex))
+        {
+            // MongoDB (derived snapshots only, never money truth) is unreachable. A screen built on it cannot
+            // answer, but that is an outage to wait out, not a bug — so 503 with its own code, letting the UI say
+            // "temporarily unavailable" instead of "something went wrong".
+            logger.LogWarning(
+                "Observability store unreachable for {Method} {Path}: {Reason}",
+                context.Request.Method, context.Request.Path, ex.Message);
+
+            await WriteAsync(
+                context,
+                StatusCodes.Status503ServiceUnavailable,
+                OpsErrorCodes.StoreUnavailable,
+                "This screen's data store is temporarily unavailable. Try again shortly.");
+        }
         catch (OperationCanceledException) when (context.RequestAborted.IsCancellationRequested)
         {
             // The caller hung up. Nothing to report and nobody to report it to; writing a response here
@@ -64,6 +79,12 @@ public sealed class OpsExceptionMiddleware(RequestDelegate next, ILogger<OpsExce
                 "An unexpected error occurred. The detail has been logged.");
         }
     }
+
+    /// <summary>The MongoDB driver reports an unreachable server as a plain <see cref="TimeoutException"/> raised
+    /// from its own code, or as one of its <c>MongoConnectionException</c> family.</summary>
+    private static bool IsObservabilityStoreDown(Exception ex) =>
+        ex is MongoDB.Driver.MongoConnectionException
+        || (ex is TimeoutException && ex.Source?.StartsWith("MongoDB", StringComparison.Ordinal) == true);
 
     private static async Task WriteAsync(HttpContext context, int status, string errorCode, string message)
     {

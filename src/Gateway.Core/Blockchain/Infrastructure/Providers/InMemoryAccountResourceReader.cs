@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using System.Numerics;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
 using CryptoPaymentEngine.SharedKernel;
@@ -11,8 +11,18 @@ namespace CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Providers;
 /// resources via <see cref="Set"/>; an unset address returns a comfortably-healthy default so the monitor
 /// has something to observe in dev. Thread-safe: the monitor worker and a test may touch it concurrently.
 /// </summary>
-public sealed class InMemoryAccountResourceReader(TimeProvider timeProvider) : IAccountResourceReader
+public sealed class InMemoryAccountResourceReader(TimeProvider timeProvider) : IAccountResourceReader, IDelegatedResourceReader
 {
+    private readonly ConcurrentDictionary<string, BigInteger> _delegated = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Test hook: pin how much staked TRX (sun) an owner lends a receiver. Unset reads as zero.</summary>
+    public void SetDelegated(Chain chain, string ownerAddress, string receiverAddress, BigInteger sun) =>
+        _delegated[$"{chain}:{ownerAddress}:{receiverAddress}"] = sun;
+
+    public Task<BigInteger> GetDelegatedEnergySunAsync(
+        Chain chain, string ownerAddress, string receiverAddress, CancellationToken cancellationToken = default) =>
+        Task.FromResult(_delegated.TryGetValue($"{chain}:{ownerAddress}:{receiverAddress}", out var sun) ? sun : BigInteger.Zero);
+
     private readonly ConcurrentDictionary<string, AccountResourceSnapshot> _byAddress =
         new(StringComparer.OrdinalIgnoreCase);
 

@@ -93,6 +93,10 @@ public static class OpsPermissions
     {
         // Read the TRON energy state: stake/delegate/top-up operations + per-wallet resource-health snapshots.
         public const string View = "ops.energy.view";
+
+        // Create the staking (energy) wallet and change its staking rules. Split from View: the rules decide how
+        // much company TRX gets locked into staking, which a read-only analyst must not reach.
+        public const string Manage = "ops.energy.manage";
     }
 
     public static class Compliance
@@ -132,7 +136,7 @@ public static class OpsPermissions
         Wallets.View, Wallets.Manage,
         Treasury.Manage,
         Sweep.View, Sweep.Manage,
-        Energy.View,
+        Energy.View, Energy.Manage,
         Balances.Adjust,
         Compliance.View, Compliance.Manage,
     ];

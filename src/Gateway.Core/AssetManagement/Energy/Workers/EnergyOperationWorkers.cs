@@ -1,4 +1,4 @@
-using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Application;
+﻿using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Application;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -51,6 +51,31 @@ public sealed class EnergyOperationConfirmationWorker(
             var changed = await scope.ServiceProvider.GetRequiredService<EnergyOperationConfirmationService>().TrackOnceAsync(ct);
             if (changed > 0)
                 logger.LogInformation("{Count} energy operation(s) confirmed.", changed);
+        });
+}
+
+/// <summary>
+/// Takes back energy lent to deposit addresses that no longer need it (<see cref="EnergyReclaimService"/>).
+/// Creates Undelegate operations only; the processing worker signs and sends them. Runs in the money host only.
+/// Two instances running at once can at worst queue the same take-back twice; the second is refused by the
+/// chain (nothing left to take back) and recorded as failed, so no TRX is affected.
+/// </summary>
+public sealed class EnergyReclaimWorker(
+    IServiceScopeFactory scopeFactory,
+    EnergyWorkerOptions options,
+    ILogger<EnergyReclaimWorker> logger) : BackgroundService
+{
+    protected override Task ExecuteAsync(CancellationToken stoppingToken) =>
+        EnergyWorkerLoop.RunAsync(options.ReclaimInterval, stoppingToken, logger, "energy take-back", async ct =>
+        {
+            await using var scope = scopeFactory.CreateAsyncScope();
+            var service = scope.ServiceProvider.GetRequiredService<EnergyReclaimService>();
+            foreach (var chain in options.Chains)
+            {
+                var queued = await service.ReclaimOnceAsync(chain, ct);
+                if (queued > 0)
+                    logger.LogInformation("Queued {Count} energy take-back(s) on {Chain}.", queued, chain);
+            }
         });
 }
 

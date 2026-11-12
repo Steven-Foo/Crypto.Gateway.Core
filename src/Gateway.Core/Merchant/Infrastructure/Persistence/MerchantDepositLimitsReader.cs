@@ -1,4 +1,4 @@
-using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
+﻿using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using Microsoft.EntityFrameworkCore;
 
 namespace CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure.Persistence;
@@ -10,13 +10,18 @@ public sealed class MerchantDepositLimitsReader(MerchantDbContext context) : IMe
     public async Task<MerchantDepositLimits> GetAsync(
         Guid merchantId, Guid assetId, CancellationToken cancellationToken = default)
     {
-        var limits = await context.AssetPolicies.AsNoTracking()
+        var own = await context.AssetPolicies.AsNoTracking()
             .Where(p => p.MerchantId == merchantId && p.AssetId == assetId)
             .Select(p => new { p.MinimumDeposit, p.MaximumDeposit })
             .SingleOrDefaultAsync(cancellationToken);
+        var platform = await context.DefaultFeePolicies.AsNoTracking()
+            .Where(p => p.AssetId == assetId)
+            .Select(p => new { p.MinimumDeposit, p.MaximumDeposit })
+            .SingleOrDefaultAsync(cancellationToken);
 
-        return limits is null
-            ? MerchantDepositLimits.None
-            : new MerchantDepositLimits(limits.MinimumDeposit, limits.MaximumDeposit);
+        // Per bound: the merchant's own value, else the platform default; still null ⇒ the caller's config.
+        return new MerchantDepositLimits(
+            own?.MinimumDeposit ?? platform?.MinimumDeposit,
+            own?.MaximumDeposit ?? platform?.MaximumDeposit);
     }
 }

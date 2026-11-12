@@ -1,4 +1,4 @@
-using System.Security.Cryptography;
+﻿using System.Security.Cryptography;
 using Amazon.KeyManagementService;
 using Amazon.KeyManagementService.Model;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Application.Abstractions;
@@ -60,6 +60,26 @@ public sealed class KmsHdWalletProvisioner(
             $"platform-{chain}-withdrawal", chain, HdWalletPurpose.Withdrawal,
             SecretProviderKind.AwsKmsEnvelope, reference, reference, AccountPath(chain),
             description: "Platform withdrawal HD wallet (hot pool seed, KMS-sealed)", timeProvider: timeProvider);
+    }
+
+    public async Task<Result<HdWallet>> ProvisionPlatformEnergyWalletAsync(
+        Chain chain, CancellationToken cancellationToken = default)
+    {
+        if (DerivationPath.SchemeFor(chain) != DerivationScheme.Bip32Secp256k1)
+            return Result.Failure<HdWallet>(KeyManagementErrors.SchemeNotSupported);
+
+        if (_options.KeyArnFor(HdWalletPurpose.Energy) is null)
+            return Result.Failure<HdWallet>(KeyManagementErrors.EnergyKeyNotConfigured);
+
+        var reference = $"kms:material:platform:energy:{chain}";
+        var material = await EnsureMaterialAsync(reference, HdWalletPurpose.Energy, chain, cancellationToken);
+        if (material.IsFailure)
+            return Result.Failure<HdWallet>(material.Error!);
+
+        return HdWallet.Create(
+            $"platform-{chain}-energy", chain, HdWalletPurpose.Energy,
+            SecretProviderKind.AwsKmsEnvelope, reference, reference, AccountPath(chain),
+            description: "Platform energy HD wallet (staking / TRX gas hub seed, KMS-sealed)", timeProvider: timeProvider);
     }
 
     /// <summary>

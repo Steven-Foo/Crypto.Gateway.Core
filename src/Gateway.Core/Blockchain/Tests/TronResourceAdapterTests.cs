@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using System.Text;
 using System.Text.Json;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
@@ -178,4 +178,93 @@ public sealed class TronResourceAdapterTests
 
     /// <summary>A detached <see cref="JsonElement"/> (survives its document's disposal) for the RPC fake.</summary>
     private static JsonElement TxJson(string json) => JsonDocument.Parse(json).RootElement.Clone();
+
+    // ── Take-back, unstake, withdraw (step 5) ───────────────────────────────────
+
+    [Fact]
+    public async Task Builds_an_undelegate_that_takes_energy_back_from_the_receiver()
+    {
+        _rpc.UndelegateResourceAsync(Arg.Any<UndelegateResourceRequest>(), Arg.Any<CancellationToken>())
+            .Returns(TxJson("{\"txID\":\"cc\",\"raw_data_hex\":\"02\"}"));
+
+        await Builder.BuildUndelegateEnergyAsync(
+            new UndelegateEnergyRequest(Chain.Tron, Staker, Deposit, new BigInteger(13_000_000_000)), Ct);
+
+        await _rpc.Received(1).UndelegateResourceAsync(
+            Arg.Is<UndelegateResourceRequest>(r =>
+                r.OwnerAddress == TronAddress.ToRawHex(Staker) &&
+                r.ReceiverAddress == TronAddress.ToRawHex(Deposit) &&
+                r.Balance == 13_000_000_000 && r.Resource == "ENERGY"),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task Builds_an_unstake_and_a_withdraw_of_finished_unstakes()
+    {
+        _rpc.UnfreezeBalanceV2Async(Arg.Any<UnfreezeBalanceV2Request>(), Arg.Any<CancellationToken>())
+            .Returns(TxJson("{\"txID\":\"dd\",\"raw_data_hex\":\"03\"}"));
+        _rpc.WithdrawExpireUnfreezeAsync(Arg.Any<WithdrawExpireUnfreezeRequest>(), Arg.Any<CancellationToken>())
+            .Returns(TxJson("{\"txID\":\"ee\",\"raw_data_hex\":\"04\"}"));
+
+        await Builder.BuildUnstakeEnergyAsync(new UnstakeEnergyRequest(Chain.Tron, Staker, new BigInteger(5_000_000)), Ct);
+        await Builder.BuildWithdrawUnstakedAsync(new WithdrawUnstakedRequest(Chain.Tron, Staker), Ct);
+
+        await _rpc.Received(1).UnfreezeBalanceV2Async(
+            Arg.Is<UnfreezeBalanceV2Request>(r =>
+                r.OwnerAddress == TronAddress.ToRawHex(Staker) && r.UnfreezeBalance == 5_000_000 && r.Resource == "ENERGY"),
+            Arg.Any<CancellationToken>());
+        await _rpc.Received(1).WithdrawExpireUnfreezeAsync(
+            Arg.Is<WithdrawExpireUnfreezeRequest>(r => r.OwnerAddress == TronAddress.ToRawHex(Staker)),
+            Arg.Any<CancellationToken>());
+    }
+
+    [Fact]
+    public async Task A_withdraw_with_nothing_finished_is_refused_by_the_node_and_throws()
+    {
+        // The node answers with an Error object when no unstake has finished its waiting period.
+        _rpc.WithdrawExpireUnfreezeAsync(Arg.Any<WithdrawExpireUnfreezeRequest>(), Arg.Any<CancellationToken>())
+            .Returns(TxJson("{\"Error\":\"636f6e7472616374\"}"));
+
+        await Should.ThrowAsync<InvalidOperationException>(async () =>
+            await Builder.BuildWithdrawUnstakedAsync(new WithdrawUnstakedRequest(Chain.Tron, Staker), Ct));
+    }
+
+    [Fact]
+    public async Task The_amount_lent_is_read_from_the_chain_and_summed()
+    {
+        var dto = JsonSerializer.Deserialize<TronDelegatedResourceDto>(
+            "{\"delegatedResource\":[{\"from\":\"41aa\",\"to\":\"41bb\",\"frozen_balance_for_energy\":13000000000}," +
+            "{\"from\":\"41aa\",\"to\":\"41bb\",\"frozen_balance_for_energy\":2000000000}]}")!;
+        _rpc.GetDelegatedResourceV2Async(TronAddress.ToRawHex(Staker), TronAddress.ToRawHex(Deposit), Arg.Any<CancellationToken>())
+            .Returns(dto);
+
+        var lent = await new TronAccountResourceReader(_rpc, TimeProvider.System)
+            .GetDelegatedEnergySunAsync(Chain.Tron, Staker, Deposit, Ct);
+
+        lent.ShouldBe(new BigInteger(15_000_000_000));
+    }
+
+    [Fact]
+    public async Task Nothing_lent_reads_as_zero()
+    {
+        _rpc.GetDelegatedResourceV2Async(Arg.Any<string>(), Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(JsonSerializer.Deserialize<TronDelegatedResourceDto>("{}")!);
+
+        (await new TronAccountResourceReader(_rpc, TimeProvider.System)
+            .GetDelegatedEnergySunAsync(Chain.Tron, Staker, Deposit, Ct)).ShouldBe(BigInteger.Zero);
+    }
+
+    [Fact]
+    public async Task The_network_energy_rate_is_carried_on_the_snapshot()
+    {
+        _rpc.GetAccountResourceAsync(Arg.Any<string>(), Arg.Any<CancellationToken>())
+            .Returns(JsonSerializer.Deserialize<TronAccountResourceDto>(
+                "{\"TotalEnergyLimit\":180000000000,\"TotalEnergyWeight\":19000000000}")!);
+        _rpc.GetAccountAsync(Arg.Any<string>(), Arg.Any<CancellationToken>()).Returns(new TronAccountDto());
+
+        var snap = await new TronAccountResourceReader(_rpc, TimeProvider.System).GetAsync(Chain.Tron, Deposit, Ct);
+
+        snap.NetworkTotalEnergyLimit.ShouldBe(new BigInteger(180_000_000_000));
+        snap.NetworkTotalEnergyWeight.ShouldBe(new BigInteger(19_000_000_000));
+    }
 }

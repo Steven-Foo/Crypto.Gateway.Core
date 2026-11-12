@@ -1,4 +1,4 @@
-# Merchant Portal API — Frontend Integration Guide
+﻿# Merchant Portal API — Frontend Integration Guide
 
 The complete, current contract for the **merchant-facing portal** (`Api/MerchantPortalApi`) — the backend
 behind `apps/merchant`. Everything below was read off the endpoint source, not written from memory.
@@ -558,8 +558,20 @@ limits platform staff set in the Back Office — the same numbers the admin BO s
 | `approvalThreshold` | 审批阈值 | Payouts above this wait for platform staff approval |
 
 - **`null` means "not set for this merchant — the platform default applies".** It does NOT mean "no limit".
-  Show it as 跟随平台默认 (not 暂未支持, not 0, not 无限制). This endpoint doesn't return the platform default's
-  number itself.
+  Show it as 跟随平台默认 (not 暂未支持, not 0, not 无限制), and show the number from `platformDefaults` next to it
+  (below).
+- **`platformDefaults`** (added 2026-11-06) sits next to `items` in the response: one row per asset with the
+  platform's default fees and limits, same field names and units as `items`. Rule: for each field, the
+  merchant's own value in `items` wins; where it is `null` (or the asset is missing from `items`), the value in
+  `platformDefaults` applies. If that is also `null`, a system setting applies (for USDT: minimum deposit and
+  payout 1 USDT, no maximum, approval above 1,000 USDT). Fees in `platformDefaults` are charged only when the
+  merchant has no fee of its own for that asset; top-up fees never come from here.
+  ```json
+  "platformDefaults": [ { "coin": "USDT", "network": "Tron",
+      "depositFeePercent": 2, "withdrawalFeePercent": 1, "withdrawalFeeFixed": 1,
+      "minimumDeposit": 2, "maximumDeposit": 100000, "minimumWithdrawal": 50, "maximumWithdrawal": 20000,
+      "approvalThreshold": 3000, "...": "same fields as items" } ]
+  ```
 - **`0` is a real value** someone chose (e.g. a minimum of 0 = no minimum). Show `0`, don't treat it as unset.
 - A request outside these limits is refused by the backend anyway; showing them just tells the merchant why.
 
@@ -871,8 +883,10 @@ control, that is achieved by not granting both codes to one role.
 ### 8.4 Being told a payout needs approval — webhook
 
 When a payout enters `pending_merchant_approval`, a callback can fire so an approver learns about it without
-watching the portal. **It goes to the `callbackUrl` sent with that payout** — the same URL the payout's later
-confirmed/failed callbacks use. Same envelope and HMAC signing as the deposit and withdrawal callbacks.
+watching the portal. **It goes to the `callbackUrl` sent with that payout, or — when the payout has none, which
+is always the case for payouts submitted in this portal — to the merchant's saved callback URL** (the
+`callbackUrl` on `GET /profile`, set by platform staff). Same envelope and HMAC signing as the deposit and
+withdrawal callbacks.
 
 ```json
 { "transactionId": "<your reference>",
@@ -886,13 +900,13 @@ confirmed/failed callbacks use. Same envelope and HMAC signing as the deposit an
   integration that switches on status will ignore it rather than mistake a payout needing a human for one
   already on its way — that is deliberate.
 - `amount` and `fee` are **base-unit strings**, matching the other withdrawal callbacks.
-- **When it actually fires:** the merchant has `requiresPayoutApproval` on (§8.3) **and** the payout carried a
-  `callbackUrl`. In practice that means **payouts submitted through the HMAC API with a `callbackUrl`**.
-  Payouts submitted in this portal carry no callback URL, so **no webhook fires for them today** — the portal
-  user must check the approval queue (`GET /transactions/payout?status=pending_merchant_approval`).
+- **When it actually fires** (fixed 2026-11-06): the merchant has `requiresPayoutApproval` on (§8.3) **and** there
+  is somewhere to send it — the payout's own `callbackUrl`, else the merchant's saved one. Portal payouts now
+  notify too (before this fix they never did). A merchant with no saved callback URL gets no webhook, so still
+  show the approval queue's count in the UI (`GET /transactions/payout?status=pending_merchant_approval`).
 - **It carries no approval link or token.** Approval happens in an authenticated portal session; a webhook
   can never be the thing that authorises money movement.
-- No callback URL on the payout ⇒ nothing is sent, and the payout still waits normally. Delivery is
+- No callback URL anywhere ⇒ nothing is sent, and the payout still waits normally. Delivery is
   best-effort notification: a failed callback never changes the payout's state.
 
 ---
@@ -1149,7 +1163,7 @@ Read-only — nothing exposes a way to edit or delete an entry.
 | **`errorCode` on failures** | **Done** — every response carries one, `portal.*` for host validation and `<module>.*` for business rules (§2). |
 | **Dashboard / aggregates** | No portal endpoint. The Ops dashboard is platform-wide and is not exposed here. |
 | **Paging** | **Done.** Transaction history and `/addresses` are paged. Accounts and roles return in full — bounded by headcount, so paging them would add UI work for no benefit. |
-| **Merchant notification when a payout awaits approval** | **Partly done** — a `pending_merchant_approval` webhook fires for HMAC-API payouts that carry a `callbackUrl` (§8.4). Payouts submitted in this portal send none today, so show the approval queue's count in the UI. |
+| **Merchant notification when a payout awaits approval** | **Done** — a `pending_merchant_approval` webhook fires for every payout waiting on the merchant, to the payout's own `callbackUrl` or else the merchant's saved one (§8.4). Still show the approval queue's count in the UI for merchants without a callback URL. |
 | **Portal audit log** | **Done** — `GET /portal/activity` (§9.5). |
 | **Revoking a disabled account's live sessions** | Refused at next login only. The same applies to a two-factor reset: the user's existing session keeps working until it expires. |
 | **Cash-out (settlement) address** | **Done (2026-10-14)** — the merchant submits it, platform staff approve it (§8.6). The merchant can never approve its own address. |

@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 
 namespace CryptoPaymentEngine.Api.OperationsApi.Models;
 
@@ -68,4 +68,18 @@ public sealed class RecordHotWalletTopUpRequest
     public decimal Amount { get; init; }
     [Required, MaxLength(128)] public string TransactionHash { get; init; } = null!;
     [MaxLength(128)] public string? SourceAddress { get; init; }
+}
+
+/// <summary>
+/// Grow the platform hot withdrawal pool for a chain to <see cref="Size"/> wallets (1–20). Grow-only: a smaller
+/// number than exists changes nothing. The new addresses come back in the response — they hold nothing until
+/// finance funds them and records each transfer as a top-up.
+/// </summary>
+public sealed class ProvisionHotPoolRequest
+{
+    [Required] public string Chain { get; init; } = null!;
+    public int Size { get; init; }
+
+    /// <summary>Why the pool is being created or grown. Recorded on the audit entry.</summary>
+    [MaxLength(256)] public string? Reason { get; init; }
 }

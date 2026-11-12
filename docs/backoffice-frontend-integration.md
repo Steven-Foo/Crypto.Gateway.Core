@@ -1,4 +1,4 @@
-# Back Office (OperationsApi) — Frontend Integration Guide
+﻿# Back Office (OperationsApi) — Frontend Integration Guide
 
 This is the complete, current contract for the Back Office API (`Api/OperationsApi`). It supersedes
 `docs/backoffice-api.md`, which predates the roles/permissions rework and is missing several screens — do
@@ -214,7 +214,12 @@ the interceptor that covers all of them and every one added later.
 | POST | `/api/v1/ops/compliance/screenings/re-screen` | `ops.compliance.manage` | yes | 22b |
 | GET | `/api/v1/ops/dashboard` | _any session_ |  | 16b |
 | GET | `/api/v1/ops/energy/operations` | `ops.energy.view` |  | 22 |
+| PUT | `/api/v1/ops/energy/policy` | `ops.energy.manage` | yes | 22 |
 | GET | `/api/v1/ops/energy/resources` | `ops.energy.view` |  | 22 |
+| GET | `/api/v1/ops/energy/staking` | `ops.energy.view` |  | 22 |
+| POST | `/api/v1/ops/energy/staking-wallet/provision` | `ops.energy.manage` | yes | 22 |
+| POST | `/api/v1/ops/energy/unstake` | `ops.energy.manage` | yes | 22 |
+| POST | `/api/v1/ops/energy/withdraw-unstaked` | `ops.energy.manage` | yes | 22 |
 | GET | `/api/v1/ops/merchants` | `ops.merchants.view` |  | 9 |
 | POST | `/api/v1/ops/merchants` | `ops.merchants.manage` | yes | 9 |
 | GET | `/api/v1/ops/merchants/{id:guid}` | `ops.merchants.view` |  | 9 |
@@ -247,6 +252,7 @@ the interceptor that covers all of them and every one added later.
 | PUT | `/api/v1/ops/merchants/{id:guid}/withdrawal-limits` | `ops.fees.manage` | yes | 9 |
 | GET | `/api/v1/ops/merchants/default-fees` | `ops.fees.view` |  | 9 |
 | PUT | `/api/v1/ops/merchants/default-fees` | `ops.fees.manage` | yes | 9 |
+| PUT | `/api/v1/ops/merchants/default-limits` | `ops.fees.manage` | yes | 9 |
 | GET | `/api/v1/ops/merchants/next-code` | `ops.merchants.view` |  | 9 |
 | POST | `/api/v1/ops/payment-intents/{reference:guid}/fail` | `ops.deposits.manage` | yes | 12 |
 | GET | `/api/v1/ops/permissions` | `ops.roles.view` |  | 3 |
@@ -275,6 +281,7 @@ the interceptor that covers all of them and every one added later.
 | POST | `/api/v1/ops/treasury/cold-wallets/{walletId:guid}/re-screen` | `ops.treasury.manage` | yes | 20 |
 | POST | `/api/v1/ops/treasury/cold-wallets/{walletId:guid}/retire` | `ops.treasury.manage` | yes | 20 |
 | GET | `/api/v1/ops/treasury/hot-pool` | `ops.treasury.manage` |  | 20 |
+| POST | `/api/v1/ops/treasury/hot-pool/provision` | `ops.treasury.manage` | yes | 20 |
 | POST | `/api/v1/ops/treasury/top-up` | `ops.treasury.manage` | yes | 20 |
 | GET | `/api/v1/ops/two-factor/actions` | `ops.roles.view` |  | 3c |
 | GET | `/api/v1/ops/two-factor/policy` | `ops.roles.view` |  | 3c |
@@ -390,6 +397,7 @@ Codes come from two places:
 | `ops.malformed_request` | 400 | The request never reached a handler: a required query parameter absent, or a body that is not valid JSON |
 | `ops.too_many_addresses` | 400 | A batch screening lookup sent more than 200 addresses. Refused, never truncated — split the request |
 | `ops.internal_error` | 500 | An unhandled server fault. The detail is logged, never returned |
+| `ops.store_unavailable` | 503 | The data store behind this screen (MongoDB — the custody audit and energy health screens) is unreachable right now. No money data is affected; show "temporarily unavailable, try again shortly" and offer a retry. The dashboard never returns this — it degrades instead (`custodyAvailable: false`) |
 | `compliance.*` | 400 | Screening-policy validation — see section 22b |
 
 ### HTTP status codes used
@@ -780,6 +788,7 @@ table**; it is here so you can prepare translations and understand what each swi
 |---|---|---|---|
 | `ops.treasury.top-up` | Treasury | ✅ | `POST /treasury/top-up` |
 | `ops.treasury.cold-wallet` | Treasury | ✅ | `POST /treasury/cold-wallets`, `.../cold-wallet`, `.../{id}/activate`, `.../{id}/retire` |
+| `ops.treasury.provision` | Treasury | ✅ | `POST /treasury/hot-pool/provision`, `POST /energy/staking-wallet/provision` |
 | `ops.withdrawals.approve` | Withdrawals | ✅ | `POST /withdrawals/{id}/approve`, `/reject`, `/audit-approve`, `/audit-reject` |
 | `ops.withdrawals.record-settlement` | Withdrawals | ✅ | `POST /withdrawals/{id}/record-settlement` |
 | `ops.withdrawals.funding` | Withdrawals | ✅ | `POST /withdrawals/{id}/release`, `/cancel` |
@@ -789,7 +798,7 @@ table**; it is here so you can prepare translations and understand what each swi
 | `ops.merchants.risk-controls` | Merchants | ✅ | `PUT /merchants/{id}/approval-threshold`, `/payout-approval` |
 | `ops.merchants.allowed-ips` | Merchants | ✅ | `PUT /merchants/{id}/allowed-ips` |
 | `ops.merchants.portal-account` | Merchants | ✅ | `POST /merchants/{id}/portal-account`, `.../portal-accounts/{accountId}/reset-password` |
-| `ops.merchants.pricing` | Merchants | ✅ | `PUT /merchants/{id}/fees`, `/deposit-limits`, `/withdrawal-limits`, `/withdrawal-cap`, `PUT /merchants/default-fees` |
+| `ops.merchants.pricing` | Merchants | ✅ | `PUT /merchants/{id}/fees`, `/deposit-limits`, `/withdrawal-limits`, `/withdrawal-cap`, `PUT /merchants/default-fees`, `PUT /merchants/default-limits` |
 | `ops.merchants.settlement-period` | Merchants | ✅ | `PUT /merchants/{id}/settlement-period` |
 | `ops.merchants.status` | Merchants | ✅ | `PATCH /merchants/{id}/status` (freeze / unfreeze), `POST /merchants/{id}/close` |
 | `ops.merchants.profile` | Merchants | — | `POST /merchants` (create), `PUT /merchants/{id}/profile` |
@@ -797,11 +806,20 @@ table**; it is here so you can prepare translations and understand what each swi
 | `ops.wallets.suspend` | Wallets | ✅ | `POST /wallets/{id}/suspend`, `/resume` |
 | `ops.callbacks.resend` | Callbacks | — | `POST /callbacks/{type}/{referenceId}/resend` |
 | `ops.sweep.settings` | Sweep | ✅ | `PUT /sweeps/settings/{chain}`, `POST /sweeps/scan/{chain}` |
+| `ops.energy.settings` | Energy | ✅ | `PUT /energy/policy`, `POST /energy/unstake`, `POST /energy/withdraw-unstaked` |
 | `ops.compliance.policy` | Compliance | ✅ | `PUT /compliance/policy` |
 | `ops.compliance.re-screen` | Compliance | — | `POST /compliance/screenings/re-screen`, `/compliance/deposit-addresses/screen`, `/treasury/cold-wallets/{id}/re-screen` |
 | `ops.accounts.manage` | Staff | ✅ | Staff account create / status / role / reset-password / 2FA switch / 2FA reset |
 | `ops.roles.manage` | Staff | ✅ | Role create / edit / permissions / delete |
 | `ops.security.two-factor-policy` | Security | always on | `PUT /two-factor/policy`, `POST /two-factor/policy/restore-defaults` |
+
+**A new action added in a later release is not switched on by itself where someone has already saved a
+policy.** A saved policy is a person's choice, so the server never edits it behind their back. On a fresh
+database (no saved policy yet) every ✅ action, including new ones, is guarded from the start. On an
+environment with a saved policy, the new action appears in the list **unticked**: an admin ticks it, or clicks
+Restore defaults. The screen can make this easy to spot: an action with `recommended: true` that is not in
+`guardedActions` deserves a "recommended, currently off" badge. (Added in this way on 2026-11-06:
+`ops.treasury.provision` and `ops.energy.settings`.)
 
 All routes are under `/api/v1/ops`. **Why the three "—" rows are not recommended:** creating a merchant or
 editing its profile moves no money and grants no access by itself; resending a callback only re-delivers a
@@ -1723,16 +1741,29 @@ it left behind rather than having to re-GET and hope:
   "warnings": [] }
 ```
 
-### `GET /api/v1/ops/merchants/default-fees` — `ops.fees.view`
-The default deposit/withdrawal fee template, per asset — pure storage for the create-merchant screen's
-pre-fill. **This is a UI convenience only.** It does not touch how any merchant's own pricing is set (that's
-still `PUT .../merchants/{id}/fees`, above) and does not change how an already-unpriced merchant is charged at
-deposit/withdrawal time (that stays `Merchant:DefaultFee` config, untouched — see the corrected note above).
-Setting a value here just changes what number shows up pre-filled in the create-merchant form; the operator
-still submits it the normal way through `POST /merchants` like any manually-typed value.
+### Platform defaults ("平台默认") — what a merchant gets when it has no value of its own
 
-Response — an array, one entry per asset with a default set (empty until staff configures one; today only
-TRON·USDT is expected):
+**Changed 2026-11-06: these defaults are now REAL.** Before, the default fees were only a pre-fill for the
+create-merchant form. Now the platform defaults are what the system actually charges and enforces for any
+merchant that has no value of its own:
+
+| What | Merchant's own value set? | Otherwise |
+|---|---|---|
+| Deposit / payout fee | the merchant's fee | the platform default fee (if it is not all zero), else the deployed config fee (normally 0) |
+| Deposit min / max | the merchant's own bound | the platform default bound, else the deployed config (min 1 USDT, no max) |
+| Payout min / max | the merchant's own bound | the platform default bound, else the deployed config (min 1 USDT, no max) |
+| Approval threshold | the merchant's own | the platform default, else the deployed config (1,000 USDT) |
+
+Each limit is decided **bound by bound**: a merchant with its own minimum but no maximum gets its own minimum
+and the platform maximum. Top-up fees never use a default (a merchant is never charged to fund its own
+balance unless staff set a top-up fee for that merchant). Saving a default **never edits any merchant's own
+values**; it changes the result only for merchants that have none.
+
+**Screen (suggested):** one "Platform defaults / 平台默认" page per asset with two forms, fees and limits, each
+saved on its own. Show next to each limit "applies to merchants without their own value".
+
+### `GET /api/v1/ops/merchants/default-fees` — `ops.fees.view`
+Every asset's platform defaults, fees **and** limits. An asset with nothing saved is simply absent.
 ```json
 {
   "isSuccess": true,
@@ -1741,18 +1772,36 @@ TRON·USDT is expected):
       {
         "chain": "Tron", "coin": "USDT",
         "depositFeeFixed": 0.0, "depositFeePercent": 2.0, "depositFeeMinimum": 0.5,
-        "withdrawalFeeFixed": 1.0, "withdrawalFeePercent": 1.0, "withdrawalFeeMinimum": 1.0
+        "withdrawalFeeFixed": 1.0, "withdrawalFeePercent": 1.0, "withdrawalFeeMinimum": 1.0,
+        "minimumDeposit": 2, "maximumDeposit": 100000,
+        "minimumWithdrawal": 50, "maximumWithdrawal": 20000, "approvalThreshold": 3000
       }
     ]
   },
   "error": null, "errorCode": null
 }
 ```
+A `null` limit means no platform default for that bound, so the deployed config value applies. Show it as
+"system default (config)", not as "no limit".
 
-### `PUT /api/v1/ops/merchants/default-fees` — `ops.fees.manage`
-Unlike the per-merchant fee PUT above, this is a **full replace** — every field is required, there is no
-"omit = unchanged" semantics (there's nothing to leave unchanged; you're editing the template, not adjusting
-one merchant's live pricing).
+### `PUT /api/v1/ops/merchants/default-limits` — `ops.fees.manage`, 2FA `ops.merchants.pricing`
+Replaces the asset's platform-default **limits** (the fees are saved separately and are left as they are).
+Every field is sent each time; `null` clears that default; `0` is a real value. Amounts are in the coin's own
+units (e.g. USDT), up to its decimal places.
+```json
+{ "chain": "Tron", "coin": "USDT",
+  "minimumDeposit": 2, "maximumDeposit": 100000,
+  "minimumWithdrawal": 50, "maximumWithdrawal": 20000, "approvalThreshold": 3000 }
+```
+Response: the asset's full row, same shape as one entry of the `GET` above.
+- 400 `merchant.deposit_range_invalid` / `merchant.withdrawal_range_invalid`: a minimum above its maximum.
+- 400 `ops.invalid_amount`: negative, or finer than the coin's precision. 400 `ops.invalid_chain` / `ops.invalid_asset`.
+- Audited as `merchant.default_limits_updated` with all five values (`config` for a cleared one).
+
+### `PUT /api/v1/ops/merchants/default-fees` — `ops.fees.manage`, 2FA `ops.merchants.pricing`
+Replaces the asset's platform-default **fees** (the limits are left as they are). Unlike the per-merchant fee
+PUT above, every field is required. **These fees are charged** to every merchant without a fee of its own (see
+"Platform defaults" above), so treat a save here as a price change for those merchants.
 
 Request:
 ```json
@@ -2576,6 +2625,7 @@ Cold treasury funds are **not** moved to the hot pool by this system. The in-sys
 | Endpoint | Purpose |
 |---|---|
 | `GET /ops/treasury/hot-pool?chain=Tron` | Pool wallets **with live on-chain balances**, to see which needs topping up. **Never returns a key reference.** |
+| `POST /ops/treasury/hot-pool/provision` | **Create the hot pool, or add wallets to it** (below). The only way to create it in production. |
 | `GET /ops/treasury/cold-wallets` | Every registered cold collection wallet, plus each chain's two current destinations (below). |
 | `POST /ops/treasury/cold-wallets` | Register a cold collection address (below). `POST /ops/treasury/cold-wallet`, singular, is the same handler and still works. |
 | `POST /ops/treasury/cold-wallets/{walletId}/activate` | Point that chain's sweeps of this wallet's kind at it, retiring the one it replaces. |
@@ -2630,6 +2680,46 @@ screeningScore, screeningId, warnings, registered }`.
   no warning at all — that is the control working.
 - Audited as `treasury.cold_wallet_registered` / `_replaced` / `_activated` / `_retired` (entity
   `TreasuryColdWallet`, id = the wallet id) with the reason and both addresses. `reason` max 200 chars.
+
+### `POST /ops/treasury/hot-pool/provision` — creating the hot pool
+
+**What it is for.** User payouts are sent from the hot pool: a small set of platform wallets that each hold
+some USDT. A brand-new production system has **no** hot pool, so every payout would wait for funds forever.
+This button creates it. Run it once at launch, and again later only if you want more wallets.
+
+**What it does.** It makes sure the chain has `size` hot wallets. If there are fewer, it creates the missing
+ones and returns their addresses. It never deletes a wallet, because a pool wallet may hold money, so asking
+for fewer than exist changes nothing. Clicking it twice is safe. Creating an address moves no money and writes
+nothing to the ledger.
+
+The new wallets are **empty**. Finance sends USDT to each address from a company wallet, then records each
+transfer with `POST /ops/treasury/top-up` (below). Until then, payouts wait in `insufficient_balance`.
+
+```json
+POST /api/v1/ops/treasury/hot-pool/provision
+X-2FA-Code: 418392            (when the action is guarded, which it is by default)
+{ "chain": "Tron", "size": 3, "reason": "launch" }
+```
+
+```json
+{ "isSuccess": true,
+  "data": { "chain": "Tron", "previousSize": 0, "size": 3,
+            "createdAddresses": ["TXa...", "TXb...", "TXc..."] },
+  "error": null, "errorCode": null }
+```
+
+- `previousSize` → `size` says what changed. When they are equal, `createdAddresses` is `[]` and nothing
+  happened. Show "the pool already has N wallets" rather than an error.
+- `size` must be **1–20**, else 400 `treasury.invalid_pool_size`. Unknown chain: 400 `ops.invalid_chain`.
+- Fails with a `keymgmt.*` error code if the server has no key access configured (KMS off). That is a server
+  setup problem, not something the operator can fix from the screen.
+- Audited as `treasury.hot_pool_provisioned` (entity `HotWalletPool`, id = the chain) with e.g.
+  `Tron pool 0->3`. Nothing is audited when nothing was created.
+
+**Screen flow (suggested):** on the hot-pool screen, show a "Create hot pool" / "Add wallets" button. It opens
+a dialog with a number field (default 3, max 20) and an optional reason, then asks for the 2FA code. Then
+show the new addresses with a copy button each and a note: "Fund these from the company wallet, then record
+each transfer as a top-up." Refresh the `GET /ops/treasury/hot-pool` list afterwards.
 
 ### `POST /ops/treasury/top-up` — recording a hot-wallet top-up
 
@@ -2721,8 +2811,9 @@ audit is down" *is* the answer to the question being asked.
 
 ## 22. Sweep and Energy — operational views, and the sweep dials
 
-Energy is read-only. Sweep now has two write actions (`ops.sweep.manage`): re-tune a chain's dials, and ask
-for an out-of-schedule pass. There is still no per-sweep action (no manual retry/cancel of one sweep).
+Sweep has two write actions (`ops.sweep.manage`): re-tune a chain's dials, and ask for an out-of-schedule
+pass. There is still no per-sweep action (no manual retry/cancel of one sweep). Energy has two write actions
+(`ops.energy.manage`): create the staking wallet, and set its rules — see "The staking (energy) wallet" below.
 
 ### `GET /api/v1/ops/sweeps` — `ops.sweep.view`
 Filters: `chain`, `status`, `walletId`, `page`, `pageSize`. Returns `{ page, pageSize, totalCount, summary, items }`.
@@ -2781,7 +2872,22 @@ watch `lastScanCompletedAt` / the sweep list, rather than implying the pass has 
 chain with 409 `sweep.chain_paused`. Audited as `sweep.scan_requested`.
 
 ### `GET /api/v1/ops/energy/operations` — `ops.energy.view`
-Filters: `chain`, `kind` (`Stake`/`Delegate`/`TopUp`), `status`, `stakingWalletId`, paging.
+Filters: `chain`, `kind`, `status`, `stakingWalletId`, paging.
+
+`kind` is one of these (labels suggested for the screen):
+
+| `kind` | Label | What happened | Who starts it |
+|---|---|---|---|
+| `Stake` | Stake | TRX locked in the staking wallet to earn energy | the system (auto-stake) |
+| `Delegate` | Lend energy | energy lent to an address about to sweep or pay out | the system |
+| `TopUp` | TRX top-up | a little TRX sent to an address so it can pay bandwidth | the system |
+| `Undelegate` | Take back energy | lent energy taken back from a deposit address that is done | the system (take-back) |
+| `Unstake` | Unstake | staked TRX starts unlocking (14-day wait on mainnet) | staff |
+| `WithdrawUnstaked` | Withdraw unstaked TRX | finished unstakes moved back to spendable TRX | staff |
+
+An `Undelegate` with `amountTrx` **0** and status `Confirmed` is a note, not a transaction: the system went to
+take energy back and found nothing lent any more, so it recorded that and sent nothing (`txHash` is null).
+A `WithdrawUnstaked` always shows amount 0: the chain decides how much comes back.
 
 Row: `operationId`, `kind`, `chain`, `stakingWalletId`, `ownerAddress`, `targetAddress`,
 `amountTrx(+amountSunBaseUnits)`, `status`, `txHash`, `confirmations`, `failureReason`, timestamps.
@@ -2794,6 +2900,151 @@ figure with a `...Sun` exact integer), `targetEnergy`, `minimumEnergy`, `observe
 
 Energy counts are raw integers, not money — no decimals conversion applies to them. TRX amounts are money and
 carry both forms.
+
+### The staking (energy) wallet — what it is and why it matters
+
+**Plain explanation.** On TRON, sending USDT costs "energy". Without energy, the network burns roughly
+27 TRX from the sending address for every transfer. To avoid that, the platform keeps one **staking wallet**
+per chain. It locks (stakes) TRX, which earns energy every day, and lends that energy to whichever deposit
+address is about to sweep, or hot wallet about to pay out. It also sends small amounts of TRX to addresses
+that need bandwidth.
+
+**A brand-new production system has no staking wallet.** Until one is created **and funded with TRX**, sweeps
+and payouts wait for energy that never arrives. This section is how staff set it up:
+
+1. `POST /energy/staking-wallet/provision` creates the wallet and returns its address.
+2. Finance sends TRX to that address from a company wallet.
+3. `PUT /energy/policy` sets the rules, including switching on auto-stake. The system then stakes TRX from
+   that balance by itself.
+
+None of this writes to the ledger: staking only locks the platform's own TRX.
+
+### `GET /api/v1/ops/energy/staking?chain=Tron` — `ops.energy.view`
+
+```json
+{ "chain": "Tron",
+  "stakingWallet": { "walletId": "...", "address": "TStake..." },
+  "policy": { "minimumEnergy": "100000", "targetEnergy": "500000", "stakeThreshold": "200000",
+              "enableAutoStake": true, "updatedAt": "..." } }
+```
+
+- `stakingWallet: null` means it has not been created yet, so show the "Create staking wallet" button.
+- `policy: null` means no rules saved yet, so auto-stake is **off**. Show the form empty with a hint.
+- Energy figures are **strings** (whole energy units), like the resources screen.
+- The wallet's live energy and TRX balance are on `GET /energy/resources` (its `walletType` is `Energy`).
+- `chain` is required: 400 `ops.network_required` without it.
+
+### `POST /api/v1/ops/energy/staking-wallet/provision` — `ops.energy.manage`, 2FA `ops.treasury.provision`
+
+```json
+{ "chain": "Tron", "reason": "launch" }
+```
+→ `{ "chain": "Tron", "walletId": "...", "address": "TStake...", "created": true }`
+
+- **Exactly one per chain.** Asking again returns the same wallet with `created: false` and changes nothing.
+  The system refuses to guess between two staking wallets (staking would stop), so this action never creates a
+  second one, even if two people click at the same moment.
+- 409 `energy.staking_wallet_ambiguous`: two already exist (only possible from an old manual setup). Staking
+  is stopped until one is removed. Show it as an alert, not a retry.
+- 400 `keymgmt.energy_key_not_configured`: the server has no energy KMS key (`KeyManagement:Kms:KeyArns:Energy`).
+  It is a server setup step, so show it as "not available on this server". **Development always answers
+  this:** there, the staking wallet comes from configuration instead.
+- Audited as `energy.staking_wallet_created` with the address. Not audited when it already existed.
+
+### `PUT /api/v1/ops/energy/policy` — `ops.energy.manage`, 2FA `ops.energy.settings`
+
+```json
+{ "chain": "Tron", "minimumEnergy": 100000, "targetEnergy": 500000,
+  "stakeThreshold": 200000, "enableAutoStake": true, "reason": "launch settings" }
+```
+
+What each number means (all are **energy units** of the staking wallet itself, not TRX):
+
+| Field | Meaning | Shown as |
+|---|---|---|
+| `minimumEnergy` | Below this the wallet shows **Critical** on the resources screen. | "Critical below" |
+| `targetEnergy` | Below this (but above minimum) it shows **Low**. Must be ≥ `minimumEnergy`. | "Healthy at" |
+| `stakeThreshold` | With auto-stake on, at or below this the system stakes more TRX from the wallet's balance. | "Stake more when energy falls to" |
+| `enableAutoStake` | Off = never stake automatically. Stake only happens from TRX already in the wallet. | toggle |
+
+- Send numbers in the request, but the response returns them as strings (same shape as `GET /energy/staking`).
+- 400 `energy.target_below_minimum` / `energy.negative_threshold`. Nothing is saved on a refusal.
+- Rental (buying energy from a market) is not built, so it is never switched on from here.
+- Audited as `energy.policy_changed` with all four values.
+
+**Screen flow (suggested):** an "Energy" settings page per chain.
+- No wallet yet: a "Create staking wallet" button, which asks for the 2FA code. Then show the address with a
+  copy button and a "Fund this with TRX" note.
+- Wallet exists: show its address, its live TRX/energy (from `/energy/resources`) and the rules form. Saving
+  asks for the 2FA code.
+
+### Getting lent energy back — automatic, nothing to build
+
+**Plain explanation.** Lending energy does not spend TRX, but while it is lent it can't be lent to anyone
+else. Without taking it back, every sweep would tie up another piece of the staked TRX until none was left.
+So the system **takes energy back automatically**:
+
+- About **30 minutes** after a lend to a **deposit address** confirms, the system takes back whatever the
+  chain says is still lent to that address. It shows on the operations list as an `Undelegate`.
+- If that deposit address still needed it (its sweep was waiting), it simply borrows again. That costs one
+  more small transaction, never money.
+- **Hot-pool wallets are never taken back from.** They pay out again and again, so they keep their energy, and
+  a take-back can never land in the middle of a payout.
+
+**How much is lent.** The amount is calculated from the network's current energy rate, plus 10%, for just the
+energy the address is short of. On mainnet that is typically **thousands of TRX per address** (about 10 energy
+per staked TRX; a USDT transfer needs up to 131,000 energy). So size the staking wallet to cover the number of
+addresses that may be waiting at the same moment, not just one. The configured `Energy:Operations:DelegateTrxSun`
+is now only a fallback for when the rate can't be read; `MaxDelegateTrxSun` (default 50,000 TRX) caps one lend.
+
+No ledger entry for any of this: the TRX never leaves the platform.
+
+### Getting staked TRX back — unstake, then withdraw
+
+Two staff steps, because TRON makes you wait between them (**14 days** on mainnet):
+
+1. **Unstake** (`POST /energy/unstake`): starts unlocking an amount of staked TRX. From then on it earns no
+   energy.
+2. After the wait, **Withdraw** (`POST /energy/withdraw-unstaked`): moves every finished unstake back into the
+   staking wallet's normal TRX balance. From there finance can move it like any other TRX.
+
+**Before unstaking, switch auto-stake off** in the rules. Otherwise the drop in energy would make the system
+stake the TRX again straight away, so unstake is refused while auto-stake is on.
+
+Only TRX that is staked and **not currently lent out** can be unstaked. The chain refuses more, and the
+operation then shows as `Failed` with the node's reason. If needed, wait for the take-backs to come in first
+(they are automatic).
+
+### `POST /api/v1/ops/energy/unstake` — `ops.energy.manage`, 2FA `ops.energy.settings`
+
+```json
+{ "chain": "Tron", "amount": 5000, "reason": "reduce stake after launch" }
+```
+→ `{ "operationId": "...", "chain": "Tron", "amountTrx": 5000.0, "amountSun": "5000000000" }`
+
+- `amount` is in **TRX**, up to 6 decimal places. 0, negative or finer: 400 `ops.invalid_amount`.
+- 409 `energy.auto_stake_on`: switch auto-stake off first (show the message as-is, it says so).
+- 409 `energy.operation_in_flight`: an unstake is already being sent. Wait for it on the operations list.
+- 404 `energy.staking_wallet_not_found`: no staking wallet on this chain.
+- It only **queues** the unstake. The backend sends it within seconds; follow it on the operations list
+  (`kind=Unstake`). Audited as `energy.unstake_requested`.
+
+### `POST /api/v1/ops/energy/withdraw-unstaked` — `ops.energy.manage`, 2FA `ops.energy.settings`
+
+```json
+{ "chain": "Tron", "reason": "collect unstaked TRX" }
+```
+→ `{ "operationId": "...", "chain": "Tron" }`
+
+- Collects **everything** whose 14-day wait has finished; there is no amount to choose.
+- If nothing has finished yet, the chain refuses and the operation shows as `Failed` with the node's reason.
+  The screen should say "nothing ready to withdraw yet" rather than treating it as an error to retry.
+- Same 404 / 409 `energy.operation_in_flight` rules as unstake. Audited as `energy.withdraw_unstaked_requested`.
+
+**Screen flow (suggested):** on the Energy page, an "Unstake TRX" button (amount field + reason; disabled
+with a hint while auto-stake is on) and a "Withdraw unstaked TRX" button. Both ask for the 2FA code, then link
+to the operations list filtered to that kind. A note under the buttons: "Unstaked TRX can be withdrawn 14 days
+after unstaking."
 
 ---
 

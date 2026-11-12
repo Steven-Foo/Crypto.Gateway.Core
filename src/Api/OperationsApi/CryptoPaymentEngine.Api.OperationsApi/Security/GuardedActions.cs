@@ -1,4 +1,4 @@
-using CryptoPaymentEngine.Gateway.Core.Platform.Identity.Domain;
+﻿using CryptoPaymentEngine.Gateway.Core.Platform.Identity.Domain;
 
 namespace CryptoPaymentEngine.Api.OperationsApi.Security;
 
@@ -33,6 +33,11 @@ public static class GuardedActions
     // ── custody: company funds moving in or out of the platform's control ──
     public const string TreasuryTopUp = "ops.treasury.top-up";
     public const string TreasuryColdWallet = "ops.treasury.cold-wallet";
+
+    /// <summary>Creating platform custody wallets — the hot withdrawal pool and the energy (staking) wallet. In
+    /// production the first call mints and seals a new KMS seed, and every wallet created becomes somewhere
+    /// company funds will be sent, so it sits with the other custody actions.</summary>
+    public const string TreasuryProvision = "ops.treasury.provision";
 
     // ── money out ──
     public const string WithdrawalApprove = "ops.withdrawals.approve";
@@ -99,6 +104,9 @@ public static class GuardedActions
 
     // ── platform controls ──
     public const string SweepSettings = "ops.sweep.settings";
+
+    /// <summary>The staking wallet's rules and unstaking — they decide how much company TRX is locked in staking.</summary>
+    public const string EnergySettings = "ops.energy.settings";
     public const string CompliancePolicy = "ops.compliance.policy";
     public const string AccountsManage = "ops.accounts.manage";
     public const string RolesManage = "ops.roles.manage";
@@ -126,6 +134,7 @@ public static class GuardedActions
     [
         new(TreasuryTopUp, "Treasury", "Record a hot-wallet top-up", Recommended: true),
         new(TreasuryColdWallet, "Treasury", "Register, activate or retire a cold collection wallet", Recommended: true),
+        new(TreasuryProvision, "Treasury", "Create hot pool or energy wallets", Recommended: true),
         new(WithdrawalApprove, "Withdrawals", "Approve or reject a payout", Recommended: true),
         new(WithdrawalSettlement, "Withdrawals", "Record an off-system merchant settlement", Recommended: true),
         new(WithdrawalFunding, "Withdrawals", "Release or cancel a payout held for funds", Recommended: true),
@@ -143,6 +152,7 @@ public static class GuardedActions
         new(WalletSuspend, "Wallets", "Suspend or resume a deposit wallet", Recommended: true),
         new(CallbackResend, "Callbacks", "Resend a merchant callback", Recommended: false),
         new(SweepSettings, "Sweep", "Change sweep settings or trigger a scan", Recommended: true),
+        new(EnergySettings, "Energy", "Change energy staking rules, or unstake / withdraw TRX", Recommended: true),
         new(CompliancePolicy, "Compliance", "Change screening thresholds", Recommended: true),
         new(ComplianceRescreen, "Compliance", "Force a fresh address screening", Recommended: false),
         new(AccountsManage, "Staff", "Create, disable or reset a staff account", Recommended: true),

@@ -57,7 +57,7 @@ public static class ReconciliationModuleExtensions
             ?? throw new InvalidOperationException("Missing configuration 'Mongo:ConnectionString'.");
         var databaseName = configuration["Mongo:Database"] ?? "CryptoPaymentEngine";
 
-        services.TryAddSingleton<IMongoClient>(_ => new MongoClient(connection));
+        services.TryAddSingleton(_ => CryptoPaymentEngine.Infrastructure.Persistence.Mongo.MongoClientFactory.Create(connection));
         services.TryAddSingleton(sp => sp.GetRequiredService<IMongoClient>().GetDatabase(databaseName));
 
         services.AddSingleton<IReconciliationStore, MongoReconciliationStore>();

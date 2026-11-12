@@ -924,3 +924,64 @@ END;
 COMMIT;
 GO
 
+BEGIN TRANSACTION;
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261106062822_AddPlatformDefaultLimits'
+)
+BEGIN
+    ALTER TABLE [merchant].[DefaultFeePolicy] ADD [ApprovalThreshold] decimal(38,0) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261106062822_AddPlatformDefaultLimits'
+)
+BEGIN
+    ALTER TABLE [merchant].[DefaultFeePolicy] ADD [MaximumDeposit] decimal(38,0) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261106062822_AddPlatformDefaultLimits'
+)
+BEGIN
+    ALTER TABLE [merchant].[DefaultFeePolicy] ADD [MaximumWithdrawal] decimal(38,0) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261106062822_AddPlatformDefaultLimits'
+)
+BEGIN
+    ALTER TABLE [merchant].[DefaultFeePolicy] ADD [MinimumDeposit] decimal(38,0) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261106062822_AddPlatformDefaultLimits'
+)
+BEGIN
+    ALTER TABLE [merchant].[DefaultFeePolicy] ADD [MinimumWithdrawal] decimal(38,0) NULL;
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261106062822_AddPlatformDefaultLimits'
+)
+BEGIN
+    EXEC(N'ALTER TABLE [merchant].[DefaultFeePolicy] ADD CONSTRAINT [CK_DefaultFeePolicy_Limits] CHECK (([MinimumDeposit] IS NULL OR [MinimumDeposit] >= 0) AND ([MaximumDeposit] IS NULL OR [MaximumDeposit] >= 0) AND ([MinimumWithdrawal] IS NULL OR [MinimumWithdrawal] >= 0) AND ([MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= 0) AND ([ApprovalThreshold] IS NULL OR [ApprovalThreshold] >= 0) AND ([MinimumDeposit] IS NULL OR [MaximumDeposit] IS NULL OR [MinimumDeposit] <= [MaximumDeposit]) AND ([MinimumWithdrawal] IS NULL OR [MaximumWithdrawal] IS NULL OR [MinimumWithdrawal] <= [MaximumWithdrawal]))');
+END;
+
+IF NOT EXISTS (
+    SELECT * FROM [merchant].[__EFMigrationsHistory]
+    WHERE [MigrationId] = N'20261106062822_AddPlatformDefaultLimits'
+)
+BEGIN
+    INSERT INTO [merchant].[__EFMigrationsHistory] ([MigrationId], [ProductVersion])
+    VALUES (N'20261106062822_AddPlatformDefaultLimits', N'10.0.9');
+END;
+
+COMMIT;
+GO
+

@@ -1,4 +1,4 @@
-using System.Net.Http.Json;
+﻿using System.Net.Http.Json;
 using System.Text.Json;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Rpc;
 
@@ -201,6 +201,41 @@ public sealed class TronRpc(HttpClient http) : ITronRpc, ITronTxRpc, ITronResour
         using var response = await http.PostAsJsonAsync("wallet/delegateresource", request, cancellationToken);
         response.EnsureSuccessStatusCode();
 
+        return await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
+    }
+
+    public Task<JsonElement> UndelegateResourceAsync(
+        UndelegateResourceRequest request, CancellationToken cancellationToken = default) =>
+        PostForTransactionAsync("wallet/undelegateresource", request, cancellationToken);
+
+    public Task<JsonElement> UnfreezeBalanceV2Async(
+        UnfreezeBalanceV2Request request, CancellationToken cancellationToken = default) =>
+        PostForTransactionAsync("wallet/unfreezebalancev2", request, cancellationToken);
+
+    public Task<JsonElement> WithdrawExpireUnfreezeAsync(
+        WithdrawExpireUnfreezeRequest request, CancellationToken cancellationToken = default) =>
+        PostForTransactionAsync("wallet/withdrawexpireunfreeze", request, cancellationToken);
+
+    public async Task<TronDelegatedResourceDto> GetDelegatedResourceV2Async(
+        string fromHexAddress, string toHexAddress, CancellationToken cancellationToken = default)
+    {
+        using var response = await http.PostAsJsonAsync(
+            "wallet/getdelegatedresourcev2",
+            new { fromAddress = fromHexAddress, toAddress = toHexAddress, visible = false }, cancellationToken);
+        response.EnsureSuccessStatusCode();
+
+        // Nothing lent ⇒ {} ⇒ an empty list, never an error.
+        return await response.Content.ReadFromJsonAsync<TronDelegatedResourceDto>(cancellationToken)
+            ?? new TronDelegatedResourceDto();
+    }
+
+    /// <summary>The resource builders all answer with the unsigned transaction at the top level, or
+    /// <c>{ "Error": "&lt;hex-ascii&gt;" }</c>; the caller inspects which.</summary>
+    private async Task<JsonElement> PostForTransactionAsync<TRequest>(
+        string path, TRequest request, CancellationToken cancellationToken)
+    {
+        using var response = await http.PostAsJsonAsync(path, request, cancellationToken);
+        response.EnsureSuccessStatusCode();
         return await response.Content.ReadFromJsonAsync<JsonElement>(cancellationToken);
     }
 

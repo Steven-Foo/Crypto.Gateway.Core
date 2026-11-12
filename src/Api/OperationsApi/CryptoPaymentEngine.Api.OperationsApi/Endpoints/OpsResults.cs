@@ -1,4 +1,4 @@
-using CryptoPaymentEngine.SharedKernel;
+﻿using CryptoPaymentEngine.SharedKernel;
 
 namespace CryptoPaymentEngine.Api.OperationsApi.Endpoints;
 
@@ -172,4 +172,8 @@ public static class OpsErrorCodes
 
     // An unhandled server fault. The detail is in the log, never in the response.
     public const string InternalError = "ops.internal_error";
+
+    // A supporting store this screen reads (MongoDB: reconciliation and energy snapshots) is unreachable right
+    // now. Nothing is wrong with the request and no money data is affected; retrying later is the answer.
+    public const string StoreUnavailable = "ops.store_unavailable";
 }

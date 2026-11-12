@@ -173,7 +173,7 @@ if (isTestnetTier)
     // instead, so staging exercises real KMS custody without becoming Production. Never both (§10). This host
     // owns the switch: on boot it archives the active wallets of the store that is off and restores the ones it
     // archived last time. Switch with tools/dev/Switch-StagingCustody.ps1.
-    var kmsCustody = builder.Services.AddTestnetKeyCustody(config, reconcileWallets: true);
+    var kmsCustody = builder.Services.AddTestnetKeyCustody(config, CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Secrets.Aws.KmsKeyAccess.Signing, reconcileWallets: true);
 
     // A fixed, documented test merchant (active) so a signed /api/v1 request works out of the box — the last
     // piece for a full deposit round-trip in dev. Config in Merchant:DevSeed; never runs in production (§10).
@@ -222,7 +222,7 @@ else // Production (the hard §10 boundary)
     // in-memory seed. The signer never sees a key — only the KMS provider does, only in memory, only briefly.
     if (config.GetValue<bool>("KeyManagement:Kms:Enabled"))
     {
-        builder.Services.AddAwsKmsKeyCustody(config);
+        builder.Services.AddAwsKmsKeyCustody(config, CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Secrets.Aws.KmsKeyAccess.Signing);
         builder.Services.AddTronTransactionEngine(config);
         builder.Services.AddTronSigner();
     }

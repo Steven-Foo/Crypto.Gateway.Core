@@ -28,6 +28,11 @@ public static class StaffUserErrors
     public static readonly Error NotFound =
         Error.NotFound("staff_user.not_found", "Staff account not found.");
 
+    public static readonly Error BootstrapRefused =
+        Error.Conflict("staff_user.bootstrap_refused",
+            "Staff accounts already exist. The first-admin bootstrap only runs on an empty staff table; " +
+            "create further accounts from the back office.");
+
     public static readonly Error CannotDisableSelf =
         Error.Conflict("staff_user.cannot_disable_self", "You cannot disable your own account.");
 

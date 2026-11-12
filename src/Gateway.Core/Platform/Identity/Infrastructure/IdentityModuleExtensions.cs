@@ -37,6 +37,7 @@ public static class IdentityModuleExtensions
 
         services.AddScoped<IRoleService, RoleService>();
         services.AddScoped<IStaffAccountService, StaffAccountService>();
+        services.AddScoped<IStaffBootstrapService, StaffBootstrapService>();
 
         AddTwoFactor(services, configuration);
 

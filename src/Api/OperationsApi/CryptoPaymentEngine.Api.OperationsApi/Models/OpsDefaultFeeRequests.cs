@@ -1,4 +1,4 @@
-using System.ComponentModel.DataAnnotations;
+﻿using System.ComponentModel.DataAnnotations;
 
 namespace CryptoPaymentEngine.Api.OperationsApi.Models;
 
@@ -21,4 +21,21 @@ public sealed class SetDefaultFeeRequest
     [Required] public decimal WithdrawalFeeFixed { get; init; }
     [Required] public decimal WithdrawalFeePercent { get; init; }
     [Required] public decimal WithdrawalFeeMinimum { get; init; }
+}
+
+/// <summary>
+/// A full replacement of one asset's PLATFORM-DEFAULT limits, in the coin's own units (e.g. USDT). Every field
+/// is sent each time: <c>null</c> = no platform default for that bound (the deployed configuration applies),
+/// <c>0</c> is a real value. A merchant's own value for a bound always wins over these.
+/// </summary>
+public sealed class SetDefaultLimitsRequest
+{
+    [Required, MaxLength(16)] public string Chain { get; init; } = null!;
+    [Required, MaxLength(16)] public string Coin { get; init; } = null!;
+
+    public decimal? MinimumDeposit { get; init; }
+    public decimal? MaximumDeposit { get; init; }
+    public decimal? MinimumWithdrawal { get; init; }
+    public decimal? MaximumWithdrawal { get; init; }
+    public decimal? ApprovalThreshold { get; init; }
 }

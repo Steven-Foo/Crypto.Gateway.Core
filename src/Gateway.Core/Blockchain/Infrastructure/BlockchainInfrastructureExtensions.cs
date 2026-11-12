@@ -1,4 +1,4 @@
-using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
+﻿using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Addresses;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Configuration;
@@ -74,7 +74,9 @@ public static class BlockchainInfrastructureExtensions
     public static IServiceCollection AddInMemoryAccountResourceReader(this IServiceCollection services)
     {
         services.TryAddSingleton(TimeProvider.System);
-        services.TryAddSingleton<IAccountResourceReader, InMemoryAccountResourceReader>();
+        services.TryAddSingleton<InMemoryAccountResourceReader>();
+        services.TryAddSingleton<IAccountResourceReader>(sp => sp.GetRequiredService<InMemoryAccountResourceReader>());
+        services.TryAddSingleton<IDelegatedResourceReader>(sp => sp.GetRequiredService<InMemoryAccountResourceReader>());
         return services;
     }
 
@@ -139,7 +141,10 @@ public static class BlockchainInfrastructureExtensions
         // reader is keyless observation; the freeze/delegate BUILDER comes with the money-out engine below.
         services.TryAddSingleton(TimeProvider.System);
         services.AddHttpClient<ITronResourceRpc, TronRpc>(ConfigureTronClient(options)).AddStandardResilienceHandler();
-        services.TryAddScoped<IAccountResourceReader, TronAccountResourceReader>();
+        services.TryAddScoped<TronAccountResourceReader>();
+        services.TryAddScoped<IAccountResourceReader>(sp => sp.GetRequiredService<TronAccountResourceReader>());
+        // What the staking wallet lends each address, read from the chain — the take-back worker's source of truth.
+        services.TryAddScoped<IDelegatedResourceReader>(sp => sp.GetRequiredService<TronAccountResourceReader>());
         return services;
     }
 

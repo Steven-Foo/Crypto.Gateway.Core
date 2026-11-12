@@ -1,4 +1,4 @@
-using CryptoPaymentEngine.SharedKernel;
+﻿using CryptoPaymentEngine.SharedKernel;
 
 namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Application;
 
@@ -23,4 +23,9 @@ public static class TreasuryErrors
         Error.NotFound(
             "treasury.signing_key_missing",
             "The hot wallet has no registered signing key for this chain.");
+
+    public static readonly Error InvalidPoolSize =
+        Error.Validation(
+            "treasury.invalid_pool_size",
+            $"The hot pool size must be between 1 and {TreasuryHotWalletProvisioningService.MaxPoolSize}.");
 }

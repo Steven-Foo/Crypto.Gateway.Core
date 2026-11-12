@@ -1,4 +1,5 @@
-using System.Numerics;
+﻿using System.Numerics;
+using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Application;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Domain;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Infrastructure;
@@ -329,11 +330,13 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         }
     }
 
-    /// <summary>The bounded retry (<c>MerchantRegistrar.MaxCodeGenerationAttempts</c>, currently 8) has to
-    /// give up eventually rather than loop forever — proven by manually claiming every candidate code it
-    /// would try and confirming a friendly conflict comes back instead of an exception.</summary>
+    /// <summary>The next code is always the highest existing <c>MEnnnnn</c> + 1, so codes already taken can
+    /// never block a registration — it moves past them. (This test used to claim ME00001–ME00008 and expect a
+    /// conflict, which only held under an older candidate scheme. The bounded retry,
+    /// <c>MaxCodeGenerationAttempts</c>, now only matters when two registrations race for the same next code,
+    /// and the unique index on MerchantCode stays the arbiter there.)</summary>
     [Fact]
-    public async Task Registrar_returns_a_conflict_when_every_retry_candidate_is_already_taken()
+    public async Task Registrar_moves_past_codes_that_are_already_taken()
     {
         await using (var context = NewContext())
         {
@@ -347,9 +350,8 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
         {
             var result = await NewRegistrar(context).RegisterAsync("Acme", null, Ct);
 
-            result.IsFailure.ShouldBeTrue();
-            result.Error!.Code.ShouldBe(MerchantErrors.CodeAlreadyExists.Code);
-            result.Error.Type.ShouldBe(ErrorType.Conflict);
+            result.IsSuccess.ShouldBeTrue();
+            result.Value.MerchantCode.ShouldBe("ME00009");
         }
     }
 
@@ -1148,5 +1150,151 @@ public sealed class MerchantPersistenceTests : IAsyncLifetime
             merchant.SettlementWallets.Count(w => w.IsActive).ShouldBe(1, "never two destinations at once");
             merchant.SettlementWallets.Single(w => w.IsActive).Address.ShouldBe(Second);
         }
+    }
+
+    // ── Platform defaults saved in the back office (merchant → platform default → config) ──────────
+
+    private async Task<Guid> RegisterAsync()
+    {
+        await using var context = NewContext();
+        return (await NewRegistrar(context).RegisterAsync("Acme", null, Ct)).Value.MerchantId;
+    }
+
+    private async Task SavePlatformDefaultAsync(Guid asset, FeeSchedule? fees = null, DefaultLimits? limits = null)
+    {
+        await using var context = NewContext();
+        var service = new DefaultFeePolicyService(new DefaultFeePolicyRepository(context), TimeProvider.System);
+        if (fees is not null)
+            (await service.SetAsync(asset, fees.DepositFeeFixed, fees.DepositFeeBps, fees.MinimumDepositFee,
+                fees.WithdrawalFee, fees.WithdrawalFeeBps, fees.MinimumWithdrawalFee, Ct)).IsSuccess.ShouldBeTrue();
+        if (limits is not null)
+            (await service.SetLimitsAsync(asset, limits, Ct)).IsSuccess.ShouldBeTrue();
+    }
+
+    [Fact]
+    public async Task The_saved_platform_default_fee_beats_the_config_default_for_an_unpriced_merchant()
+    {
+        var asset = Guid.CreateVersion7();
+        var merchantId = await RegisterAsync();
+        await SavePlatformDefaultAsync(asset, FeeSchedule.Create(0, 0, 0, 200).Value); // 2% saved in the back office
+
+        await using var verify = NewContext();
+        // Config says 0.5%, but the saved platform default (2%) wins: 2% of 1,000,000 = 20,000.
+        (await NewFeeSchedule(verify, withdrawalBps: 50).QuoteWithdrawalFeeAsync(merchantId, asset, 1_000_000, Ct)).Fee
+            .ShouldBe(new BigInteger(20_000));
+    }
+
+    [Fact]
+    public async Task A_merchants_own_fee_beats_the_saved_platform_default()
+    {
+        var asset = Guid.CreateVersion7();
+        var merchantId = await RegisterAsync();
+        await SavePlatformDefaultAsync(asset, FeeSchedule.Create(0, 0, 0, 200).Value);
+        await using (var context = NewContext())
+        {
+            var merchant = await context.Merchants.Include(m => m.AssetPolicies).SingleAsync(m => m.Id == merchantId, Ct);
+            merchant.SetAssetPolicy(asset, BigInteger.Zero, null, null, FeeSchedule.Create(0, 0, 0, 100).Value, DateTimeOffset.UtcNow);
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using var verify = NewContext();
+        (await NewFeeSchedule(verify, withdrawalBps: 50).QuoteWithdrawalFeeAsync(merchantId, asset, 1_000_000, Ct)).Fee
+            .ShouldBe(new BigInteger(10_000)); // the merchant's 1%
+    }
+
+    [Fact]
+    public async Task A_limits_only_platform_default_does_not_make_unpriced_merchants_free()
+    {
+        // Saving limits creates the row with zero fees; that must fall through to the config fee, not "free".
+        var asset = Guid.CreateVersion7();
+        var merchantId = await RegisterAsync();
+        await SavePlatformDefaultAsync(asset, limits: new DefaultLimits(1_000_000, null, null, null, null));
+
+        await using var verify = NewContext();
+        (await NewFeeSchedule(verify, withdrawalBps: 50).QuoteWithdrawalFeeAsync(merchantId, asset, 1_000_000, Ct)).Fee
+            .ShouldBe(new BigInteger(5_000)); // config 0.5%
+    }
+
+    [Fact]
+    public async Task Limits_resolve_bound_by_bound_merchant_first_then_platform_default()
+    {
+        var asset = Guid.CreateVersion7();
+        var merchantId = await RegisterAsync();
+        await SavePlatformDefaultAsync(asset, limits: new DefaultLimits(
+            MinimumDeposit: 1_000_000, MaximumDeposit: 50_000_000_000,
+            MinimumWithdrawal: 2_000_000, MaximumWithdrawal: 10_000_000_000, ApprovalThreshold: 1_000_000_000));
+
+        // Before the merchant sets anything: every bound comes from the platform default.
+        await using (var verify = NewContext())
+        {
+            (await new MerchantDepositLimitsReader(verify).GetAsync(merchantId, asset, Ct))
+                .ShouldBe(new MerchantDepositLimits(1_000_000, 50_000_000_000));
+            (await new MerchantWithdrawalLimitsReader(verify).GetAsync(merchantId, asset, Ct))
+                .ShouldBe(new MerchantWithdrawalLimits(2_000_000, 10_000_000_000));
+            (await new MerchantApprovalThresholdReader(verify).GetAsync(merchantId, asset, Ct))
+                .ShouldBe(new BigInteger(1_000_000_000));
+        }
+
+        // The merchant sets only its deposit MINIMUM and its own threshold.
+        await using (var context = NewContext())
+        {
+            var merchant = await context.Merchants.Include(m => m.AssetPolicies).SingleAsync(m => m.Id == merchantId, Ct);
+            merchant.SetDepositLimits(asset, 5_000_000, null, DateTimeOffset.UtcNow).IsSuccess.ShouldBeTrue();
+            merchant.SetApprovalThreshold(asset, 500_000_000, DateTimeOffset.UtcNow).IsSuccess.ShouldBeTrue();
+            await context.SaveChangesAsync(Ct);
+        }
+
+        await using (var verify = NewContext())
+        {
+            // Own minimum wins; the maximum it did not set still comes from the platform default.
+            (await new MerchantDepositLimitsReader(verify).GetAsync(merchantId, asset, Ct))
+                .ShouldBe(new MerchantDepositLimits(5_000_000, 50_000_000_000));
+            (await new MerchantApprovalThresholdReader(verify).GetAsync(merchantId, asset, Ct))
+                .ShouldBe(new BigInteger(500_000_000));
+            (await new MerchantWithdrawalLimitsReader(verify).GetAsync(merchantId, asset, Ct))
+                .ShouldBe(new MerchantWithdrawalLimits(2_000_000, 10_000_000_000));
+        }
+    }
+
+    [Fact]
+    public async Task With_no_platform_default_every_limit_is_null_so_config_applies()
+    {
+        var asset = Guid.CreateVersion7();
+        var merchantId = await RegisterAsync();
+
+        await using var verify = NewContext();
+        (await new MerchantDepositLimitsReader(verify).GetAsync(merchantId, asset, Ct)).ShouldBe(MerchantDepositLimits.None);
+        (await new MerchantWithdrawalLimitsReader(verify).GetAsync(merchantId, asset, Ct)).ShouldBe(MerchantWithdrawalLimits.None);
+        (await new MerchantApprovalThresholdReader(verify).GetAsync(merchantId, asset, Ct)).ShouldBeNull();
+    }
+
+    [Fact]
+    public async Task A_platform_default_minimum_above_its_maximum_is_refused_and_nothing_is_saved()
+    {
+        var asset = Guid.CreateVersion7();
+        await using (var context = NewContext())
+        {
+            var result = await new DefaultFeePolicyService(new DefaultFeePolicyRepository(context), TimeProvider.System)
+                .SetLimitsAsync(asset, new DefaultLimits(10, 5, null, null, null), Ct);
+            result.Error!.Code.ShouldBe(MerchantErrors.DepositRangeInvalid.Code);
+        }
+
+        await using var verify = NewContext();
+        (await verify.DefaultFeePolicies.CountAsync(p => p.AssetId == asset, Ct)).ShouldBe(0);
+    }
+
+    [Fact]
+    public async Task Saving_limits_keeps_the_saved_default_fees_and_saving_fees_keeps_the_limits()
+    {
+        var asset = Guid.CreateVersion7();
+        await SavePlatformDefaultAsync(asset, FeeSchedule.Create(0, 0, 0, 200).Value);
+        await SavePlatformDefaultAsync(asset, limits: new DefaultLimits(1, 2, 3, 4, 5));
+        await SavePlatformDefaultAsync(asset, FeeSchedule.Create(0, 0, 0, 300).Value);
+
+        await using var verify = NewContext();
+        var row = await verify.DefaultFeePolicies.SingleAsync(p => p.AssetId == asset, Ct);
+        row.WithdrawalFeeBps.ShouldBe(300);
+        row.MinimumDeposit.ShouldBe(new BigInteger(1));
+        row.ApprovalThreshold.ShouldBe(new BigInteger(5));
     }
 }

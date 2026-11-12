@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Addresses;
@@ -42,7 +42,7 @@ public sealed class TronChainAdapter(ITronRpc rpc, IAssetCatalog assetCatalog, I
         var contractToAsset = await BuildContractMapAsync(cancellationToken);
         if (contractToAsset.Count > 0)
         {
-            var logs = await rpc.GetTransferLogsAsync(fromBlock, toBlock, contractToAsset.Keys, cancellationToken);
+            var logs = await GetTransferLogsSplittingAsync(fromBlock, toBlock, contractToAsset.Keys, cancellationToken);
             foreach (var log in logs)
             {
                 if (TryMapTransfer(log, contractToAsset, out var transfer))
@@ -77,6 +77,36 @@ public sealed class TronChainAdapter(ITronRpc rpc, IAssetCatalog assetCatalog, I
 
         return transfers;
     }
+
+    /// <summary>
+    /// Fetches Transfer logs for a block range, halving the range whenever the node refuses it for returning too
+    /// many results (TronGrid caps <c>eth_getLogs</c> at 10,000). Mainnet USDT carries roughly 100 transfers per
+    /// block, so any window of more than ~100 blocks can be refused — and without this the scanner would retry the
+    /// SAME refused window forever after any downtime, and never detect another deposit. A single block never holds
+    /// 10,000 USDT transfers, so the split always terminates; if it somehow did, the error is raised rather than
+    /// skipping the block (a skipped block is a missed deposit).
+    /// </summary>
+    private async Task<IReadOnlyList<TronLogDto>> GetTransferLogsSplittingAsync(
+        long fromBlock, long toBlock, IReadOnlyCollection<string> contracts, CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await rpc.GetTransferLogsAsync(fromBlock, toBlock, contracts, cancellationToken);
+        }
+        catch (JsonRpcException ex) when (IsTooManyResults(ex) && toBlock > fromBlock)
+        {
+            var middle = fromBlock + (toBlock - fromBlock) / 2;
+            logger.LogDebug(
+                "eth_getLogs refused {From}-{To} for too many results; splitting at {Middle}.", fromBlock, toBlock, middle);
+
+            var first = await GetTransferLogsSplittingAsync(fromBlock, middle, contracts, cancellationToken);
+            var second = await GetTransferLogsSplittingAsync(middle + 1, toBlock, contracts, cancellationToken);
+            return [.. first, .. second];
+        }
+    }
+
+    private static bool IsTooManyResults(JsonRpcException ex) =>
+        ex.ErrorCode == -32005 || ex.Message.Contains("more than 10000", StringComparison.OrdinalIgnoreCase);
 
     /// <summary>
     /// Maps one TRC-20 Transfer log to a <see cref="DetectedTransfer"/>. Pure and unit-tested: it is the

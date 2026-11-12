@@ -1,4 +1,5 @@
-using System.Numerics;
+﻿using System.Numerics;
+using NSubstitute;
 using System.Text.Json;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Addresses;
@@ -279,6 +280,56 @@ public sealed class TronAdapterTests
         transfers.Count.ShouldBe(1);
         transfers[0].BlockHash.ShouldBe(ethHash);
         transfers[0].BlockHash.ShouldNotBe(nativeBlockId);
+    }
+
+    [Fact]
+    public async Task A_window_refused_for_too_many_results_is_split_until_every_block_is_covered_once()
+    {
+        // Mainnet USDT carries ~100 transfers per block and TronGrid refuses eth_getLogs above 10,000 results, so
+        // a 500-block catch-up window is refused. The adapter must split it rather than retry it forever.
+        var rpc = NSubstitute.Substitute.For<ITronRpc>();
+        var covered = new List<(long From, long To)>();
+        rpc.GetTransferLogsAsync(NSubstitute.Arg.Any<long>(), NSubstitute.Arg.Any<long>(),
+                NSubstitute.Arg.Any<IReadOnlyCollection<string>>(), NSubstitute.Arg.Any<CancellationToken>())
+            .Returns(ci =>
+            {
+                var (from, to) = (ci.ArgAt<long>(0), ci.ArgAt<long>(1));
+                if (to - from + 1 > 100)
+                    throw new CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Rpc.JsonRpcException(
+                        "eth_getLogs", "{\"code\":-32005,\"message\":\"query returned more than 10000 results\"}", -32005);
+                covered.Add((from, to));
+                return Task.FromResult<IReadOnlyList<TronLogDto>>([]);
+            });
+
+        var catalog = NSubstitute.Substitute.For<IAssetCatalog>();
+        catalog.GetActiveAsync(NSubstitute.Arg.Any<CancellationToken>()).Returns(
+            new List<AssetDto> { new(Guid.CreateVersion7(), Chain.Tron, "USDT", UsdtBase58, 6, IsNative: false) });
+
+        await new TronChainAdapter(rpc, catalog, NullLogger<TronChainAdapter>.Instance)
+            .ScanAsync(Chain.Tron, 1_000, 1_499, TestContext.Current.CancellationToken);
+
+        // Every block 1000..1499 exactly once, in order, each accepted window within the node's limit.
+        covered.ShouldAllBe(w => w.To - w.From + 1 <= 100);
+        covered.SelectMany(w => Enumerable.Range((int)w.From, (int)(w.To - w.From + 1)))
+            .ShouldBe(Enumerable.Range(1_000, 500));
+    }
+
+    [Fact]
+    public async Task Any_other_node_error_is_raised_not_swallowed()
+    {
+        var rpc = NSubstitute.Substitute.For<ITronRpc>();
+        rpc.GetTransferLogsAsync(NSubstitute.Arg.Any<long>(), NSubstitute.Arg.Any<long>(),
+                NSubstitute.Arg.Any<IReadOnlyCollection<string>>(), NSubstitute.Arg.Any<CancellationToken>())
+            .Returns<Task<IReadOnlyList<TronLogDto>>>(_ => throw new CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Rpc.JsonRpcException(
+                "eth_getLogs", "{\"code\":-32000,\"message\":\"rate limited\"}", -32000));
+        var catalog = NSubstitute.Substitute.For<IAssetCatalog>();
+        catalog.GetActiveAsync(NSubstitute.Arg.Any<CancellationToken>()).Returns(
+            new List<AssetDto> { new(Guid.CreateVersion7(), Chain.Tron, "USDT", UsdtBase58, 6, IsNative: false) });
+
+        // A failed window must surface so the scanner retries it — never be treated as "no deposits".
+        await Should.ThrowAsync<CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Rpc.JsonRpcException>(() =>
+            new TronChainAdapter(rpc, catalog, NullLogger<TronChainAdapter>.Instance)
+                .ScanAsync(Chain.Tron, 1, 10, TestContext.Current.CancellationToken));
     }
 
     private sealed class FakeAssetCatalog(Guid nativeAssetId) : IAssetCatalog

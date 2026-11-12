@@ -1,19 +1,22 @@
-using System.Numerics;
+﻿using System.Numerics;
 using CryptoPaymentEngine.SharedKernel;
 
 namespace CryptoPaymentEngine.Gateway.Core.Merchant.Domain;
 
 /// <summary>
-/// The staff-editable default deposit/withdrawal pricing for one asset — a template, not tied to any
-/// merchant. Its only consumer is the create-merchant screen, which reads this to pre-fill the fee inputs;
-/// whatever the operator submits still goes through the normal <c>POST /merchants</c> path as an explicit,
-/// per-merchant <see cref="MerchantAssetPolicy"/> like any manually-typed value. This entity has no bearing
-/// on how an already-unpriced merchant's fee is resolved at charge time (that stays
-/// <c>MerchantDefaultFee</c>/<c>Merchant:DefaultFee</c>, untouched).
+/// The PLATFORM DEFAULT pricing and limits for one asset, edited by staff in the back office. It is what a
+/// merchant gets for anything that merchant has not been given a value of its own:
+/// <list type="bullet">
+///   <item><b>Fees:</b> a merchant with no fee of its own for the asset is charged these (when they are not all
+///   zero; an all-zero row falls through to the <c>Merchant:DefaultFee</c> config).</item>
+///   <item><b>Limits:</b> each bound (deposit min/max, payout min/max, approval threshold) applies on its own
+///   wherever the merchant has not set that bound. Null = no platform default for that bound, so the deployed
+///   config value applies.</item>
+/// </list>
+/// Order of precedence, everywhere: the merchant's own value → this row → configuration.
 ///
-/// <para>Reuses <see cref="FeeSchedule"/> purely for its validation (bps bounds, non-negative, storable) —
-/// top-up pricing has no place here (a default template covers only what the create-merchant form asks for)
-/// so it is always validated at zero and never persisted.</para>
+/// <para>The create-merchant screen also reads it to pre-fill the fee inputs. Top-up pricing is deliberately
+/// absent: a merchant is never charged to fund its own balance unless staff set a top-up fee for that merchant.</para>
 /// </summary>
 public sealed class DefaultFeePolicy : Entity<Guid>
 {
@@ -45,11 +48,67 @@ public sealed class DefaultFeePolicy : Entity<Guid>
     public int WithdrawalFeeBps { get; private set; }
     public BigInteger MinimumWithdrawalFee { get; private set; }
 
+    /// <summary>Platform default smallest deposit (payin) invoice, base units. Null = use configuration.</summary>
+    public BigInteger? MinimumDeposit { get; private set; }
+
+    /// <summary>Platform default largest deposit invoice, base units. Null = no platform maximum.</summary>
+    public BigInteger? MaximumDeposit { get; private set; }
+
+    /// <summary>Platform default smallest user payout, base units. Null = use configuration.</summary>
+    public BigInteger? MinimumWithdrawal { get; private set; }
+
+    /// <summary>Platform default largest user payout, base units. Null = use configuration.</summary>
+    public BigInteger? MaximumWithdrawal { get; private set; }
+
+    /// <summary>Platform default approval threshold (payouts and cash-outs above it need staff), base units.
+    /// Null = use configuration.</summary>
+    public BigInteger? ApprovalThreshold { get; private set; }
+
     public DateTimeOffset CreatedAt { get; private set; }
     public DateTimeOffset UpdatedAt { get; private set; }
 
+    /// <summary>The default fees, or <see cref="FeeSchedule.None"/> when every component is zero.</summary>
+    public FeeSchedule Fees =>
+        FeeSchedule.Create(DepositFeeFixed, DepositFeeBps, WithdrawalFee, WithdrawalFeeBps,
+            BigInteger.Zero, 0, MinimumDepositFee, MinimumWithdrawalFee) is { IsSuccess: true } fees
+            ? fees.Value
+            : FeeSchedule.None;
+
     public static Result<DefaultFeePolicy> Create(Guid assetId, FeeSchedule fees, DateTimeOffset now) =>
         Result.Success(new DefaultFeePolicy(Guid.CreateVersion7(), assetId, fees, now));
+
+    /// <summary>A row holding limits only (no default fees yet). Its zero fees fall through to configuration.</summary>
+    public static Result<DefaultFeePolicy> CreateForLimits(Guid assetId, DateTimeOffset now) =>
+        Result.Success(new DefaultFeePolicy(Guid.CreateVersion7(), assetId, FeeSchedule.None, now));
+
+    /// <summary>Sets every platform-default limit at once. Each null clears that default (config applies).</summary>
+    public Result SetLimits(
+        BigInteger? minimumDeposit, BigInteger? maximumDeposit, BigInteger? minimumWithdrawal,
+        BigInteger? maximumWithdrawal, BigInteger? approvalThreshold, DateTimeOffset now)
+    {
+        foreach (var amount in new[] { minimumDeposit, maximumDeposit, minimumWithdrawal, maximumWithdrawal, approvalThreshold })
+        {
+            if (amount is not { } value)
+                continue;
+            if (value < BigInteger.Zero)
+                return Result.Failure(MerchantErrors.AmountNegative);
+            if (!MoneyLimits.IsStorable(value))
+                return Result.Failure(MerchantErrors.AmountTooLarge);
+        }
+
+        if (minimumDeposit is { } depositMin && maximumDeposit is { } depositMax && depositMin > depositMax)
+            return Result.Failure(MerchantErrors.DepositRangeInvalid);
+        if (minimumWithdrawal is { } payoutMin && maximumWithdrawal is { } payoutMax && payoutMin > payoutMax)
+            return Result.Failure(MerchantErrors.WithdrawalRangeInvalid);
+
+        MinimumDeposit = minimumDeposit;
+        MaximumDeposit = maximumDeposit;
+        MinimumWithdrawal = minimumWithdrawal;
+        MaximumWithdrawal = maximumWithdrawal;
+        ApprovalThreshold = approvalThreshold;
+        UpdatedAt = now;
+        return Result.Success();
+    }
 
     public Result Update(FeeSchedule fees, DateTimeOffset now)
     {

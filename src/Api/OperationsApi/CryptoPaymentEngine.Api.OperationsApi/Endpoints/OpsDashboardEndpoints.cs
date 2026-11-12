@@ -59,8 +59,12 @@ public static class OpsDashboardEndpoints
         // the operator's actual to-do list and is perfectly healthy. Degrade to "unavailable" instead, and say
         // so in the payload rather than silently reporting zero (a fake 0 drift reads as "all balanced",
         // which on a custody figure is the worst possible thing to show).
-        var snapshots = await TryReadAsync(() => reconciliation.ListAsync(ct), logger, "reconciliation snapshots");
-        var resourceSnapshots = await TryReadAsync(() => resources.ListAsync(ct), logger, "wallet resource snapshots");
+        // Both reads at once: when MongoDB is down each waits out the client's server-selection timeout, and
+        // running them side by side means the page pays that wait once, not twice.
+        var snapshotsRead = TryReadAsync(() => reconciliation.ListAsync(ct), logger, "reconciliation snapshots");
+        var resourcesRead = TryReadAsync(() => resources.ListAsync(ct), logger, "wallet resource snapshots");
+        var snapshots = await snapshotsRead;
+        var resourceSnapshots = await resourcesRead;
 
         var operational = new
         {

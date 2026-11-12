@@ -1,4 +1,4 @@
-using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Application;
+﻿using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Application;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Domain;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Infrastructure.Persistence;
@@ -137,6 +137,10 @@ public sealed class WalletProvisioningTests : IAsyncLifetime
                 : Result.Failure<HdWallet>(KeyManagementErrors.NotFound));
 
         public Task<Result<HdWallet>> ProvisionPlatformWithdrawalWalletAsync(
+            Chain chain, CancellationToken cancellationToken = default) =>
+            Task.FromResult(Result.Failure<HdWallet>(KeyManagementErrors.NotFound)); // not exercised by these deposit tests
+
+        public Task<Result<HdWallet>> ProvisionPlatformEnergyWalletAsync(
             Chain chain, CancellationToken cancellationToken = default) =>
             Task.FromResult(Result.Failure<HdWallet>(KeyManagementErrors.NotFound)); // not exercised by these deposit tests
     }

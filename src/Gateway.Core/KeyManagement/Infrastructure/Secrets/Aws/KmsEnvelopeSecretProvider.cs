@@ -32,6 +32,7 @@ public sealed class KmsEnvelopeSecretProvider(
     IServiceScopeFactory scopeFactory,
     IAmazonKeyManagementService kms,
     IOptions<AwsKmsKeyCustodyOptions> options,
+    KmsKeyAccessMode access,
     ILogger<KmsEnvelopeSecretProvider> logger) : ISecretProvider
 {
     private readonly AwsKmsKeyCustodyOptions _options = options.Value;
@@ -43,6 +44,15 @@ public sealed class KmsEnvelopeSecretProvider(
         // "{ref}#{index}" ⇒ a signing request (derive a child private key); otherwise ⇒ a public xpub read.
         var hash = reference.IndexOf('#');
         var baseReference = hash < 0 ? reference : reference[..hash];
+
+        // An address-only host (the back offices) can read xpubs but must never unseal a seed — refused here,
+        // before the material is even loaded, so no kms:Decrypt call is ever attempted from such a host.
+        if (hash >= 0 && access.Access != KmsKeyAccess.Signing)
+        {
+            logger.LogError("Refused a signing-key request for {Reference}: this host has address-only key access.", baseReference);
+            throw new InvalidOperationException(
+                "This host has address-only key access and can never derive a signing key (§10).");
+        }
 
         var material = await LoadAsync(baseReference, cancellationToken)
             ?? throw new KeyNotFoundException($"No KMS material is registered for reference '{baseReference}'.");

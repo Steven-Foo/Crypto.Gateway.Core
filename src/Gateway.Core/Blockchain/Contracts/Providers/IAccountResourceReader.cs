@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using CryptoPaymentEngine.SharedKernel;
 
 namespace CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
@@ -26,6 +26,13 @@ public sealed record AccountResourceSnapshot(
     public BigInteger EnergyAvailable => BigInteger.Max(BigInteger.Zero, EnergyLimit - EnergyUsed);
 
     public BigInteger BandwidthAvailable => BigInteger.Max(BigInteger.Zero, BandwidthLimit - BandwidthUsed);
+
+    /// <summary>The whole network's daily energy supply (TRON <c>TotalEnergyLimit</c>). Zero when unknown.</summary>
+    public BigInteger NetworkTotalEnergyLimit { get; init; }
+
+    /// <summary>The whole network's TRX staked for energy, in whole TRX (TRON <c>TotalEnergyWeight</c>). Zero
+    /// when unknown. Energy per staked TRX = <see cref="NetworkTotalEnergyLimit"/> / this.</summary>
+    public BigInteger NetworkTotalEnergyWeight { get; init; }
 }
 
 /// <summary>

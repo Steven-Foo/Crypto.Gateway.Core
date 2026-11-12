@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.Json;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Infrastructure.Addresses;
@@ -40,11 +40,52 @@ public sealed class TronResourceOperationBuilder(
             ReceiverAddress = TronAddress.ToRawHex(request.ReceiverAddress),
             Balance = ToSun(request.TrxAmountSun, nameof(request.TrxAmountSun)),
             Resource = "ENERGY",
-            Lock = false, // reclaimable immediately (undelegate is a future refinement)
+            Lock = false, // reclaimable immediately: the take-back worker returns it once the address is done
             Visible = false,
         }, cancellationToken);
 
         return Unsigned("delegateresource", response);
+    }
+
+    public async Task<UnsignedTransaction> BuildUndelegateEnergyAsync(
+        UndelegateEnergyRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await rpc.UndelegateResourceAsync(new UndelegateResourceRequest
+        {
+            OwnerAddress = TronAddress.ToRawHex(request.OwnerAddress),
+            ReceiverAddress = TronAddress.ToRawHex(request.ReceiverAddress),
+            Balance = ToSun(request.TrxAmountSun, nameof(request.TrxAmountSun)),
+            Resource = "ENERGY",
+            Visible = false,
+        }, cancellationToken);
+
+        return Unsigned("undelegateresource", response);
+    }
+
+    public async Task<UnsignedTransaction> BuildUnstakeEnergyAsync(
+        UnstakeEnergyRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await rpc.UnfreezeBalanceV2Async(new UnfreezeBalanceV2Request
+        {
+            OwnerAddress = TronAddress.ToRawHex(request.OwnerAddress),
+            UnfreezeBalance = ToSun(request.TrxAmountSun, nameof(request.TrxAmountSun)),
+            Resource = "ENERGY",
+            Visible = false,
+        }, cancellationToken);
+
+        return Unsigned("unfreezebalancev2", response);
+    }
+
+    public async Task<UnsignedTransaction> BuildWithdrawUnstakedAsync(
+        WithdrawUnstakedRequest request, CancellationToken cancellationToken = default)
+    {
+        var response = await rpc.WithdrawExpireUnfreezeAsync(new WithdrawExpireUnfreezeRequest
+        {
+            OwnerAddress = TronAddress.ToRawHex(request.OwnerAddress),
+            Visible = false,
+        }, cancellationToken);
+
+        return Unsigned("withdrawexpireunfreeze", response);
     }
 
     /// <summary>The node returns the unsigned tx at the top level, or <c>{ "Error": "&lt;hex-ascii&gt;" }</c>.</summary>

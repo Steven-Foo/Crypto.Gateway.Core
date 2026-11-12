@@ -1,4 +1,4 @@
-using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Application.Abstractions;
+﻿using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Contracts;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Domain;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts.Providers;
@@ -30,7 +30,7 @@ public sealed class EnergyDelegationService(
         // 1. Energy — the expensive resource. A short TRC-20 transfer burns ~27 TRX, so we delegate rather than
         //    burn: ensure a delegation from the platform staking wallet, then have the caller retry.
         if (observed.EnergyAvailable < options.RequiredEnergyPerTransfer)
-            return await EnsureEnergyDelegatedAsync(chain, address, observed.EnergyAvailable, cancellationToken);
+            return await EnsureEnergyDelegatedAsync(chain, address, observed, cancellationToken);
 
         // 2. Bandwidth — the cheap resource (~0.27 TRX burn). We do NOT delegate it; the address pays it from
         //    free/staked bandwidth OR a small spendable-TRX cushion. If it has neither, the gas hub SUPPLIES the
@@ -79,8 +79,9 @@ public sealed class EnergyDelegationService(
     }
 
     private async Task<EnergyReadiness> EnsureEnergyDelegatedAsync(
-        Chain chain, string address, System.Numerics.BigInteger energyAvailable, CancellationToken cancellationToken)
+        Chain chain, string address, AccountResourceSnapshot observed, CancellationToken cancellationToken)
     {
+        var energyAvailable = observed.EnergyAvailable;
         var staking = await stakingWallets.FindAsync(chain, cancellationToken);
         if (staking is null)
         {
@@ -92,8 +93,13 @@ public sealed class EnergyDelegationService(
         if (await operations.HasInFlightDelegateAsync(chain, address, cancellationToken))
             return EnergyReadiness.Provisioning; // already being provisioned
 
+        // Lend only the shortfall, sized from the network's current energy rate (the same reading carries it).
+        var amountSun = DelegationSizing.SunToLend(
+            options.RequiredEnergyPerTransfer - energyAvailable,
+            observed.NetworkTotalEnergyLimit, observed.NetworkTotalEnergyWeight, options);
+
         var operation = EnergyOperation.CreateDelegate(
-            staking.WalletId, chain, staking.Address, address, options.DelegateTrxSun, timeProvider.GetUtcNow());
+            staking.WalletId, chain, staking.Address, address, amountSun, timeProvider.GetUtcNow());
         if (operation.IsFailure)
             return EnergyReadiness.Unavailable;
 
@@ -103,7 +109,7 @@ public sealed class EnergyDelegationService(
 
         logger.LogInformation(
             "Delegating {Trx} sun of energy to {Address} on {Chain} (had {Energy}, needs {Required}).",
-            options.DelegateTrxSun, address, chain, energyAvailable, options.RequiredEnergyPerTransfer);
+            amountSun, address, chain, energyAvailable, options.RequiredEnergyPerTransfer);
         return EnergyReadiness.Provisioning;
     }
 }

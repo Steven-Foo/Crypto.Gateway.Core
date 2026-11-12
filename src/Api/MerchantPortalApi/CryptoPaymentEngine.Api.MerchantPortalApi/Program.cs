@@ -1,3 +1,4 @@
+using CryptoPaymentEngine.Gateway.Core.KeyManagement.Infrastructure.Secrets.Aws;
 using CryptoPaymentEngine.Api.MerchantPortalApi.Endpoints;
 using CryptoPaymentEngine.Api.MerchantPortalApi.Security;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Infrastructure;
@@ -78,7 +79,8 @@ if (builder.Environment.IsDevelopment())
 {
     // The same secret store as the other hosts: in-memory (public xpubs only) by default, AWS KMS when
     // KeyManagement:Kms:Enabled=true. Must match MerchantGateway, which owns the wallet switch (§10).
-    builder.Services.AddTestnetKeyCustody(config);
+    // Address-only: this host never signs (§10).
+    builder.Services.AddTestnetKeyCustody(config, KmsKeyAccess.AddressOnly);
 
     // Seed the dev merchant (idempotent, same config as the other hosts) so the portal login can bind to it,
     // then seed the merchant-portal login itself.
@@ -91,6 +93,14 @@ if (builder.Environment.IsDevelopment())
     builder.Services.AddInMemoryChainSource();
     builder.Services.AddInMemoryTransactionEngine();
     builder.Services.AddInMemorySigner();
+}
+else
+{
+    // Production/Staging custody, ADDRESS-ONLY (§10): a merchant top-up may need a new deposit address, which
+    // reads xpubs and may mint + seal a seed (kms:Encrypt), but this host can never decrypt one — a signing
+    // request is refused in code before any KMS call, and no signer is registered. Inert unless
+    // KeyManagement:Kms:Enabled; refuses to start if that switch is on with an identifier missing.
+    builder.Services.AddAwsKmsKeyCustody(config, KmsKeyAccess.AddressOnly);
 }
 
 // Make a request that fails binding (a malformed JSON body, a missing required query parameter) THROW in every

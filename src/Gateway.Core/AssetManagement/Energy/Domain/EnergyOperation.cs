@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using CryptoPaymentEngine.SharedKernel;
 
 namespace CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Domain;
@@ -113,6 +113,74 @@ public sealed class EnergyOperation : Entity<Guid>
         return Result.Success(new EnergyOperation(
             Guid.CreateVersion7(), EnergyOperationKind.TopUp, chain, stakingWalletId, ownerAddress.Trim(),
             receiverAddress.Trim(), trxAmountSun, EnergyOperationStatus.Pending, now));
+    }
+
+    /// <summary>
+    /// Take back the energy the staking wallet lends <paramref name="receiverAddress"/>.
+    /// <paramref name="trxAmountSun"/> is what the CHAIN says is lent right now, so one take-back returns
+    /// everything, however many delegations built it up.
+    /// </summary>
+    public static Result<EnergyOperation> CreateUndelegate(
+        Guid stakingWalletId, Chain chain, string ownerAddress, string receiverAddress, BigInteger trxAmountSun, DateTimeOffset now)
+    {
+        if (stakingWalletId == Guid.Empty || string.IsNullOrWhiteSpace(ownerAddress))
+            return Result.Failure<EnergyOperation>(EnergyErrors.OperationOwnerRequired);
+
+        if (string.IsNullOrWhiteSpace(receiverAddress))
+            return Result.Failure<EnergyOperation>(EnergyErrors.DelegateReceiverRequired);
+
+        if (trxAmountSun <= BigInteger.Zero)
+            return Result.Failure<EnergyOperation>(EnergyErrors.OperationAmountNotPositive);
+
+        return Result.Success(new EnergyOperation(
+            Guid.CreateVersion7(), EnergyOperationKind.Undelegate, chain, stakingWalletId, ownerAddress.Trim(),
+            receiverAddress.Trim(), trxAmountSun, EnergyOperationStatus.Pending, now));
+    }
+
+    /// <summary>
+    /// The take-back worker found nothing lent on-chain to an address it expected to reclaim from. Recorded as a
+    /// finished take-back of 0 — no transaction is sent — so the address is not checked again until the next
+    /// time energy is lent to it.
+    /// </summary>
+    public static Result<EnergyOperation> RecordNothingToReclaim(
+        Guid stakingWalletId, Chain chain, string ownerAddress, string receiverAddress, DateTimeOffset now)
+    {
+        if (stakingWalletId == Guid.Empty || string.IsNullOrWhiteSpace(ownerAddress))
+            return Result.Failure<EnergyOperation>(EnergyErrors.OperationOwnerRequired);
+
+        if (string.IsNullOrWhiteSpace(receiverAddress))
+            return Result.Failure<EnergyOperation>(EnergyErrors.DelegateReceiverRequired);
+
+        return Result.Success(new EnergyOperation(
+            Guid.CreateVersion7(), EnergyOperationKind.Undelegate, chain, stakingWalletId, ownerAddress.Trim(),
+            receiverAddress.Trim(), BigInteger.Zero, EnergyOperationStatus.Confirmed, now));
+    }
+
+    /// <summary>Start unlocking <paramref name="trxAmountSun"/> of the staking wallet's staked TRX.</summary>
+    public static Result<EnergyOperation> CreateUnstake(
+        Guid stakingWalletId, Chain chain, string ownerAddress, BigInteger trxAmountSun, DateTimeOffset now)
+    {
+        if (stakingWalletId == Guid.Empty || string.IsNullOrWhiteSpace(ownerAddress))
+            return Result.Failure<EnergyOperation>(EnergyErrors.OperationOwnerRequired);
+
+        if (trxAmountSun <= BigInteger.Zero)
+            return Result.Failure<EnergyOperation>(EnergyErrors.OperationAmountNotPositive);
+
+        return Result.Success(new EnergyOperation(
+            Guid.CreateVersion7(), EnergyOperationKind.Unstake, chain, stakingWalletId, ownerAddress.Trim(),
+            null, trxAmountSun, EnergyOperationStatus.Pending, now));
+    }
+
+    /// <summary>Withdraw every finished unstake. The chain decides the amount, so it is recorded as 0.</summary>
+    public static Result<EnergyOperation> CreateWithdrawUnstaked(
+        Guid stakingWalletId, Chain chain, string ownerAddress, DateTimeOffset now)
+    {
+        if (stakingWalletId == Guid.Empty || string.IsNullOrWhiteSpace(ownerAddress))
+            return Result.Failure<EnergyOperation>(EnergyErrors.OperationOwnerRequired);
+
+        return Result.Success(new EnergyOperation(
+            Guid.CreateVersion7(), EnergyOperationKind.WithdrawUnstaked, chain, stakingWalletId, ownerAddress.Trim(),
+            null, BigInteger.Zero, EnergyOperationStatus.Pending, now));
     }
 
     /// <summary>Records the signed blob and moves Pending → Signing (persist-before-broadcast safety).</summary>

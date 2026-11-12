@@ -1,4 +1,4 @@
-using CryptoPaymentEngine.SharedKernel;
+﻿using CryptoPaymentEngine.SharedKernel;
 
 namespace CryptoPaymentEngine.Gateway.Core.KeyManagement.Domain;
 
@@ -87,4 +87,11 @@ public static class KeyManagementErrors
         Error.Conflict(
             "keymgmt.platform_key_address_conflict",
             "A platform key with a different address is already registered for this chain and purpose.");
+
+    /// <summary>No KMS key is configured for the energy wallet (<c>KeyManagement:Kms:KeyArns:Energy</c>), or this
+    /// environment registers its staking wallet another way (development imports one from configuration).</summary>
+    public static readonly Error EnergyKeyNotConfigured =
+        Error.Validation(
+            "keymgmt.energy_key_not_configured",
+            "No energy key is configured, so the energy wallet cannot be created here. Set KeyManagement:Kms:KeyArns:Energy.");
 }

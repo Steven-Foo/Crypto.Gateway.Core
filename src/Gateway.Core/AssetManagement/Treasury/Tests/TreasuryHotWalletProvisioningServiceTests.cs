@@ -1,4 +1,4 @@
-using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Application;
+﻿using CryptoPaymentEngine.Gateway.Core.AssetManagement.Treasury.Application;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Wallet.Contracts;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Contracts;
 using CryptoPaymentEngine.SharedKernel;
@@ -63,7 +63,7 @@ public sealed class TreasuryHotWalletProvisioningServiceTests
 
         (await NewService().EnsurePoolAsync(Chain.Tron, 3, Ct)).IsSuccess.ShouldBeTrue();
 
-        await _derivation.DidNotReceiveWithAnyArgs().AllocateNextAsync(default, default, default);
+        await _derivation.DidNotReceiveWithAnyArgs().AllocateNextAsync(default, default, Ct);
     }
 
     [Fact]
@@ -89,6 +89,43 @@ public sealed class TreasuryHotWalletProvisioningServiceTests
         result.IsFailure.ShouldBeTrue();
         result.Error!.Code.ShouldBe("k.none");
         await _walletRegistrar.DidNotReceiveWithAnyArgs().RegisterPlatformWalletAsync(
-            default, default, default!, default!, default, default);
+            default, default, default!, default!, default, Ct);
+    }
+
+    [Fact]
+    public async Task The_staff_action_reports_what_it_created_so_finance_knows_what_to_fund()
+    {
+        ExistingHotWallets(1);
+        DeriveRegisterSucceeds();
+
+        var result = await NewService().ProvisionAsync(Chain.Tron, 3, Ct);
+
+        result.Value.PreviousSize.ShouldBe(1);
+        result.Value.Size.ShouldBe(3);
+        result.Value.CreatedAddresses.ShouldBe(["TChild0", "TChild1"]);
+    }
+
+    [Fact]
+    public async Task Asking_for_fewer_than_exist_never_shrinks_the_pool()
+    {
+        ExistingHotWallets(5);
+
+        var result = await NewService().ProvisionAsync(Chain.Tron, 2, Ct);
+
+        result.Value.Size.ShouldBe(5);
+        result.Value.CreatedAddresses.ShouldBeEmpty();
+        await _derivation.DidNotReceiveWithAnyArgs().AllocateNextAsync(default, default, Ct);
+    }
+
+    [Theory]
+    [InlineData(0)]
+    [InlineData(-1)]
+    [InlineData(TreasuryHotWalletProvisioningService.MaxPoolSize + 1)]
+    public async Task An_out_of_range_size_is_refused_before_anything_is_derived(int size)
+    {
+        var result = await NewService().ProvisionAsync(Chain.Tron, size, Ct);
+
+        result.Error!.Code.ShouldBe(TreasuryErrors.InvalidPoolSize.Code);
+        await _derivation.DidNotReceiveWithAnyArgs().AllocateNextAsync(default, default, Ct);
     }
 }

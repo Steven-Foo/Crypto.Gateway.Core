@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Numerics;
 using CryptoPaymentEngine.Api.MerchantPortalApi.Security;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
@@ -16,7 +16,7 @@ public static class PortalFeeEndpoints
         app.MapGet("/api/v1/portal/fees", GetAsync).RequirePortalPermission(PortalPermissions.Overview.View);
 
     private static async Task<IResult> GetAsync(
-        IMerchantAssetPolicyService policies, IAssetCatalog assets, HttpContext http)
+        IMerchantAssetPolicyService policies, IDefaultFeePolicyService platformDefaults, IAssetCatalog assets, HttpContext http)
     {
         var result = await policies.ListAsync(PortalTenant.MerchantId(http), http.RequestAborted);
         if (result.IsFailure)
@@ -55,7 +55,40 @@ public static class PortalFeeEndpoints
             });
         }
 
-        return Results.Ok(new { isSuccess = true, data = new { items = rows }, error = (string?)null, errorCode = (string?)null });
+        // The platform defaults: what applies wherever this merchant has no value of its own (a null above, or an
+        // asset missing from items). Fees here are charged only when this merchant has no fee of its own for the
+        // asset. A null limit here too means the deployed configuration applies. Same units as items.
+        var defaults = await platformDefaults.ListAsync(http.RequestAborted);
+        var defaultRows = new List<object>();
+        foreach (var d in defaults.IsSuccess ? defaults.Value : [])
+        {
+            var asset = await assets.FindByIdAsync(d.AssetId, http.RequestAborted);
+            var decimals = asset?.Decimals ?? 6;
+            defaultRows.Add(new
+            {
+                assetId = d.AssetId,
+                coin = asset?.Symbol ?? "",
+                network = asset?.Chain.ToString(),
+                depositFeeFixed = Display(d.DepositFeeFixed, decimals),
+                depositFeePercent = Percent(d.DepositFeeBps),
+                depositFeeMinimum = Display(d.MinimumDepositFee, decimals),
+                withdrawalFeeFixed = Display(d.WithdrawalFee, decimals),
+                withdrawalFeePercent = Percent(d.WithdrawalFeeBps),
+                withdrawalFeeMinimum = Display(d.MinimumWithdrawalFee, decimals),
+                minimumDeposit = Display(d.MinimumDeposit, decimals),
+                maximumDeposit = Display(d.MaximumDeposit, decimals),
+                minimumWithdrawal = Display(d.MinimumWithdrawal, decimals),
+                maximumWithdrawal = Display(d.MaximumWithdrawal, decimals),
+                approvalThreshold = Display(d.ApprovalThreshold, decimals),
+            });
+        }
+
+        return Results.Ok(new
+        {
+            isSuccess = true,
+            data = new { items = rows, platformDefaults = defaultRows },
+            error = (string?)null, errorCode = (string?)null,
+        });
     }
 
     private static decimal? Display(string? baseUnits, int decimals) =>

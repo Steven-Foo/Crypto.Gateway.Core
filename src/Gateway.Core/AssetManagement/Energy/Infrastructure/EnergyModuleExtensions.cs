@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Numerics;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Application;
 using CryptoPaymentEngine.Gateway.Core.AssetManagement.Energy.Application.Abstractions;
@@ -44,6 +44,7 @@ public static class EnergyModuleExtensions
         services.AddScoped<StakingWalletLocator>();
         services.AddScoped<StakingService>();
         services.AddScoped<IEnergyDelegationService, EnergyDelegationService>();
+        services.AddScoped<EnergyReclaimService>();
 
         services.AddEnergyMongo(configuration);
         return services;
@@ -67,6 +68,17 @@ public static class EnergyModuleExtensions
 
         services.AddScoped<IEnergyOperationDirectory, EnergyOperationDirectory>();
         services.AddEnergyMongo(configuration); // resource snapshots (read-only use here)
+
+        // The staff energy settings: create the staking wallet and read/change its rules. Writes a wallet row and
+        // the policy only — no stake, delegate or signature (those stay with the money host's workers, §4.7).
+        // Needs IWalletDerivation + IPlatformWalletRegistrar (KeyManagement/Wallet Contracts) and the shared Redis
+        // lock, which the host registers.
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddScoped<IEnergyPolicyRepository, EnergyPolicyRepository>();
+        services.AddScoped<StakingWalletLocator>();
+        services.AddScoped<IEnergyProvisioningLock, EnergyProvisioningLock>();
+        services.AddScoped<IEnergyOperationRepository, EnergyOperationRepository>(); // staff unstake / withdraw requests
+        services.AddScoped<EnergyAdministrationService>();
         return services;
     }
 
@@ -85,6 +97,16 @@ public static class EnergyModuleExtensions
             DelegateTrxSun = ParseOr("DelegateTrxSun", defaults.DelegateTrxSun),
             TopUpTrxSun = ParseOr("TopUpTrxSun", defaults.TopUpTrxSun),
             StakeIncrementTrxSun = ParseOr("StakeIncrementTrxSun", defaults.StakeIncrementTrxSun),
+            DelegateMarginPercent = string.IsNullOrWhiteSpace(section["DelegateMarginPercent"])
+                ? defaults.DelegateMarginPercent
+                : int.Parse(section["DelegateMarginPercent"]!, CultureInfo.InvariantCulture),
+            MaxDelegateTrxSun = ParseOr("MaxDelegateTrxSun", defaults.MaxDelegateTrxSun),
+            ReclaimAfter = string.IsNullOrWhiteSpace(section["ReclaimAfterMinutes"])
+                ? defaults.ReclaimAfter
+                : TimeSpan.FromMinutes(int.Parse(section["ReclaimAfterMinutes"]!, CultureInfo.InvariantCulture)),
+            ReclaimBatchSize = string.IsNullOrWhiteSpace(section["ReclaimBatchSize"])
+                ? defaults.ReclaimBatchSize
+                : int.Parse(section["ReclaimBatchSize"]!, CultureInfo.InvariantCulture),
             Confirmations = string.IsNullOrWhiteSpace(section["Confirmations"])
                 ? defaults.Confirmations
                 : int.Parse(section["Confirmations"]!, CultureInfo.InvariantCulture),
@@ -119,7 +141,7 @@ public static class EnergyModuleExtensions
             ?? throw new InvalidOperationException("Missing configuration 'Mongo:ConnectionString'.");
         var databaseName = configuration["Mongo:Database"] ?? "CryptoPaymentEngine";
 
-        services.TryAddSingleton<IMongoClient>(_ => new MongoClient(connection));
+        services.TryAddSingleton(_ => CryptoPaymentEngine.Infrastructure.Persistence.Mongo.MongoClientFactory.Create(connection));
         services.TryAddSingleton(sp => sp.GetRequiredService<IMongoClient>().GetDatabase(databaseName));
 
         services.AddSingleton<IWalletResourceStore, MongoWalletResourceStore>();

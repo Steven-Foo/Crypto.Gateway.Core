@@ -65,7 +65,7 @@ public sealed class KmsEnvelopeLiveTests
         services.AddScoped<ISecretMaterialStore>(_ => store);
         var scopeFactory = services.BuildServiceProvider().GetRequiredService<IServiceScopeFactory>();
         var provider = new KmsEnvelopeSecretProvider(
-            scopeFactory, kms, options, NullLogger<KmsEnvelopeSecretProvider>.Instance);
+            scopeFactory, kms, options, new KmsKeyAccessMode(KmsKeyAccess.Signing), NullLogger<KmsEnvelopeSecretProvider>.Instance);
 
         return (provisioner, provider, store, kms);
     }

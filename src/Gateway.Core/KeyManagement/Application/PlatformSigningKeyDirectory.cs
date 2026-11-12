@@ -1,4 +1,4 @@
-using CryptoPaymentEngine.Gateway.Core.KeyManagement.Application.Abstractions;
+﻿using CryptoPaymentEngine.Gateway.Core.KeyManagement.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Contracts;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Domain;
 using CryptoPaymentEngine.SharedKernel;
@@ -17,7 +17,10 @@ public sealed class PlatformSigningKeyDirectory(IHdWalletRepository repository) 
     {
         var hdWallet = await repository.FindActiveAsync(chain, (HdWalletPurpose)purpose, cancellationToken);
 
-        return hdWallet is null
+        // Only an IMPORTED key's secret reference is itself a signing key. An HD wallet's reference names its
+        // seed (and resolves to the public xpub), so handing it to a signer would sign with the wrong material —
+        // an HD child is resolved per address through FindByAddressAsync instead. Null keeps signing inert (§10).
+        return hdWallet is null || !hdWallet.IsImported
             ? null
             : new PlatformSigningKey(hdWallet.Id, hdWallet.Chain, hdWallet.SecretReference);
     }

@@ -1,4 +1,4 @@
-using System.Numerics;
+﻿using System.Numerics;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Contracts;
 using CryptoPaymentEngine.Gateway.Core.Merchant.Domain;
 using CryptoPaymentEngine.SharedKernel;
@@ -47,8 +47,15 @@ public sealed class MerchantFeeSchedule(MerchantDbContext context, MerchantDefau
         var resolved = await LoadOwnFeesAsync(merchantId, assetId, cancellationToken);
 
         // No explicit fee (no policy, or a cap/limits-only policy with a zero schedule) ⇒ the platform default,
-        // so an unpriced merchant is never silently free. The default is itself None unless configured.
-        return resolved.Equals(FeeSchedule.None) ? defaultFee.Schedule : resolved;
+        // so an unpriced merchant is never silently free: first the default staff saved in the back office for this
+        // asset, then the Merchant:DefaultFee config. Each is skipped when it is all zero.
+        if (!resolved.Equals(FeeSchedule.None))
+            return resolved;
+
+        var platform = await context.DefaultFeePolicies.AsNoTracking()
+            .SingleOrDefaultAsync(p => p.AssetId == assetId, cancellationToken);
+        var platformFees = platform?.Fees ?? FeeSchedule.None;
+        return platformFees.Equals(FeeSchedule.None) ? defaultFee.Schedule : platformFees;
     }
 
     /// <summary>The merchant's own declared schedule, with no platform-default substitution.</summary>

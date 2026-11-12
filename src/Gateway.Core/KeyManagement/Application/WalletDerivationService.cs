@@ -1,4 +1,4 @@
-using System.Collections.Concurrent;
+﻿using System.Collections.Concurrent;
 using CryptoPaymentEngine.Gateway.Core.Blockchain.Contracts;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Contracts;
@@ -54,13 +54,15 @@ public sealed class WalletDerivationService(
     private async Task<Result<HdWallet>> ProvisionPlatformWalletAsync(
         Chain chain, DerivationPurpose purpose, CancellationToken cancellationToken)
     {
-        if (purpose != DerivationPurpose.Withdrawal)
-            return Result.Failure<HdWallet>(KeyManagementErrors.NotFound);
-
         if (_provisioner is null)
             return Result.Failure<HdWallet>(KeyManagementErrors.NotFound);
 
-        var walletResult = await _provisioner.ProvisionPlatformWithdrawalWalletAsync(chain, cancellationToken);
+        var walletResult = purpose switch
+        {
+            DerivationPurpose.Withdrawal => await _provisioner.ProvisionPlatformWithdrawalWalletAsync(chain, cancellationToken),
+            DerivationPurpose.Energy => await _provisioner.ProvisionPlatformEnergyWalletAsync(chain, cancellationToken),
+            _ => Result.Failure<HdWallet>(KeyManagementErrors.NotFound),
+        };
         if (walletResult.IsFailure)
             return walletResult;
 

@@ -1,4 +1,4 @@
-using CryptoPaymentEngine.Gateway.Core.Merchant.Domain;
+﻿using CryptoPaymentEngine.Gateway.Core.Merchant.Domain;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Metadata.Builders;
 
@@ -21,6 +21,14 @@ public sealed class DefaultFeePolicyMap : IEntityTypeConfiguration<DefaultFeePol
         builder.Property(p => p.WithdrawalFeeBps).IsRequired();
         builder.Property(p => p.MinimumWithdrawalFee).IsRequired();
 
+        // Platform-default limits. Nullable: null = no platform default for that bound (configuration applies).
+        builder.Property(p => p.MinimumDeposit);
+        builder.Property(p => p.MaximumDeposit);
+        builder.Property(p => p.MinimumWithdrawal);
+        builder.Property(p => p.MaximumWithdrawal);
+        builder.Property(p => p.ApprovalThreshold);
+        builder.Ignore(p => p.Fees);
+
         builder.Ignore(p => p.DomainEvents);
 
         // One default template per asset — no FK to blockchain.Asset (§4.5).
@@ -32,6 +40,14 @@ public sealed class DefaultFeePolicyMap : IEntityTypeConfiguration<DefaultFeePol
             t.HasCheckConstraint(
                 "CK_DefaultFeePolicy_NonNegative",
                 "[DepositFeeFixed] >= 0 AND [WithdrawalFee] >= 0 AND [MinimumDepositFee] >= 0 AND [MinimumWithdrawalFee] >= 0");
+
+            t.HasCheckConstraint(
+                "CK_DefaultFeePolicy_Limits",
+                "([MinimumDeposit] IS NULL OR [MinimumDeposit] >= 0) AND ([MaximumDeposit] IS NULL OR [MaximumDeposit] >= 0)"
+                + " AND ([MinimumWithdrawal] IS NULL OR [MinimumWithdrawal] >= 0) AND ([MaximumWithdrawal] IS NULL OR [MaximumWithdrawal] >= 0)"
+                + " AND ([ApprovalThreshold] IS NULL OR [ApprovalThreshold] >= 0)"
+                + " AND ([MinimumDeposit] IS NULL OR [MaximumDeposit] IS NULL OR [MinimumDeposit] <= [MaximumDeposit])"
+                + " AND ([MinimumWithdrawal] IS NULL OR [MaximumWithdrawal] IS NULL OR [MinimumWithdrawal] <= [MaximumWithdrawal])");
 
             t.HasCheckConstraint(
                 "CK_DefaultFeePolicy_FeeBps",

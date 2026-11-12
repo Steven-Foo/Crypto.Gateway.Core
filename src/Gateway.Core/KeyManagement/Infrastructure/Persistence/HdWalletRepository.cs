@@ -1,4 +1,4 @@
-using System.Data;
+﻿using System.Data;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Application.Abstractions;
 using CryptoPaymentEngine.Gateway.Core.KeyManagement.Domain;
 using CryptoPaymentEngine.SharedKernel;
@@ -65,7 +65,7 @@ public sealed class HdWalletRepository(KeyManagementDbContext context) : IHdWall
          join wallet in context.HdWallets.AsNoTracking() on key.HdWalletId equals wallet.Id
          where wallet.Chain == chain
             && wallet.MerchantId == null
-            && wallet.Purpose == HdWalletPurpose.Withdrawal
+            && (wallet.Purpose == HdWalletPurpose.Withdrawal || wallet.Purpose == HdWalletPurpose.Energy)
             && wallet.Status == HdWalletStatus.Active
             && key.Address == address
          select new DepositSigningKeyInfo(key.Id, wallet.Chain, wallet.SecretReference, key.DerivationIndex))

@@ -1876,6 +1876,51 @@ requirement; tenant isolation). Docs: `backoffice-frontend-integration.md` §3c/
 §3d, `two-factor-authentication.md` §5.2/§9.1. **Deploy note:** both APIs start demanding codes for the recommended
 actions immediately — the frontends' `X-2FA-Code` interceptor must ship with this.
 
+**Production launch blockers (2026-11-06) — BUILT, full suite green (1 known pre-existing Merchant failure),
+HTTP/boot-verified. No migration, no ledger impact.** (1) **First admin:** `OperationsApi.dll --bootstrap-admin
+<username>` (`StaffBootstrapService`) creates an Admin (wildcard, 2FA required) on an EMPTY staff table, prints a
+one-time password, audits, exits; refused once any staff account exists. (2) **Address-only KMS on the back
+offices:** `AddAwsKmsKeyCustody`/`AddTestnetKeyCustody` take a REQUIRED `KmsKeyAccess` (code, never config);
+Ops + Portal pass `AddressOnly` (seal seeds + read xpubs, a `#index` signing ref is refused before any KMS
+call, no signer), MerchantGateway passes `Signing`. KMS-on-with-a-missing-identifier now refuses to start on
+every host. One EC2 role ⇒ AWS cannot enforce the split; the code guard does. (3) **Hot pool:** `POST
+/ops/treasury/hot-pool/provision` over `TreasuryHotWalletProvisioningService.ProvisionAsync` (1–20, grow-only,
+guarded `ops.treasury.provision`). (4) **Energy wallet:** third CMK `KeyArns:Energy` (optional);
+`IHdWalletProvisioner.ProvisionPlatformEnergyWalletAsync`; the staking wallet is a child of the energy HD wallet,
+signed per address (`IPlatformSigningKeyDirectory.FindByAddressAsync` now covers Withdrawal + Energy children,
+and `FindActiveAsync` returns ONLY imported keys — an HD seed reference is never a signing key). Staff:
+`EnergyAdministrationService` (one staking wallet per chain under a Redis lock), `GET /ops/energy/staking`,
+`POST /ops/energy/staking-wallet/provision`, `PUT /ops/energy/policy` (`ops.energy.manage`, guarded
+`ops.energy.settings`). (5) **Take-back + unstake (closes the "undelegate/unstake reclaim" deferral):** new
+kinds `Undelegate`/`Unstake`/`WithdrawUnstaked` (string-stored). `EnergyReclaimWorker` (money host) undelegates
+from DEPOSIT addresses `ReclaimAfter` (30 min) after their latest lend confirmed, for the amount the CHAIN reports
+(`IDelegatedResourceReader`, `getdelegatedresourcev2`); platform wallets (hot pool) are excluded; nothing lent ⇒
+a Confirmed 0-amount marker. Staff `POST /ops/energy/unstake` (refused while auto-stake is on) and
+`/withdraw-unstaked`. **Lend sizing** is now `DelegationSizing` from the network rate
+(`TotalEnergyLimit`/`TotalEnergyWeight` on the snapshot) + 10% margin, capped `MaxDelegateTrxSun`; `DelegateTrxSun`
+is only the fallback (20 TRX was ~700× too small for mainnet). No unique index on the new kinds — the staff
+actions run under the per-chain Redis lock, and a duplicate take-back is refused by the chain. New guarded
+actions are OFF where a 2FA policy was already saved (staging): tick them or restore defaults. Docs:
+`backoffice-frontend-integration.md` §20/§22, `kms-go-live.md`.
+
+**Pre-production re-check + last code items (2026-11-06) — full suite green (1,290 passed, 0 failed, 8 expected
+skips), every route exercised, all three hosts booted in Production mode.** (1) **Platform defaults are real:**
+`merchant.DefaultFeePolicy` gained nullable `MinimumDeposit/MaximumDeposit/MinimumWithdrawal/MaximumWithdrawal/
+ApprovalThreshold` (migration `AddPlatformDefaultLimits`, `20-merchant.sql` regenerated). Precedence everywhere,
+bound by bound: merchant's own → platform default → config; default fees apply only when not all zero (a
+limits-only row must not make unpriced merchants free). `PUT /ops/merchants/default-limits`; portal `/fees`
+returns `platformDefaults`. (2) Approval webhook falls back to the merchant's saved callback URL (portal payouts
+never notified before). (3) **Mongo** clients via `MongoClientFactory` (5 s server-selection, connection string
+overrides) + dashboard reads in parallel (40 s+ → 5 s); Mongo-down screens answer 503 `ops.store_unavailable`.
+(4) SQL-not-ready at boot was verified NOT a defect (host stays up, workers retry). **Found by the re-check:**
+(a) **TRON `eth_getLogs` refuses >10,000 results** — mainnet USDT ≈ 77 transfers/block, so the 500-block scan window
+failed forever after any lag >~2 min; `TronChainAdapter` now halves a refused window recursively (verified against
+mainnet); (b) a **real MistTrack key was committed** in `OperationsApi/appsettings.Development.json` (moved to the
+ignored Local.json; must be rotated); (c) **`00-bootstrap.sql`'s `:setvar` silently overrode `-v`**, so the logins got
+the public placeholder passwords — passwords are now required via `-v`, checked up front; (d) the long-failing
+`Registrar_returns_a_conflict…` test was stale (code generation is now max+1) and was rewritten. Launch steps:
+`docs/production-checklist.md`.
+
 Every other module in the map is a placeholder in this doc, not yet on disk — scaffold a module
 only when real feature work on it starts, creating only the layers it uses (§4.3).
 
